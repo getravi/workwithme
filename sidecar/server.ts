@@ -23,6 +23,7 @@ import glimpse from "./node_modules/glimpseui/pi-extension/index.ts";
 import piSmartSessions from "./node_modules/pi-smart-sessions/extensions/smart-sessions.ts";
 // @ts-ignore
 import piParallel from "./node_modules/pi-parallel/extension/index.ts";
+import aiLabelling from "./extensions/ai-labelling.ts";
 
 
 // Basic express setup
@@ -116,7 +117,7 @@ function getSession(sessionId: string | undefined): AgentSession | undefined {
   return sessionId ? sessionMap.get(sessionId) : sessionMap.values().next().value;
 }
 
-// Initialize Pi Agent
+// Initialize Agent
 type InitSessionOptions =
   | { mode: 'continue'; cwd?: string }
   | { mode: 'new';      cwd?: string }
@@ -153,7 +154,8 @@ async function initSession(opts: InitSessionOptions = { mode: 'continue' }): Pro
         piSubagents,
         glimpse,
         piSmartSessions,
-        piParallel
+        piParallel,
+        aiLabelling
       ];
       
       // Load pi-mcp-adapter but softly catch errors if the user doesn't have an mcp.json yet
@@ -174,7 +176,7 @@ async function initSession(opts: InitSessionOptions = { mode: 'continue' }): Pro
       broadcastSubscription(sessionId);
       return session;
   } catch (error) {
-    console.error("Failed to initialize Pi Agent Session:", error);
+    console.error("Failed to initialize Agent Session:", error);
     throw error;
   }
 }
@@ -393,17 +395,43 @@ app.post('/api/sessions/load', async (req: Request, res: Response) => {
         const sessionId = session.sessionManager.getSessionId();
         const sessionCwd = session.sessionManager.getCwd();
 
-        // Return existing messages to UI
-        const messages = session.agent.state.messages.map((m: any) => ({
-            id: m.id || randomUUID(),
-            role: m.role,
-            content: Array.isArray(m.content)
-                ? m.content.map((c: any) => c.type === 'text' ? c.text : (c.type === 'thinking' ? `> Thinking: *${c.thinking}*\n\n` : "")).join("")
-                : (m.content || ""),
-            isStreaming: false
-        }));
+        // Return existing messages to UI, filtering out tool results which should be in artifacts
+        const apiMessages = session.agent.state.messages;
+        const messages = apiMessages
+            .filter((m: any) => m.role !== 'toolResult')
+            .map((m: any) => ({
+                id: m.id || randomUUID(),
+                role: m.role,
+                content: Array.isArray(m.content)
+                    ? m.content.map((c: any) => c.type === 'text' ? c.text : (c.type === 'thinking' ? `\`\`\`thinking\n${c.thinking}\n\`\`\`\n\n` : "")).join("")
+                    : (m.content || ""),
+                isStreaming: false
+            }));
 
-        res.json({ success: true, sessionId, messages, cwd: sessionCwd });
+        // Extract tool executions for artifacts preview
+        const toolExecutions: any[] = [];
+        for (const m of apiMessages) {
+            if (m.role === 'assistant' && Array.isArray(m.content)) {
+                for (const chunk of m.content) {
+                    if (chunk.type === 'toolCall') {
+                        const call = chunk;
+                        // Find corresponding result
+                        const resultMsg = apiMessages.find((rm: any) => rm.role === 'toolResult' && rm.toolCallId === call.id);
+                        
+                        toolExecutions.push({
+                            id: call.id,
+                            toolName: call.name,
+                            arguments: call.arguments,
+                            status: resultMsg ? 'success' : 'running',
+                            result: resultMsg ? (Array.isArray(resultMsg.content) ? resultMsg.content.map((c: any) => c.text).join("\n") : resultMsg.content) : undefined,
+                            isError: resultMsg ? resultMsg.isError : false
+                        });
+                    }
+                }
+            }
+        }
+
+        res.json({ success: true, sessionId, messages, toolExecutions, cwd: sessionCwd });
     } catch (err) {
         console.error("Session load error:", err);
         res.status(500).json({ error: String(err) });
@@ -428,21 +456,8 @@ app.post('/api/project', async (req: Request, res: Response) => {
         const session = await initSession({ mode: 'new', cwd: projectPath }); // Force new session on project root change
         const newSessionId = session.sessionManager.getSessionId();
 
-        // Abort any in-flight work on the new session before firing the auto-prompt
+        // Abort any in-flight work on the new session
         session.agent.abort();
-
-        const autoPromptSessionId = newSessionId;
-        session.prompt(
-          `I have selected the folder "${projectPath}" as my project root. Please use this as my context.`
-        ).catch((err: unknown) => {
-          console.error('[auto-prompt] failed:', err);
-          const errMsg = err instanceof Error ? err.message : String(err);
-          for (const client of clients) {
-            if (client.sessionId === autoPromptSessionId && client.ws.readyState === WebSocket.OPEN) {
-              client.ws.send(JSON.stringify({ type: WS_EVENTS.ERROR, message: `Auto-prompt failed: ${errMsg}` }));
-            }
-          }
-        });
 
         res.json({ success: true, cwd: projectPath, sessionId: newSessionId });
     } catch (err) {

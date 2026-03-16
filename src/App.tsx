@@ -197,9 +197,9 @@ function App() {
                      .map((c: any) => {
                        if (c.type === 'text') return c.text;
                        if (c.type === 'thinking') {
-                          // Format thinking blocks nicely
+                          // Format thinking blocks for the custom Markdown renderer
                           const t = (c.thinking ?? "").trim();
-                          return t ? `> Thinking: *${t}*\n\n` : "";
+                          return t ? `\`\`\`thinking\n${t}\n\`\`\`\n\n` : "";
                        }
                        return "";
                      })
@@ -477,8 +477,12 @@ function App() {
         if (data.success) {
           setCurrentSessionId(data.sessionId);
           setMessages((data.messages as Message[]) || []);
-          setToolExecutions([]);
-          setIsPreviewOpen(false);
+          setToolExecutions(data.toolExecutions || []);
+          if (data.toolExecutions && data.toolExecutions.length > 0) {
+            setIsPreviewOpen(true);
+          } else {
+            setIsPreviewOpen(false);
+          }
           setIsPreviewMaximized(false);
           if (data.cwd) setProjectDir(data.cwd);
           
@@ -736,7 +740,7 @@ function App() {
               <div className="w-16 h-16 rounded-2xl bg-[#182234] border border-[#1f2937] flex items-center justify-center shadow-lg">
                  <Bot className="w-8 h-8 text-[#c5f016]" />
               </div>
-              <h2 className="text-xl font-bold text-gray-200">Hello, I'm your coding agent.</h2>
+              <h2 className="text-xl font-bold text-gray-200">Hello, I'm your productivity agent.</h2>
               <p className="text-[13px] text-gray-400">Attach files, ask me to write code, or open the preview pane to see artifacts render in real-time.</p>
             </div>
           ) : (
@@ -810,7 +814,7 @@ function App() {
               )}
               <textarea
                 className="w-full max-h-44 min-h-[38px] bg-transparent resize-none text-[#f3f4f6] placeholder-gray-500 focus:outline-none text-[13px]"
-                placeholder="Message Pi Agent..."
+                placeholder="Message Agent..."
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => {
@@ -871,7 +875,7 @@ function App() {
             </div>
           </form>
           <div className="mt-2 text-center text-[11px] text-gray-500 font-medium">
-             Pi Agent SDK • Claude Cowork Concept UI
+             Agent SDK • Claude Cowork Concept UI
           </div>
         </div>
       </main>

@@ -12,6 +12,7 @@ import rust from "react-syntax-highlighter/dist/esm/languages/prism/rust";
 import markdown from "react-syntax-highlighter/dist/esm/languages/prism/markdown";
 import yaml from "react-syntax-highlighter/dist/esm/languages/prism/yaml";
 import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { ChevronDown } from "lucide-react";
 
 SyntaxHighlighter.registerLanguage("tsx", tsx);
 SyntaxHighlighter.registerLanguage("typescript", typescript);
@@ -41,6 +42,26 @@ export function MarkdownMessage({ content, isStreaming }: MarkdownMessageProps) 
           code({ className, children }) {
             const match = /language-(\w+)/.exec(className || "");
             const isBlock = Boolean(match) || (className === undefined && String(children).includes('\n'));
+            if (match && match[1] === 'thinking') {
+              const lines = String(children).trim().split('\n');
+              const firstLine = lines[0] || "Thinking";
+              const rest = lines.slice(1).join('\n').trim();
+              
+              return (
+                <details className="my-2 border border-[#c5f016]/20 rounded-lg bg-[#182234] overflow-hidden group">
+                  <summary className="px-3 py-2 cursor-pointer list-none flex items-center gap-2 hover:bg-[#c5f016]/5 transition-colors">
+                    <ChevronDown className="w-3.5 h-3.5 text-[#c5f016] group-open:rotate-180 transition-transform" />
+                    <span className="text-[12px] font-medium text-gray-300 italic">Thinking: *{firstLine}*</span>
+                  </summary>
+                  {rest && (
+                    <div className="px-3 py-2 border-t border-[#c5f016]/10 text-gray-400 italic text-[12px] whitespace-pre-wrap">
+                      {rest}
+                    </div>
+                  )}
+                </details>
+              );
+            }
+
             if (isBlock) {
               return (
                 <SyntaxHighlighter
