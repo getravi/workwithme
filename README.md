@@ -1,5 +1,7 @@
 # Work With Me
 
+> **Alpha — expect rough edges. Contributions welcome!**
+
 **An open-source, autonomous AI coworker for your desktop — use any LLM you want.**
 
 Work With Me is a native desktop app that gives you a persistent, autonomous coding partner working directly alongside you. It's built on the open [pi-agent](https://github.com/badlogic/pi-mono) ecosystem and supports every major LLM provider — Claude, GPT-4, Gemini, and local models. No subscriptions. No lock-in. Yours to run, modify, and extend.
