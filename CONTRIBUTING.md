@@ -2,6 +2,24 @@
 
 First, thank you for considering contributing to Work With Me! It's people like you that make open source such a great community to learn, inspire, and create.
 
+## Project Structure
+
+| Directory | What it contains |
+|-----------|-----------------|
+| `src/` | Tauri frontend — React + TypeScript UI |
+| `sidecar/` | Node.js backend — hosts the pi-agent session, exposes REST + WebSocket API |
+| `src-tauri/` | Rust/Tauri native shell |
+| `sidecar/extensions/` | Local pi-extensions bundled with the app |
+
+The frontend communicates with the sidecar over WebSocket for streaming agent events and REST for configuration. The sidecar manages agent sessions using `@mariozechner/pi-coding-agent`.
+
+### Adding Extensions
+
+You can add community pi-extensions or build your own:
+1. Install the extension package in `sidecar/` (e.g. `npm install github:author/my-extension`)
+2. Import and register it in `sidecar/server.ts` in the `extensions` array
+3. Restart the sidecar
+
 ## How to Contribute
 
 ### Reporting Bugs
@@ -33,7 +51,7 @@ If you have an idea for an enhancement, please submit a feature request issue wi
 
 1. Clone your fork:
    ```bash
-   git clone https://github.com/yourusername/workwithme.git
+   git clone https://github.com/getravi/workwithme.git
    cd workwithme
    ```
 2. Install dependencies:
