@@ -49,3 +49,8 @@ Icon
 # Others
 coverage/
 *.pem
+
+# Internal development planning docs (not for public repo)
+docs/plans/
+docs/superpowers/
+src/plans/
