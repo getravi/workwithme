@@ -1,0 +1,38 @@
+@import "tailwindcss";
+
+@theme {
+  --color-brand-lime: #c5f016; /* Bright lime green focus */
+  --color-brand-mint: #9df0c0; /* Soft mint secondary */
+  --color-brand-yellow: #fde047; /* Yellow highlights */
+  --color-surface-dark: #111827; /* Dark grayish blue background */
+  --color-surface-hover: #1f2937;
+  --color-surface-card: #182234;
+  --color-text-main: #f3f4f6;
+  --color-text-muted: #9ca3af;
+}
+
+html {
+  font-size: 14px;
+}
+
+body {
+  background-color: var(--color-surface-dark);
+  color: var(--color-text-main);
+  font-family: 'Inter', system-ui, sans-serif;
+  margin: 0;
+  display: flex;
+  min-height: 100vh;
+  line-height: 1.4;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+#root {
+  width: 100%;
+  display: flex;
+}
