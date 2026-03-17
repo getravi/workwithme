@@ -66,9 +66,9 @@ export const WS_EVENTS = {
   PROMPT_COMPLETE: "prompt_complete",
   ERROR: "error",
   // Server → Client: sidecar requests user approval to run a command outside the sandbox
-  SANDBOX_APPROVAL_REQUEST: 'sandbox_approval_request',
+  SANDBOX_APPROVAL_REQUEST: "sandbox_approval_request",
   // Client → Server: user's response to a sandbox approval request
-  SANDBOX_APPROVAL_RESPONSE: 'sandbox_approval_response',
+  SANDBOX_APPROVAL_RESPONSE: "sandbox_approval_response",
 } as const;
 
 export type WsEventType = typeof WS_EVENTS[keyof typeof WS_EVENTS];
