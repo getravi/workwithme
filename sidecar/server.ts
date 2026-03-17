@@ -527,12 +527,18 @@ wss.on('connection', async (ws: WebSocket) => {
         images?: unknown[];
         streamingBehavior?: string;
         approvalId?: string;
+        approved?: boolean;
       };
 
-      // Handle sandbox approval responses from the frontend
+      // Handle sandbox approval responses from the frontend.
+      // The frontend sends { approvalId, approved: true | false }.
+      // Only grant the bypass when the user explicitly approved — denial is a no-op
+      // (the agent's next command will run sandboxed again, prompting another violation).
       if (data.type === WS_EVENTS.SANDBOX_APPROVAL_RESPONSE) {
-        if (typeof data.approvalId === 'string' && data.approvalId.length > 0) {
+        if (typeof data.approvalId === 'string' && data.approvalId.length > 0 && data.approved === true) {
           grantApproval(data.approvalId);
+        } else if (!data.approved) {
+          console.log('[sandbox] Approval denied by user for approvalId:', data.approvalId);
         } else {
           console.warn('[WS] SANDBOX_APPROVAL_RESPONSE missing valid approvalId');
         }

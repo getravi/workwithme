@@ -35,9 +35,10 @@ interface PendingApproval {
 // Keyed by approvalId (UUID). Entries expire after 5 minutes.
 const pendingApprovals = new Map<string, PendingApproval>();
 
-// When true, the next user_bash call runs unsandboxed (single-use flag).
-// Set by grantApproval(); cleared by the user_bash handler.
-let bypassNextCall = false;
+// Number of pending approved bypasses across all sessions.
+// Using a counter (not a boolean) ensures concurrent sessions don't steal each other's approval —
+// each grantApproval() increments the count, each user_bash consume decrements it.
+let bypassCount = 0;
 
 // Injected by server.ts after a WS connection is established.
 let _sendToClient: ((msg: object) => void) | null = null;
@@ -79,11 +80,10 @@ export function grantApproval(approvalId: string): void {
     clearTimeout(approval.timer);
     pendingApprovals.delete(approvalId);
   }
-  // Set the bypass flag regardless of whether the ID was in pendingApprovals.
+  // Increment bypass counter regardless of whether the ID was in pendingApprovals.
   // This handles test scenarios where grantApproval is called without a prior
-  // violation. The extension is the authoritative gatekeeper for this flag —
-  // server.ts only validates that approvalId is a non-empty string.
-  bypassNextCall = true;
+  // violation. server.ts validates the approvalId and approved=true before calling this.
+  bypassCount++;
 }
 
 export default function sandboxToolsExtension(pi: ExtensionAPI) {
@@ -93,9 +93,11 @@ export default function sandboxToolsExtension(pi: ExtensionAPI) {
    * Returns undefined to use default execution (Windows, unsupported, approved bypass).
    */
   pi.on('user_bash', () => {
-    // Single-use bypass granted by grantApproval() after user approval in UI
-    if (bypassNextCall) {
-      bypassNextCall = false;
+    // Consume one approved bypass if available. Using a counter (not boolean)
+    // ensures each grantApproval() consumes exactly one user_bash call even
+    // when multiple sessions run concurrently.
+    if (bypassCount > 0) {
+      bypassCount--;
       return; // undefined → default (unsandboxed) execution
     }
 
@@ -127,7 +129,7 @@ export default function sandboxToolsExtension(pi: ExtensionAPI) {
     if (!isSandboxViolation(output, event.isError)) return;
 
     const approvalId = crypto.randomUUID();
-    const timer = setTimeout(() => pendingApprovals.delete(approvalId), 5 * 60 * 1000);
+    const timer = setTimeout(() => pendingApprovals.delete(approvalId), 30_000); // 30s per architecture doc
     pendingApprovals.set(approvalId, {
       approvalId,
       violationContext: output.slice(0, 200),

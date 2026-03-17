@@ -319,14 +319,15 @@ export class SandboxService {
       JSON.stringify({ mcpServers: outputServers }, null, 2)
     );
 
-    // Register cleanup for tmp settings files — called once per generateMcpConfig invocation
+    // Register cleanup for tmp settings files using process.once to prevent
+    // handler accumulation if generateMcpConfig is ever called more than once.
     const cleanup = () => {
       for (const f of tmpFilesCreated) {
         try { unlinkSync(f); } catch { /* ignore */ }
       }
     };
-    process.on('exit', cleanup);
-    process.on('SIGTERM', () => { cleanup(); process.exit(0); });
-    process.on('SIGINT',  () => { cleanup(); process.exit(0); });
+    process.once('exit', cleanup);
+    process.once('SIGTERM', () => { cleanup(); process.exit(0); });
+    process.once('SIGINT',  () => { cleanup(); process.exit(0); });
   }
 }

@@ -142,7 +142,7 @@ describe('sandbox-tools extension', () => {
 
     mod.grantApproval('some-id');
 
-    // bypassNextCall should now be true — verified indirectly: next user_bash returns undefined
+    // bypassCount should now be 1 — verified indirectly: next user_bash returns undefined
     const result = await handlers['user_bash']({});
     expect(result).toBeUndefined();
   });
