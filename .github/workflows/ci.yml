@@ -27,7 +27,7 @@ jobs:
         run: npx tsc --noEmit
 
       - name: Install sidecar dependencies
-        run: npm install --force
+        run: npm install --ignore-scripts
         working-directory: sidecar
 
       - name: Type-check sidecar
