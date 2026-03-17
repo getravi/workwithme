@@ -1,0 +1,179 @@
+/**
+ * sandbox-tools — Pi extension for agent bash tool sandboxing.
+ *
+ * Hooks:
+ * - user_bash: wraps command execution with SandboxService.createSandboxedBashOps()
+ * - tool_result: detects sandbox violations, surfaces escape hatch message to agent
+ * - session_shutdown: calls SandboxManager.reset() for cleanup
+ *
+ * Escape hatch flow:
+ * 1. Violation detected in tool_result → store PendingApproval, append /sandbox-allow prompt to result
+ * 2. Agent calls /sandbox-allow <reason> → calls _sendToClient with SANDBOX_APPROVAL_REQUEST
+ * 3. User approves in UI → server.ts receives SANDBOX_APPROVAL_RESPONSE, calls grantApproval()
+ * 4. grantApproval() sets bypassNextCall = true
+ * 5. Next user_bash call sees bypassNextCall, clears it, returns undefined (unsandboxed)
+ *
+ * server.ts is responsible for:
+ * - Calling setSendToClient() with the active ws.send function after a WS connection opens
+ * - Calling grantApproval() when SANDBOX_APPROVAL_RESPONSE arrives
+ *
+ * See: docs/architecture/sandbox-runtime.md
+ */
+
+import type { ExtensionAPI } from '@mariozechner/pi-coding-agent';
+import { SandboxManager } from '@anthropic-ai/sandbox-runtime';
+import { SandboxService } from '../sandbox/SandboxService.js';
+import { WS_EVENTS } from '../../src/types.js';
+
+interface PendingApproval {
+  approvalId: string;
+  violationContext: string; // first 200 chars of blocked output, for WS payload
+  createdAt: number;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+// Keyed by approvalId (UUID). Entries expire after 5 minutes.
+const pendingApprovals = new Map<string, PendingApproval>();
+
+// When true, the next user_bash call runs unsandboxed (single-use flag).
+// Set by grantApproval(); cleared by the user_bash handler.
+let bypassNextCall = false;
+
+// Injected by server.ts after a WS connection is established.
+let _sendToClient: ((msg: object) => void) | null = null;
+
+/** Violation patterns for macOS (Seatbelt) and Linux (bubblewrap) */
+const VIOLATION_PATTERNS = [
+  /Operation not permitted/i,
+  /Permission denied/i,   // Linux bubblewrap non-zero exit
+  /Sandbox: deny/i,
+  /sandbox-exec:/i,
+  /bwrap: Can't/i,
+];
+
+function isSandboxViolation(output: string, exitCode: number | null): boolean {
+  if (exitCode === 0) return false;
+  return VIOLATION_PATTERNS.some(p => p.test(output));
+}
+
+/**
+ * Provide a WebSocket send function so this extension can relay
+ * SANDBOX_APPROVAL_REQUEST messages to the client.
+ * Called by server.ts when a WS connection opens.
+ */
+export function setSendToClient(fn: (msg: object) => void): void {
+  _sendToClient = fn;
+}
+
+/**
+ * Mark the next user_bash call as bypassed (unsandboxed).
+ * Called by server.ts when SANDBOX_APPROVAL_RESPONSE is received.
+ */
+export function grantApproval(approvalId: string): void {
+  const approval = pendingApprovals.get(approvalId);
+  if (approval) {
+    clearTimeout(approval.timer);
+    pendingApprovals.delete(approvalId);
+  }
+  // Set the bypass flag unconditionally — server.ts only calls this after
+  // validating the approvalId, so we trust the caller.
+  bypassNextCall = true;
+}
+
+export default function sandboxToolsExtension(pi: ExtensionAPI) {
+  /**
+   * user_bash — intercept bash execution.
+   * Returns BashOperations to replace default execution with sandboxed version.
+   * Returns undefined to use default execution (Windows, unsupported, approved bypass).
+   */
+  pi.on('user_bash', () => {
+    // Single-use bypass granted by grantApproval() after user approval in UI
+    if (bypassNextCall) {
+      bypassNextCall = false;
+      return; // undefined → default (unsandboxed) execution
+    }
+
+    if (!SandboxService.isSupported) return;
+
+    const ops = SandboxService.createSandboxedBashOps('agent');
+    if (!ops) return;
+    return { operations: ops };
+  });
+
+  /**
+   * tool_result — detect sandbox violations and offer escape hatch.
+   * Stores a PendingApproval and appends a structured message to the result
+   * so the agent knows to call /sandbox-allow.
+   */
+  pi.on('tool_result', (event: { toolName?: string; output?: string; exitCode?: number | null; result?: string }) => {
+    if (event.toolName !== 'bash') return;
+
+    const output = event.output ?? event.result ?? '';
+    const exitCode = event.exitCode ?? null;
+
+    if (!isSandboxViolation(output, exitCode)) return;
+
+    const approvalId = crypto.randomUUID();
+    const timer = setTimeout(() => pendingApprovals.delete(approvalId), 5 * 60 * 1000);
+    pendingApprovals.set(approvalId, {
+      approvalId,
+      violationContext: output.slice(0, 200),
+      createdAt: Date.now(),
+      timer,
+    });
+
+    console.log('[sandbox-tools] Sandbox violation detected. approvalId:', approvalId);
+
+    const escapeHatchMsg = [
+      '',
+      '[SANDBOX] This command was blocked by the sandbox.',
+      'To request unsandboxed execution, use: /sandbox-allow <your reason>',
+      'You will need to confirm this in the workwithme UI before it executes.',
+    ].join('\n');
+
+    if (event.result !== undefined) {
+      (event as any).result = event.result + escapeHatchMsg;
+    }
+  });
+
+  /** session_shutdown — clean up SandboxManager state */
+  pi.on('session_shutdown', async () => {
+    try {
+      await SandboxManager.reset();
+    } catch {
+      // Ignore cleanup errors
+    }
+  });
+
+  /**
+   * /sandbox-allow — agent slash command to request sandbox escape.
+   * Looks up the most recent pending approval, sends SANDBOX_APPROVAL_REQUEST
+   * over the active WS connection (wired via setSendToClient in server.ts).
+   */
+  pi.registerCommand('sandbox-allow', {
+    description: 'Request approval to run a blocked command outside the sandbox',
+    handler: async (args: string): Promise<string> => {
+      const reason = args?.trim() || 'No reason provided';
+
+      // Pick the most recent pending approval
+      const approvals = [...pendingApprovals.values()].sort((a, b) => b.createdAt - a.createdAt);
+      const approval = approvals[0];
+
+      if (!approval) {
+        return 'No pending sandbox violation to approve. Run the command first to trigger a violation.';
+      }
+
+      if (_sendToClient) {
+        _sendToClient({
+          type: WS_EVENTS.SANDBOX_APPROVAL_REQUEST,
+          approvalId: approval.approvalId,
+          violationContext: approval.violationContext,
+          reason,
+        });
+        return 'Approval request sent. Please confirm in the workwithme UI. Once approved, retry the command.';
+      }
+
+      return 'Unable to send approval request — no active session connection.';
+    },
+  });
+}
