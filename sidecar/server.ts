@@ -632,7 +632,13 @@ wss.on('connection', async (ws: WebSocket) => {
   });
 });
 
-// Bootstrap: initialize sandbox and generate MCP config before accepting connections
+/**
+ * Initialize the sandbox runtime before the server accepts connections.
+ * Calls SandboxService.initialize() to set up Seatbelt/bubblewrap profiles,
+ * then generateMcpConfig() to write .pi/mcp.json with srt-wrapped MCP commands.
+ *
+ * @throws never — SandboxService methods are non-throwing; failures set isSupported=false.
+ */
 async function bootstrap(): Promise<void> {
   await SandboxService.initialize(process.cwd());
   await SandboxService.generateMcpConfig(process.cwd());
@@ -642,7 +648,7 @@ async function bootstrap(): Promise<void> {
 const PORT = process.env.PORT || 4242;
 bootstrap()
   .catch((err) => {
-    console.error('[bootstrap] Fatal error during startup:', err);
+    console.error('[bootstrap] Sandbox init failed (continuing without sandboxing):', err);
   })
   .finally(() => {
     server.listen(PORT, () => {

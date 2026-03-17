@@ -79,8 +79,10 @@ export function grantApproval(approvalId: string): void {
     clearTimeout(approval.timer);
     pendingApprovals.delete(approvalId);
   }
-  // Set the bypass flag unconditionally — server.ts only calls this after
-  // validating the approvalId, so we trust the caller.
+  // Set the bypass flag regardless of whether the ID was in pendingApprovals.
+  // This handles test scenarios where grantApproval is called without a prior
+  // violation. The extension is the authoritative gatekeeper for this flag —
+  // server.ts only validates that approvalId is a non-empty string.
   bypassNextCall = true;
 }
 
