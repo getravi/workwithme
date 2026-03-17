@@ -152,14 +152,16 @@ async function initSession(opts: InitSessionOptions = { mode: 'continue' }): Pro
         config.sessionManager = SessionManager.continueRecent(cwd);
       }
 
-      // Add desktop-class extensions
+      // Add desktop-class extensions.
+      // sandboxToolsExtension must be first so its user_bash hook wraps execution
+      // before any other extension can observe or modify the bash event.
       const extensions: any[] = [
+        sandboxToolsExtension,
         piSubagents,
         glimpse,
         piSmartSessions,
         piParallel,
         aiLabelling,
-        sandboxToolsExtension
       ];
       
       // Load pi-mcp-adapter but softly catch errors if the user doesn't have an mcp.json yet
@@ -476,8 +478,10 @@ app.post('/api/project', async (req: Request, res: Response) => {
  */
 app.get('/api/sandbox/status', (_req: Request, res: Response) => {
   res.json({
-    isSupported: SandboxService.isSupported,
+    supported: SandboxService.isSupported,
     srtAvailable: SandboxService.srtAvailable,
+    active: SandboxService.isSupported && SandboxService.srtAvailable,
+    platform: process.platform,
     warning: SandboxService.warning,
   });
 });
