@@ -15,12 +15,22 @@
  * See: docs/architecture/sandbox-runtime.md
  */
 
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, unlinkSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { tmpdir } from 'node:os';
 import { execSync, spawn } from 'node:child_process';
 import { SandboxManager } from '@anthropic-ai/sandbox-runtime';
 import type { BashOperations } from '@mariozechner/pi-coding-agent';
-import { getAgentProfile, mergeWithProfile, type SandboxProfile } from './profiles.js';
+import { getAgentProfile, getMcpDefaultProfile, mergeWithProfile, type SandboxProfile } from './profiles.js';
+
+interface McpServerEntry {
+  command?: string;
+  args?: string[];
+  url?: string;
+  env?: Record<string, string>;
+  cwd?: string;
+  [key: string]: unknown;
+}
 
 interface WorkwithmeSettings {
   sandbox?: {
@@ -209,5 +219,110 @@ export class SandboxService {
   /** Test helper — force isSupported state without going through initialize() */
   static _forceSupported(value: boolean): void {
     _isSupported = value;
+  }
+
+  /** Test helper — force srtAvailable state */
+  static _forceSrtAvailable(value: boolean): void {
+    _srtAvailable = value;
+  }
+
+  /**
+   * Generate .pi/mcp.json from mcp.json + sandbox MCP rules.
+   *
+   * - Reads mcp.json from cwd
+   * - Stdio servers get srt-wrapped commands with per-server settings files
+   * - HTTP servers pass through unchanged
+   * - Always overwrites .pi/mcp.json
+   * - Registers SIGTERM/SIGINT/exit cleanup for tmp settings files
+   * - Cleans stale tmp files from previous runs on startup
+   *
+   * See: docs/architecture/sandbox-runtime.md
+   */
+  static async generateMcpConfig(cwd = process.cwd()): Promise<void> {
+    const mcpJsonPath = join(cwd, 'mcp.json');
+    if (!existsSync(mcpJsonPath)) {
+      console.warn(`[SandboxService] mcp.json not found at ${mcpJsonPath} — MCP servers unavailable`);
+      return;
+    }
+
+    let mcpConfig: { mcpServers?: Record<string, McpServerEntry> };
+    try {
+      mcpConfig = JSON.parse(readFileSync(mcpJsonPath, 'utf-8'));
+    } catch (err) {
+      console.error('[SandboxService] Failed to parse mcp.json:', err);
+      return;
+    }
+
+    const servers = mcpConfig.mcpServers ?? {};
+    const mcpSettings = _settings.sandbox?.mcp ?? {};
+    const defaults = mcpSettings.defaults
+      ? mergeWithProfile(getMcpDefaultProfile(), mcpSettings.defaults)
+      : getMcpDefaultProfile();
+
+    // Clean stale tmp files from previous runs (same server names, any pid)
+    for (const serverName of Object.keys(servers)) {
+      try {
+        // List /tmp and filter by name pattern (no glob dependency needed)
+        const tmpFiles = readdirSync(tmpdir())
+          .filter(f => f.startsWith(`workwithme-mcp-${serverName}-`) && f.endsWith('.json'))
+          .map(f => join(tmpdir(), f));
+        for (const f of tmpFiles) {
+          try { unlinkSync(f); } catch { /* ignore */ }
+        }
+      } catch { /* ignore */ }
+    }
+
+    const tmpFilesCreated: string[] = [];
+    const outputServers: Record<string, McpServerEntry> = {};
+
+    for (const [name, def] of Object.entries(servers)) {
+      if (def.url) {
+        // HTTP server — pass through unchanged
+        outputServers[name] = def;
+        continue;
+      }
+
+      if (!def.command) {
+        outputServers[name] = def;
+        continue;
+      }
+
+      // Merge per-server overrides
+      const perServerOverrides = mcpSettings.perServer?.[name] ?? {};
+      const profile = mergeWithProfile(defaults, perServerOverrides);
+
+      // Write per-server settings file to /tmp
+      const tmpPath = join(tmpdir(), `workwithme-mcp-${name}-${process.pid}.json`);
+      writeFileSync(tmpPath, JSON.stringify({
+        network: profile.network,
+        filesystem: profile.filesystem,
+      }, null, 2));
+      tmpFilesCreated.push(tmpPath);
+
+      // Rewrite entry with srt wrapper
+      outputServers[name] = {
+        ...def,
+        command: 'srt',
+        args: ['--settings', tmpPath, def.command, ...(def.args ?? [])],
+      };
+    }
+
+    // Write .pi/mcp.json
+    const piDir = join(cwd, '.pi');
+    mkdirSync(piDir, { recursive: true });
+    writeFileSync(
+      join(piDir, 'mcp.json'),
+      JSON.stringify({ mcpServers: outputServers }, null, 2)
+    );
+
+    // Register cleanup for tmp settings files — called once per generateMcpConfig invocation
+    const cleanup = () => {
+      for (const f of tmpFilesCreated) {
+        try { unlinkSync(f); } catch { /* ignore */ }
+      }
+    };
+    process.on('exit', cleanup);
+    process.on('SIGTERM', () => { cleanup(); process.exit(0); });
+    process.on('SIGINT',  () => { cleanup(); process.exit(0); });
   }
 }
