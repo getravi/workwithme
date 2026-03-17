@@ -15,7 +15,7 @@
     "noUnusedParameters": true
   },
   "include": [
-    "sidecar/**/*",
+    "sidecar/extensions/**/*",
     "src/types.ts"
   ]
 }

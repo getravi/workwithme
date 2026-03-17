@@ -23,6 +23,7 @@ import glimpse from "./node_modules/glimpseui/pi-extension/index.ts";
 import piSmartSessions from "./node_modules/pi-smart-sessions/extensions/smart-sessions.ts";
 // @ts-ignore
 import piParallel from "./node_modules/pi-parallel/extension/index.ts";
+// @ts-ignore
 import aiLabelling from "./extensions/ai-labelling.ts";
 
 
@@ -416,7 +417,7 @@ app.post('/api/sessions/load', async (req: Request, res: Response) => {
                     if (chunk.type === 'toolCall') {
                         const call = chunk;
                         // Find corresponding result
-                        const resultMsg = apiMessages.find((rm: any) => rm.role === 'toolResult' && rm.toolCallId === call.id);
+                        const resultMsg = apiMessages.find((rm: any) => rm.role === 'toolResult' && rm.toolCallId === call.id) as any;
                         
                         toolExecutions.push({
                             id: call.id,
