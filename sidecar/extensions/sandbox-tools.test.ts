@@ -73,28 +73,38 @@ describe('sandbox-tools extension', () => {
     expect(result2).toHaveProperty('operations');
   });
 
-  it('tool_result: isSandboxViolation returns false for exit code 0', async () => {
-    const event = { toolName: 'bash', output: 'Sandbox: deny', exitCode: 0, result: 'output' };
-    await handlers['tool_result'](event);
-    expect(event.result).toBe('output');
-  });
-
-  it('tool_result: detects violation and appends escape hatch message', async () => {
+  it('tool_result: isSandboxViolation returns false when isError is false', async () => {
+    // Real SDK shape: content array + isError boolean
     const event = {
       toolName: 'bash',
-      output: 'Operation not permitted',
-      exitCode: 1,
-      result: 'original output',
+      content: [{ type: 'text', text: 'Sandbox: deny' }],
+      isError: false,
     };
-    await handlers['tool_result'](event);
-    expect(event.result).toContain('[SANDBOX]');
-    expect(event.result).toContain('/sandbox-allow');
+    const result = await handlers['tool_result'](event);
+    expect(result).toBeUndefined();
+  });
+
+  it('tool_result: detects violation and returns content with escape hatch message', async () => {
+    const event = {
+      toolName: 'bash',
+      content: [{ type: 'text', text: 'Operation not permitted' }],
+      isError: true,
+    };
+    const result = await handlers['tool_result'](event);
+    expect(result).toBeDefined();
+    const text = result.content.map((c: any) => c.text).join('\n');
+    expect(text).toContain('[SANDBOX]');
+    expect(text).toContain('/sandbox-allow');
   });
 
   it('tool_result: non-bash tool is ignored', async () => {
-    const event = { toolName: 'read_file', output: 'Operation not permitted', exitCode: 1, result: 'x' };
-    await handlers['tool_result'](event);
-    expect(event.result).toBe('x');
+    const event = {
+      toolName: 'read',
+      content: [{ type: 'text', text: 'Operation not permitted' }],
+      isError: true,
+    };
+    const result = await handlers['tool_result'](event);
+    expect(result).toBeUndefined();
   });
 
   it('/sandbox-allow: calls sendToClient when pending approval exists', async () => {
@@ -103,9 +113,8 @@ describe('sandbox-tools extension', () => {
 
     const event = {
       toolName: 'bash',
-      output: 'Sandbox: deny file read',
-      exitCode: 1,
-      result: 'Sandbox: deny',
+      content: [{ type: 'text', text: 'Sandbox: deny file read' }],
+      isError: true,
     };
     await handlers['tool_result'](event);
 
@@ -144,9 +153,8 @@ describe('sandbox-tools extension', () => {
 
     const event = {
       toolName: 'bash',
-      output: 'Sandbox: deny file read',
-      exitCode: 1,
-      result: 'Sandbox: deny',
+      content: [{ type: 'text', text: 'Sandbox: deny file read' }],
+      isError: true,
     };
     await handlers['tool_result'](event);
 

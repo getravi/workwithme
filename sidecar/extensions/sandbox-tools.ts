@@ -20,7 +20,7 @@
  * See: docs/architecture/sandbox-runtime.md
  */
 
-import type { ExtensionAPI } from '@mariozechner/pi-coding-agent';
+import type { ExtensionAPI, BashToolResultEvent, ToolResultEventResult } from '@mariozechner/pi-coding-agent';
 import { SandboxManager } from '@anthropic-ai/sandbox-runtime';
 import { SandboxService } from '../sandbox/SandboxService.js';
 import { WS_EVENTS } from '../../src/types.js';
@@ -51,8 +51,12 @@ const VIOLATION_PATTERNS = [
   /bwrap: Can't/i,
 ];
 
-function isSandboxViolation(output: string, exitCode: number | null): boolean {
-  if (exitCode === 0) return false;
+/**
+ * Returns true if a bash tool result represents a sandbox violation.
+ * Uses isError (non-zero exit) as a gate, then pattern-matches the output.
+ */
+function isSandboxViolation(output: string, isError: boolean): boolean {
+  if (!isError) return false;
   return VIOLATION_PATTERNS.some(p => p.test(output));
 }
 
@@ -102,16 +106,23 @@ export default function sandboxToolsExtension(pi: ExtensionAPI) {
 
   /**
    * tool_result — detect sandbox violations and offer escape hatch.
-   * Stores a PendingApproval and appends a structured message to the result
-   * so the agent knows to call /sandbox-allow.
+   * Stores a PendingApproval and returns modified content so the agent
+   * knows to call /sandbox-allow.
+   *
+   * The Pi SDK delivers bash output in event.content (TextContent[]) and
+   * uses event.isError=true for non-zero exit codes. We read output from
+   * content and return { content: [...original, escapeHatchBlock] }.
    */
-  pi.on('tool_result', (event: { toolName?: string; output?: string; exitCode?: number | null; result?: string }) => {
+  pi.on('tool_result', (event: BashToolResultEvent): ToolResultEventResult | undefined => {
     if (event.toolName !== 'bash') return;
 
-    const output = event.output ?? event.result ?? '';
-    const exitCode = event.exitCode ?? null;
+    // Extract text from all TextContent blocks
+    const output = event.content
+      .filter((c): c is { type: 'text'; text: string } => c.type === 'text')
+      .map(c => c.text)
+      .join('\n');
 
-    if (!isSandboxViolation(output, exitCode)) return;
+    if (!isSandboxViolation(output, event.isError)) return;
 
     const approvalId = crypto.randomUUID();
     const timer = setTimeout(() => pendingApprovals.delete(approvalId), 5 * 60 * 1000);
@@ -124,16 +135,17 @@ export default function sandboxToolsExtension(pi: ExtensionAPI) {
 
     console.log('[sandbox-tools] Sandbox violation detected. approvalId:', approvalId);
 
-    const escapeHatchMsg = [
+    const escapeHatchText = [
       '',
       '[SANDBOX] This command was blocked by the sandbox.',
       'To request unsandboxed execution, use: /sandbox-allow <your reason>',
       'You will need to confirm this in the workwithme UI before it executes.',
     ].join('\n');
 
-    if (event.result !== undefined) {
-      (event as any).result = event.result + escapeHatchMsg;
-    }
+    // Return modified content — Pi SDK picks up the returned content array
+    return {
+      content: [...event.content, { type: 'text', text: escapeHatchText }],
+    };
   });
 
   /** session_shutdown — clean up SandboxManager state */
