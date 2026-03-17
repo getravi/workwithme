@@ -57,7 +57,8 @@ export function getMcpDefaultProfile(): SandboxProfile {
 
 /**
  * Object-spread merge a base profile with per-server overrides.
- * Arrays within a section are REPLACED (not merged/unioned) by the override.
+ * Within each section, keys present in `overrides` replace their base counterpart; absent keys are inherited. Arrays are replaced value-for-value (no union).
+ * Section-level override: pass the full section object to replace all keys.
  * Only top-level keys present in `overrides` replace their counterpart in `base`.
  */
 export function mergeWithProfile(
