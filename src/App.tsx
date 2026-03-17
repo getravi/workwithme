@@ -166,7 +166,7 @@ function App() {
         // Refresh when connection established
         refreshAll();
         // Fetch sandbox status to show warning banner if sandboxing is unavailable
-        fetch(`${API_BASE}/api/sandbox/status`)
+        fetchWithTimeout(`${API_BASE}/api/sandbox/status`)
           .then(r => r.json())
           .then((status: SandboxStatus) => setSandboxStatus(status))
           .catch(() => {}); // non-critical
@@ -753,7 +753,7 @@ function App() {
         {sandboxStatus && !sandboxStatus.active && !sandboxBannerDismissed && (
           <div className="absolute top-14 left-0 right-0 z-20 mx-3">
             <div className="flex items-start gap-2.5 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-400 text-[12px]">
-              <span className="flex-shrink-0 mt-0.5">⚠</span>
+              <span className="flex-shrink-0 mt-0.5" aria-hidden="true">⚠</span>
               <span className="flex-1">
                 {sandboxStatus.warning ?? 'Sandboxing is inactive.'}{' '}
                 <a
