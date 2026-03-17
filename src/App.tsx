@@ -7,6 +7,14 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";
 import { Message, Model, Session, ToolExecution, AttachedFile, PromptPayload, WS_EVENTS } from "./types";
 
+interface SandboxStatus {
+  supported: boolean;
+  srtAvailable: boolean;
+  active: boolean;
+  platform: string;
+  warning: string | null;
+}
+
 // Convert Uint8Array to base64 string (chunked to avoid call-stack overflow on large files)
 function arrayBufferToBase64(buffer: Uint8Array): string {
   const CHUNK = 8192;
@@ -76,6 +84,9 @@ function App() {
   const archivedSessions = useMemo(() => sessions.filter((session) => session.archived), [sessions]);
   const groupedActiveSessions = useMemo(() => groupSessionsByProject(activeSessions), [activeSessions]);
   const groupedArchivedSessions = useMemo(() => groupSessionsByProject(archivedSessions), [archivedSessions]);
+
+  const [sandboxStatus, setSandboxStatus] = useState<SandboxStatus | null>(null);
+  const [sandboxBannerDismissed, setSandboxBannerDismissed] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<number | null>(null);
@@ -154,6 +165,11 @@ function App() {
         setError(null);
         // Refresh when connection established
         refreshAll();
+        // Fetch sandbox status to show warning banner if sandboxing is unavailable
+        fetch(`${API_BASE}/api/sandbox/status`)
+          .then(r => r.json())
+          .then((status: SandboxStatus) => setSandboxStatus(status))
+          .catch(() => {}); // non-critical
       };
 
       ws.onmessage = (event) => {
@@ -733,8 +749,38 @@ function App() {
           </div>
         </header>
 
+        {/* Sandbox warning banner — shown when sandboxing is unavailable */}
+        {sandboxStatus && !sandboxStatus.active && !sandboxBannerDismissed && (
+          <div className="absolute top-14 left-0 right-0 z-20 mx-3">
+            <div className="flex items-start gap-2.5 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-400 text-[12px]">
+              <span className="flex-shrink-0 mt-0.5">⚠</span>
+              <span className="flex-1">
+                {sandboxStatus.warning ?? 'Sandboxing is inactive.'}{' '}
+                <a
+                  href="https://github.com/anthropic-experimental/sandbox-runtime"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline hover:text-amber-300"
+                >
+                  Learn more
+                </a>
+              </span>
+              <button
+                type="button"
+                onClick={() => setSandboxBannerDismissed(true)}
+                className="flex-shrink-0 p-0.5 hover:text-white transition-colors"
+                aria-label="Dismiss sandbox warning"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Chat Feed */}
-        <div className="flex-1 overflow-y-auto px-3 pt-16 pb-4 scroll-smooth">
+        <div className={`flex-1 overflow-y-auto px-3 scroll-smooth ${
+          sandboxStatus && !sandboxStatus.active && !sandboxBannerDismissed ? 'pt-28' : 'pt-16'
+        } pb-4`}>
           {messages.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-gray-500 space-y-3 max-w-md mx-auto text-center">
               <div className="w-16 h-16 rounded-2xl bg-[#182234] border border-[#1f2937] flex items-center justify-center shadow-lg">
