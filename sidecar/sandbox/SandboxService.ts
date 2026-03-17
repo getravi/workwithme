@@ -16,7 +16,7 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, unlinkSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execSync, spawn } from 'node:child_process';
 import { SandboxManager } from '@anthropic-ai/sandbox-runtime';
@@ -239,6 +239,10 @@ export class SandboxService {
    * See: docs/architecture/sandbox-runtime.md
    */
   static async generateMcpConfig(cwd = process.cwd()): Promise<void> {
+    if (!_srtAvailable) {
+      console.warn('[SandboxService] srt not available — skipping MCP config generation');
+      return;
+    }
     const mcpJsonPath = join(cwd, 'mcp.json');
     if (!existsSync(mcpJsonPath)) {
       console.warn(`[SandboxService] mcp.json not found at ${mcpJsonPath} — MCP servers unavailable`);

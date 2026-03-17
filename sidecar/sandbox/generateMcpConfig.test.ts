@@ -113,4 +113,19 @@ describe('SandboxService.generateMcpConfig', () => {
     const serverSettings = JSON.parse(readFileSync(settingsPath, 'utf-8'));
     expect(serverSettings.network.allowedDomains).toContain('api.github.com');
   });
+
+  it('skips generation when srt is not available', async () => {
+    writeFileSync(join(testDir, 'mcp.json'), JSON.stringify({
+      mcpServers: { 'my-server': { command: 'npx', args: ['-y', 'some-server'] } }
+    }));
+
+    const { SandboxService } = await import('./SandboxService.js');
+    await SandboxService.initialize(testDir);
+    (SandboxService as any)._forceSupported(false);
+    (SandboxService as any)._forceSrtAvailable(false);
+
+    await SandboxService.generateMcpConfig(testDir);
+
+    expect(existsSync(join(testDir, '.pi', 'mcp.json'))).toBe(false);
+  });
 });
