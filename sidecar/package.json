@@ -1,0 +1,33 @@
+{
+  "name": "sidecar",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "tsx server.ts",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@mariozechner/pi-coding-agent": "^0.57.1",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "glimpseui": "github:HazAT/glimpse",
+    "pi-chrome-cdp": "github:pasky/chrome-cdp-skill",
+    "pi-mcp-adapter": "github:nicobailon/pi-mcp-adapter",
+    "pi-parallel": "github:HazAT/pi-parallel",
+    "pi-smart-sessions": "github:HazAT/pi-smart-sessions",
+    "pi-subagents": "github:nicobailon/pi-subagents",
+    "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.5.0",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.21.0"
+  }
+}
