@@ -36,6 +36,7 @@ let _isSupported = false;
 let _srtAvailable = false;
 let _warning: string | null = null;
 let _settings: WorkwithmeSettings = {};
+let _initialized = false;
 
 function loadSettings(cwd: string): WorkwithmeSettings {
   const settingsPath = join(cwd, 'workwithme.settings.json');
@@ -64,6 +65,11 @@ export class SandboxService {
    * Never throws — sets isSupported = false on any failure.
    */
   static async initialize(cwd = process.cwd()): Promise<void> {
+    if (_initialized) {
+      console.warn('[SandboxService] initialize() called more than once — ignoring duplicate call');
+      return;
+    }
+    _initialized = true;
     const platform = process.platform;
 
     if (platform === 'win32') {
@@ -134,7 +140,7 @@ export class SandboxService {
     if (!_isSupported) return null;
 
     return {
-      async exec(command: string, cwd: string, { onData, signal, timeout }: {
+      async exec(command: string, cwd: string, { onData, signal, timeout, env }: {
         onData: (data: Buffer) => void;
         signal?: AbortSignal;
         timeout?: number;
@@ -151,6 +157,7 @@ export class SandboxService {
             cwd,
             detached: true,
             stdio: ['ignore', 'pipe', 'pipe'],
+            ...(env ? { env } : {}),
           });
 
           let timedOut = false;
