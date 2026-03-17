@@ -25,6 +25,8 @@ import piSmartSessions from "./node_modules/pi-smart-sessions/extensions/smart-s
 import piParallel from "./node_modules/pi-parallel/extension/index.ts";
 // @ts-ignore
 import aiLabelling from "./extensions/ai-labelling.ts";
+import sandboxToolsExtension, { setSendToClient, grantApproval } from "./extensions/sandbox-tools.js";
+import { SandboxService } from "./sandbox/SandboxService.js";
 
 
 // Basic express setup
@@ -156,7 +158,8 @@ async function initSession(opts: InitSessionOptions = { mode: 'continue' }): Pro
         glimpse,
         piSmartSessions,
         piParallel,
-        aiLabelling
+        aiLabelling,
+        sandboxToolsExtension
       ];
       
       // Load pi-mcp-adapter but softly catch errors if the user doesn't have an mcp.json yet
@@ -467,6 +470,18 @@ app.post('/api/project', async (req: Request, res: Response) => {
 });
 
 
+/**
+ * GET /api/sandbox/status
+ * Returns the current sandbox runtime status for the frontend banner.
+ */
+app.get('/api/sandbox/status', (_req: Request, res: Response) => {
+  res.json({
+    isSupported: SandboxService.isSupported,
+    srtAvailable: SandboxService.srtAvailable,
+    warning: SandboxService.warning,
+  });
+});
+
 // Websocket handling for streaming
 wss.on('connection', async (ws: WebSocket) => {
   if (clients.size >= MAX_WS_CONNECTIONS) {
@@ -477,6 +492,13 @@ wss.on('connection', async (ws: WebSocket) => {
 
   const client: ClientRecord = { ws, subscriber: null };
   clients.add(client);
+
+  // Wire sandbox-tools extension to send events to this client
+  setSendToClient((msg: object) => {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(msg));
+    }
+  });
 
   try {
     if (sessionMap.size === 0) {
@@ -500,7 +522,18 @@ wss.on('connection', async (ws: WebSocket) => {
         cwd?: string;
         images?: unknown[];
         streamingBehavior?: string;
+        approvalId?: string;
       };
+
+      // Handle sandbox approval responses from the frontend
+      if (data.type === WS_EVENTS.SANDBOX_APPROVAL_RESPONSE) {
+        if (typeof data.approvalId === 'string' && data.approvalId.length > 0) {
+          grantApproval(data.approvalId);
+        } else {
+          console.warn('[WS] SANDBOX_APPROVAL_RESPONSE missing valid approvalId');
+        }
+        return;
+      }
 
       if (data.type === WS_EVENTS.JOIN || data.type === WS_EVENTS.PROMPT || data.type === WS_EVENTS.STEER || data.type === WS_EVENTS.NEW_CHAT) {
         let sessionId = data.sessionId;
@@ -595,8 +628,20 @@ wss.on('connection', async (ws: WebSocket) => {
   });
 });
 
-// Start the server
+// Bootstrap: initialize sandbox and generate MCP config before accepting connections
+async function bootstrap(): Promise<void> {
+  await SandboxService.initialize(process.cwd());
+  await SandboxService.generateMcpConfig(process.cwd());
+}
+
+// Start the server after async bootstrap completes
 const PORT = process.env.PORT || 4242;
-server.listen(PORT, () => {
-  console.log(`WorkWithMe Sidecar running on http://localhost:${PORT}`);
-});
+bootstrap()
+  .catch((err) => {
+    console.error('[bootstrap] Fatal error during startup:', err);
+  })
+  .finally(() => {
+    server.listen(PORT, () => {
+      console.log(`WorkWithMe Sidecar running on http://localhost:${PORT}`);
+    });
+  });
