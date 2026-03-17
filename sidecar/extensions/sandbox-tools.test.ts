@@ -43,7 +43,7 @@ describe('sandbox-tools extension', () => {
     expect(handlers['session_shutdown']).toBeDefined();
   });
 
-  it('user_bash returns operations when isSupported is true', async () => {
+  it('user_bash wraps with sandboxed ops when bypass flag is not set', async () => {
     const { SandboxService } = await import('../sandbox/SandboxService.js');
     (SandboxService as any).isSupported = true;
 
@@ -125,5 +125,42 @@ describe('sandbox-tools extension', () => {
     const returnMsg = await commands['sandbox-allow'].handler('reason');
     expect(sendToClient).not.toHaveBeenCalled();
     expect(returnMsg).toContain('No pending');
+  });
+
+  it('grantApproval sets bypass flag', async () => {
+    const { SandboxService } = await import('../sandbox/SandboxService.js');
+    (SandboxService as any).isSupported = true;
+
+    mod.grantApproval('some-id');
+
+    // bypassNextCall should now be true — verified indirectly: next user_bash returns undefined
+    const result = await handlers['user_bash']({});
+    expect(result).toBeUndefined();
+  });
+
+  it('tool_result stores pending approval with command info', async () => {
+    const sendToClient = vi.fn();
+    mod.setSendToClient(sendToClient);
+
+    const event = {
+      toolName: 'bash',
+      output: 'Sandbox: deny file read',
+      exitCode: 1,
+      result: 'Sandbox: deny',
+    };
+    await handlers['tool_result'](event);
+
+    // pendingApprovals is not exported — verify indirectly via /sandbox-allow
+    await commands['sandbox-allow'].handler('need access');
+    expect(sendToClient).toHaveBeenCalledOnce();
+    const call = sendToClient.mock.calls[0][0];
+    expect(call).toHaveProperty('approvalId');
+    expect(call).toHaveProperty('violationContext');
+  });
+
+  it('session_shutdown calls SandboxManager.reset', async () => {
+    const { SandboxManager } = await import('@anthropic-ai/sandbox-runtime');
+    await handlers['session_shutdown']();
+    expect(SandboxManager.reset).toHaveBeenCalled();
   });
 });
