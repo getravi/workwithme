@@ -6,7 +6,8 @@
   "scripts": {
     "start": "tsx server.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "postinstall": "node scripts/patch-esm.cjs"
   },
   "keywords": [],
   "author": "",
