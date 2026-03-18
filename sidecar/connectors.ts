@@ -637,9 +637,14 @@ const OAUTH_DESCRIPTIONS: Record<string, string> = {
   openai: 'Connect with OpenAI',
 };
 
-export function listConnectors(authStorage: AuthStorage): ConnectorEntry[] {
-  const configured = new Set(authStorage.list());
+export interface ListConnectorsResult {
+  connectors: ConnectorEntry[];
+  warning?: string;
+}
 
+export async function listConnectors(authStorage: AuthStorage): Promise<ListConnectorsResult> {
+  // 1. OAuth providers
+  const configured = new Set(authStorage.list());
   const oauthConnectors: ConnectorEntry[] = getOAuthProviders().map((p) => ({
     id: `oauth/${p.id}`,
     name: p.name,
@@ -650,21 +655,224 @@ export function listConnectors(authStorage: AuthStorage): ConnectorEntry[] {
     requiresToken: false,
   }));
 
-  let mcpConnectors: ConnectorEntry[] = [];
+  // 2. Read mcp.json
+  let mcpServers: Record<string, unknown> = {};
+  let mcpLoadFailed = false;
   try {
     const config = loadMcpConfig();
-    mcpConnectors = Object.keys(config.mcpServers).map((name) => {
-      const entry = config.mcpServers[name] as Record<string, unknown>;
+    mcpServers = config.mcpServers as Record<string, unknown>;
+  } catch {
+    mcpLoadFailed = true;
+  }
+
+  // 3. Catalog entries — determine status via mcp.json + keychain
+  let keychainFailed = false;
+  const remoteMcpConnectors: ConnectorEntry[] = [];
+
+  for (const entry of REMOTE_MCP_CATALOG) {
+    const inMcp = entry.slug in mcpServers;
+    let status: 'connected' | 'available' = 'available';
+
+    if (!entry.requiresToken) {
+      status = inMcp ? 'connected' : 'available';
+    } else if (!keychainFailed) {
+      try {
+        const token = await keychainGet(entry.slug);
+        if (inMcp && token) {
+          status = 'connected';
+        } else if (!inMcp && token) {
+          // Stale keychain entry — no mcp.json record; silently delete it
+          status = 'available';
+          keychainDelete(entry.slug).catch(err =>
+            console.warn(`[connectors] Failed to delete stale keychain entry remote-mcp/${entry.slug}:`, err)
+          );
+        } else {
+          status = 'available';
+        }
+      } catch {
+        keychainFailed = true;
+        status = 'available';
+      }
+    }
+
+    remoteMcpConnectors.push({
+      id: `remote-mcp/${entry.slug}`,
+      name: entry.name,
+      description: entry.description,
+      category: entry.category,
+      type: 'remote-mcp',
+      status,
+      logoSvg: entry.logoSvg,
+      url: entry.url,
+      docsUrl: entry.docsUrl,
+      requiresToken: entry.requiresToken,
+    });
+  }
+
+  // 4. Local mcp entries — keys not matching any catalog slug
+  const localMcpConnectors: ConnectorEntry[] = [];
+  if (!mcpLoadFailed) {
+    for (const [name, serverEntry] of Object.entries(mcpServers)) {
+      if (CATALOG_SLUGS.has(name)) continue;
+      const entry = serverEntry as Record<string, unknown>;
       const description = typeof entry?.command === 'string'
         ? `${entry.command} server`
         : typeof entry?.url === 'string'
-          ? entry.url
+          ? (entry.url as string)
           : 'MCP server';
-      return { id: `mcp/${name}`, name, description, category: 'MCP', type: 'mcp' as const, status: 'connected' as const, requiresToken: false };
-    });
-  } catch {
-    // loadMcpConfig logs warnings internally; return empty list on failure
+      localMcpConnectors.push({
+        id: `mcp/${name}`,
+        name,
+        description,
+        category: 'Local',
+        type: 'mcp',
+        status: 'connected',
+        requiresToken: false,
+      });
+    }
   }
 
-  return [...oauthConnectors, ...mcpConnectors];
+  const warning = keychainFailed
+    ? 'Could not read credentials store. Some connectors may show as available.'
+    : undefined;
+
+  return {
+    connectors: [...oauthConnectors, ...remoteMcpConnectors, ...localMcpConnectors],
+    warning,
+  };
+}
+
+const SLUG_REGEX = /^[a-z0-9][a-z0-9-]{0,62}$/;
+const MAX_CUSTOM_CONNECTORS = 200;
+
+export interface ConnectorError {
+  field?: string;
+  message: string;
+  status: 400 | 409 | 500;
+}
+
+export interface AddConnectorResult {
+  entry?: ConnectorEntry;
+  error?: ConnectorError;
+}
+
+export interface RemoveConnectorResult {
+  success?: boolean;
+  notFound?: boolean;
+  error?: ConnectorError;
+}
+
+export interface AddConnectorInput {
+  id: string;
+  name: string;
+  url: string;
+  token?: string;
+}
+
+export async function addRemoteMcpConnector(input: AddConnectorInput): Promise<AddConnectorResult> {
+  const { id, name, url, token } = input;
+
+  if (!SLUG_REGEX.test(id)) {
+    return { error: { field: 'id', message: 'Invalid server name', status: 400 } };
+  }
+  if (CATALOG_SLUGS.has(id)) {
+    return { error: { field: 'id', message: 'This name is reserved for a catalog connector.', status: 400 } };
+  }
+  if (!name || !name.trim()) {
+    return { error: { field: 'name', message: 'Name is required', status: 400 } };
+  }
+  if (name.trim().length > 64) {
+    return { error: { field: 'name', message: 'Name must be 64 characters or fewer', status: 400 } };
+  }
+  if (!url || !url.trim()) {
+    return { error: { field: 'url', message: 'Server URL is required', status: 400 } };
+  }
+  const trimmedUrl = url.trim();
+  if (!trimmedUrl.toLowerCase().startsWith('https://')) {
+    return { error: { field: 'url', message: 'Must be a valid https:// URL', status: 400 } };
+  }
+  if (trimmedUrl.length > 2048) {
+    return { error: { field: 'url', message: 'URL is too long', status: 400 } };
+  }
+
+  const catalogEntry = REMOTE_MCP_CATALOG.find(e => e.slug === id);
+  const requiresToken = catalogEntry ? catalogEntry.requiresToken : true;
+  if (requiresToken && !token) {
+    return { error: { field: 'token', message: 'Auth token is required', status: 400 } };
+  }
+
+  const existing = readRawMcpConfig();
+  const customCount = Object.keys(existing).filter(k => !CATALOG_SLUGS.has(k)).length;
+  if (customCount >= MAX_CUSTOM_CONNECTORS) {
+    return { error: { message: 'Maximum number of custom connectors reached', status: 400 } };
+  }
+  if (id in existing) {
+    return { error: { field: 'id', message: 'A connector with this name already exists', status: 409 } };
+  }
+  const existingUrls = Object.values(existing)
+    .map(e => {
+      const ent = e as Record<string, unknown>;
+      return typeof ent.url === 'string' ? ent.url.trim().toLowerCase() : '';
+    })
+    .filter(Boolean);
+  if (existingUrls.includes(trimmedUrl.toLowerCase())) {
+    return { error: { field: 'url', message: 'A server with this URL already exists', status: 409 } };
+  }
+
+  try {
+    writeMcpEntry(id, trimmedUrl);
+  } catch {
+    return { error: { message: 'Failed to save server. Please try again.', status: 500 } };
+  }
+
+  if (token) {
+    try {
+      await keychainSet(id, token);
+    } catch {
+      try { removeMcpEntry(id); } catch { /* ignore rollback failure */ }
+      return { error: { message: 'Failed to save credentials. Your connection was not saved.', status: 500 } };
+    }
+  }
+
+  const entry: ConnectorEntry = {
+    id: `remote-mcp/${id}`,
+    name: name.trim(),
+    description: catalogEntry?.description ?? trimmedUrl,
+    category: catalogEntry?.category ?? 'Custom',
+    type: 'remote-mcp',
+    status: 'connected',
+    url: trimmedUrl,
+    docsUrl: catalogEntry?.docsUrl,
+    logoSvg: catalogEntry?.logoSvg,
+    requiresToken,
+  };
+
+  return { entry };
+}
+
+export async function removeRemoteMcpConnector(slug: string): Promise<RemoveConnectorResult> {
+  if (!SLUG_REGEX.test(slug)) {
+    return { error: { message: 'Invalid connector id', status: 400 } };
+  }
+
+  let removedFromMcp = false;
+  let removedFromKeychain = false;
+
+  try {
+    removedFromMcp = removeMcpEntry(slug);
+  } catch {
+    return { error: { message: 'Failed to remove server', status: 500 } };
+  }
+
+  try {
+    removedFromKeychain = await keychainDelete(slug);
+  } catch {
+    console.warn(`[connectors] Failed to delete keychain entry for remote-mcp/${slug}`);
+  }
+
+  if (!removedFromMcp && !removedFromKeychain) {
+    return { notFound: true };
+  }
+
+  return { success: true };
 }

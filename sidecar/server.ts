@@ -28,7 +28,7 @@ import aiLabelling from "./extensions/ai-labelling.ts";
 import sandboxToolsExtension, { setSendToClient, grantApproval } from "./extensions/sandbox-tools.js";
 import { SandboxService } from "./sandbox/SandboxService.js";
 import { listSkills, writeUserSkill } from './skills.js';
-import { listConnectors } from './connectors.js';
+import { listConnectors, addRemoteMcpConnector, removeRemoteMcpConnector } from './connectors.js';
 
 
 // Basic express setup
@@ -497,6 +497,8 @@ app.get('/api/skills', (_req: Request, res: Response) => {
   }
 });
 
+const MAX_SKILL_CONTENT_BYTES = 100_000;
+
 // REST Endpoint to create a new user skill
 app.post('/api/skills', (req: Request, res: Response) => {
   const { name, content } = req.body as { name?: string; content?: string };
@@ -504,21 +506,70 @@ app.post('/api/skills', (req: Request, res: Response) => {
     res.status(400).json({ error: 'Missing name or content' });
     return;
   }
+  if (content.length > MAX_SKILL_CONTENT_BYTES) {
+    res.status(400).json({ error: `Content exceeds maximum size of ${MAX_SKILL_CONTENT_BYTES} bytes` });
+    return;
+  }
   try {
     const filePath = writeUserSkill(name, content);
     res.json({ success: true, path: filePath });
   } catch (err) {
-    res.status(400).json({ error: String(err) });
+    const message = String(err);
+    if (message.includes('already exists')) {
+      res.status(409).json({ error: message });
+    } else {
+      res.status(400).json({ error: message });
+    }
   }
 });
 
-// REST Endpoint to list all connectors (OAuth providers + MCP servers)
-app.get('/api/connectors', (_req: Request, res: Response) => {
+// REST Endpoint to list all connectors (OAuth providers + remote-MCP catalog + local MCP)
+app.get('/api/connectors', async (_req: Request, res: Response) => {
   try {
-    res.json(listConnectors(globalAuthStorage));
+    const result = await listConnectors(globalAuthStorage);
+    res.json(result);
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
+});
+
+// POST /api/connectors/remote-mcp — connect a catalog or custom remote MCP server
+app.post('/api/connectors/remote-mcp', async (req: Request, res: Response) => {
+  const { id, name, url, token } = req.body as {
+    id?: string;
+    name?: string;
+    url?: string;
+    token?: string;
+  };
+
+  if (!id || !name || !url) {
+    res.status(400).json({ error: 'Missing required fields: id, name, url' });
+    return;
+  }
+
+  const result = await addRemoteMcpConnector({ id, name, url, token });
+
+  if (result.error) {
+    res.status(result.error.status).json({ error: result.error.message, field: result.error.field });
+    return;
+  }
+
+  res.json(result.entry);
+});
+
+// DELETE /api/connectors/remote-mcp/:id — disconnect a remote MCP server
+app.delete('/api/connectors/remote-mcp/:id', async (req: Request, res: Response) => {
+  const { id } = req.params;
+
+  const result = await removeRemoteMcpConnector(id);
+
+  if (result.error) {
+    res.status(result.error.status).json({ error: result.error.message });
+    return;
+  }
+
+  // 404 treated as success (already disconnected)
+  res.status(204).send();
 });
 
 // Websocket handling for streaming
