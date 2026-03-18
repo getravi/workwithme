@@ -198,15 +198,15 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-      <div className="bg-[#182234] border border-[#374151] rounded-xl shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95 duration-200">
-        
+      <div className="bg-[#182234] border border-[#374151] rounded-xl shadow-2xl w-full max-w-md flex flex-col max-h-[90vh] animate-in fade-in zoom-in-95 duration-200">
+
         {/* Header */}
-        <div className="px-4 py-3 border-b border-[#374151] flex items-center justify-between bg-[#141d2e]">
+        <div className="px-4 py-3 border-b border-[#374151] flex items-center justify-between bg-[#141d2e] flex-shrink-0">
           <h2 className="text-lg font-bold text-gray-200 flex items-center gap-2">
             <Key className="w-4 h-4 text-[#c5f016]" />
             Engine Settings
           </h2>
-          <button 
+          <button
             onClick={onClose}
             className="p-1 text-gray-400 hover:text-white rounded-lg hover:bg-[#374151] transition-colors"
           >
@@ -215,7 +215,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
         </div>
 
         {/* Content */}
-        <div className="p-4 space-y-4">
+        <div className="p-4 space-y-4 overflow-y-auto">
           
           <div>
             <h3 className="text-[12px] font-semibold text-gray-400 uppercase tracking-wider mb-2">Configure LLM Access</h3>
