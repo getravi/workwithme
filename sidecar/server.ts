@@ -27,6 +27,7 @@ import piParallel from "./node_modules/pi-parallel/extension/index.ts";
 import aiLabelling from "./extensions/ai-labelling.ts";
 import sandboxToolsExtension, { setSendToClient, grantApproval } from "./extensions/sandbox-tools.js";
 import { SandboxService } from "./sandbox/SandboxService.js";
+import { listSkills, writeUserSkill } from './skills.js';
 
 
 // Basic express setup
@@ -448,7 +449,7 @@ app.post('/api/sessions/load', async (req: Request, res: Response) => {
 app.get('/api/project', (req: Request, res: Response) => {
     const sessionId = req.query.sessionId as string | undefined;
     const session = getSession(sessionId);
-    res.json({ cwd: session ? session.sessionManager.getCwd() : process.cwd() });
+    res.json({ cwd: session ? session.sessionManager.getCwd() : null });
 });
 
 app.post('/api/project', async (req: Request, res: Response) => {
@@ -484,6 +485,30 @@ app.get('/api/sandbox/status', (_req: Request, res: Response) => {
     platform: process.platform,
     warning: SandboxService.warning,
   });
+});
+
+// REST Endpoint to list all skills (bundled examples + user skills)
+app.get('/api/skills', (_req: Request, res: Response) => {
+  try {
+    res.json(listSkills());
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+// REST Endpoint to create a new user skill
+app.post('/api/skills', (req: Request, res: Response) => {
+  const { name, content } = req.body as { name?: string; content?: string };
+  if (!name || !content) {
+    res.status(400).json({ error: 'Missing name or content' });
+    return;
+  }
+  try {
+    const filePath = writeUserSkill(name, content);
+    res.json({ success: true, path: filePath });
+  } catch (err) {
+    res.status(400).json({ error: String(err) });
+  }
 });
 
 // Websocket handling for streaming
@@ -657,6 +682,13 @@ bootstrap()
     console.error('[bootstrap] Sandbox init failed (continuing without sandboxing):', err);
   })
   .finally(() => {
+    server.on('error', (err: NodeJS.ErrnoException) => {
+      if (err.code === 'EADDRINUSE') {
+        console.error(`[sidecar] Port ${PORT} is already in use. Is another instance running?`);
+        process.exit(1);
+      }
+      throw err;
+    });
     server.listen(PORT, () => {
       console.log(`WorkWithMe Sidecar running on http://localhost:${PORT}`);
     });
