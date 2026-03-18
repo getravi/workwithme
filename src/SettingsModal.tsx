@@ -219,11 +219,11 @@ export function SettingsModal({ isOpen, onClose, isConnected }: SettingsModalPro
         {/* Content */}
         <div className="p-4 space-y-4 overflow-y-auto">
 
-          {/* Disconnected banner */}
+          {/* Loading banner — shown while the backend is still starting up */}
           {!isConnected && (
-            <div className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-[12px]">
-              <span className="w-2 h-2 rounded-full bg-red-500 flex-shrink-0" />
-              <span>Sidecar is not running. Start it and the settings will load automatically.</span>
+            <div className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg bg-[#111827] border border-[#374151] text-gray-400 text-[12px]">
+              <span className="w-3.5 h-3.5 border-2 border-gray-500 border-t-transparent rounded-full animate-spin flex-shrink-0" />
+              <span>Starting up… settings will load automatically.</span>
             </div>
           )}
 
@@ -301,7 +301,7 @@ export function SettingsModal({ isOpen, onClose, isConnected }: SettingsModalPro
               Login to your existing subscriptions directly via the browser.
             </p>
             {!isConnected ? (
-              <p className="text-[13px] text-gray-600 italic">Waiting for sidecar connection...</p>
+              <p className="text-[13px] text-gray-600 italic">Starting up…</p>
             ) : oauthProviders.length === 0 ? (
               <p className="text-[13px] text-gray-600 italic">No subscription providers available.</p>
             ) : (
