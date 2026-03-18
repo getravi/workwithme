@@ -130,7 +130,7 @@ describe('keychainDelete', () => {
 });
 
 import { readRawMcpConfig, writeMcpEntry, removeMcpEntry } from './connectors.js';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -146,8 +146,7 @@ describe('writeMcpEntry / readRawMcpConfig / removeMcpEntry', () => {
     if (originalContent !== null) {
       writeFileSync(MCP_PATH, originalContent, 'utf-8');
     } else if (existsSync(MCP_PATH)) {
-      // If file didn't exist before, remove the test entry but keep other entries
-      // Simple approach: remove if we created it from scratch
+      unlinkSync(MCP_PATH);
     }
   });
 
