@@ -28,6 +28,7 @@ import aiLabelling from "./extensions/ai-labelling.ts";
 import sandboxToolsExtension, { setSendToClient, grantApproval } from "./extensions/sandbox-tools.js";
 import { SandboxService } from "./sandbox/SandboxService.js";
 import { listSkills, writeUserSkill } from './skills.js';
+import { listConnectors } from './connectors.js';
 
 
 // Basic express setup
@@ -508,6 +509,15 @@ app.post('/api/skills', (req: Request, res: Response) => {
     res.json({ success: true, path: filePath });
   } catch (err) {
     res.status(400).json({ error: String(err) });
+  }
+});
+
+// REST Endpoint to list all connectors (OAuth providers + MCP servers)
+app.get('/api/connectors', (_req: Request, res: Response) => {
+  try {
+    res.json(listConnectors(globalAuthStorage));
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
   }
 });
 
