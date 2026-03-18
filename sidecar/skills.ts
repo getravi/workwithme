@@ -78,6 +78,7 @@ export function writeUserSkill(name: string, content: string): string {
     mkdirSync(USER_SKILLS_DIR, { recursive: true });
   }
   const filePath = join(USER_SKILLS_DIR, `${safeName}.md`);
+  if (existsSync(filePath)) throw new Error(`Skill already exists: ${safeName}`);
   writeFileSync(filePath, content, 'utf-8');
   return filePath;
 }
