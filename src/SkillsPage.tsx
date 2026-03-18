@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Zap, Search, Plus } from "lucide-react";
 import { API_BASE } from "./config";
 
@@ -24,6 +24,10 @@ function CreateSkillModal({ onClose, onCreated }: CreateSkillModalProps) {
 
   async function handleSave() {
     if (!name.trim()) { setError("Name is required"); return; }
+    if (/[\r\n]/.test(name) || /[\r\n]/.test(description)) {
+      setError("Name and description cannot contain newlines");
+      return;
+    }
     setSaving(true);
     setError(null);
     const content = `---\nname: ${name.trim()}\ndescription: ${description.trim()}\n---\n\n${body}`;
@@ -108,7 +112,7 @@ export function SkillsPage() {
   const [tab, setTab] = useState<FilterTab>("all");
   const [showCreate, setShowCreate] = useState(false);
 
-  async function fetchSkills() {
+  const fetchSkills = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -120,9 +124,9 @@ export function SkillsPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
 
-  useEffect(() => { fetchSkills(); }, []);
+  useEffect(() => { fetchSkills(); }, [fetchSkills]);
 
   const filtered = skills.filter((s) => {
     if (tab === "user" && s.source !== "user") return false;

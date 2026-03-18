@@ -82,6 +82,7 @@ function App() {
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [showArchived, setShowArchived] = useState(false);
   const [activeView, setActiveView] = useState<'chat' | 'skills' | 'connectors'>('chat');
+  const [connectorsRefreshKey, setConnectorsRefreshKey] = useState(0);
 
   const activeSessions = useMemo(() => sessions.filter((session) => !session.archived), [sessions]);
   const archivedSessions = useMemo(() => sessions.filter((session) => session.archived), [sessions]);
@@ -267,7 +268,7 @@ function App() {
              fetchSessions(); // Refresh list to get smart session names
           }
           else if (data.type === WS_EVENTS.TOOL_EXECUTION_START) {
-             setIsPreviewOpen(true);
+             if (activeView === 'chat') setIsPreviewOpen(true);
              setToolExecutions(prev => [
                 ...prev, 
                 { id: data.toolCallId, name: data.toolName, args: data.args, status: "running" }
@@ -738,7 +739,7 @@ function App() {
       {activeView === 'skills' ? (
         <SkillsPage />
       ) : activeView === 'connectors' ? (
-        <ConnectorsPage onOpenSettings={() => setIsSettingsOpen(true)} />
+        <ConnectorsPage onOpenSettings={() => setIsSettingsOpen(true)} refreshKey={connectorsRefreshKey} />
       ) : (
       <main className="flex-1 flex flex-col bg-[#111827] relative min-w-0">
         
@@ -1040,7 +1041,10 @@ function App() {
 
       <SettingsModal
         isOpen={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
+        onClose={() => {
+          setIsSettingsOpen(false);
+          if (activeView === 'connectors') setConnectorsRefreshKey(k => k + 1);
+        }}
         isConnected={isConnected}
       />
 
