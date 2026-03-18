@@ -462,6 +462,7 @@ function App() {
   };
 
   const handleNewChat = () => {
+    setActiveView('chat');
     setMessages([]);
     setToolExecutions([]);
     setIsPreviewOpen(false);
@@ -966,7 +967,7 @@ function App() {
       )}
 
       {/* Right Sidebar (Artifacts/Preview) */}
-      <aside className={`${isPreviewOpen ? (isPreviewMaximized ? 'w-1/2' : 'w-1/3') : 'w-0'} flex-shrink-0 transition-all duration-300 border-l border-[#1f2937] bg-[#182234] flex flex-col overflow-hidden shadow-2xl z-30`}>
+      <aside className={`${activeView === 'chat' && isPreviewOpen ? (isPreviewMaximized ? 'w-1/2' : 'w-1/3') : 'w-0'} flex-shrink-0 transition-all duration-300 border-l border-[#1f2937] bg-[#182234] flex flex-col overflow-hidden shadow-2xl z-30`}>
          <div className="px-3 py-2.5 border-b border-[#1f2937] flex items-center justify-between bg-[#141d2e]">
             <h3 className="text-[13px] font-semibold text-gray-300 flex items-center gap-2">
                <Terminal className="w-3.5 h-3.5 text-[#9df0c0]" /> 
