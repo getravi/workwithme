@@ -2,6 +2,7 @@
   "name": "sidecar",
   "version": "1.0.0",
   "type": "module",
+  "packageManager": "pnpm@10.32.1",
   "main": "index.js",
   "scripts": {
     "start": "tsx server.ts",
@@ -19,6 +20,7 @@
     "cors": "^2.8.6",
     "express": "^5.2.1",
     "glimpseui": "github:HazAT/glimpse",
+    "keytar": "^7.9.0",
     "pi-chrome-cdp": "github:pasky/chrome-cdp-skill",
     "pi-mcp-adapter": "github:nicobailon/pi-mcp-adapter",
     "pi-parallel": "github:HazAT/pi-parallel",
