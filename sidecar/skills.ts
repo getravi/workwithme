@@ -1,7 +1,6 @@
 import { existsSync, readdirSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { homedir } from 'node:os';
-import { fileURLToPath } from 'node:url';
 
 export interface SkillEntry {
   id: string;
@@ -53,12 +52,29 @@ function scanSkillsDir(dir: string, source: 'user' | 'example'): SkillEntry[] {
   return entries;
 }
 
-const EXAMPLES_DIR = join(fileURLToPath(new URL('.', import.meta.url)), 'skills', 'examples');
+// Built-in example skills — inlined so they work in both dev and compiled binary.
+const BUILTIN_EXAMPLES: SkillEntry[] = [
+  {
+    id: 'example/code-review',
+    name: 'code-review',
+    description: 'Review code for bugs, style issues, and improvements. Use when the user asks to review, check, or critique code.',
+    source: 'example',
+    path: '',
+  },
+  {
+    id: 'example/debug-error',
+    name: 'debug-error',
+    description: 'Systematically diagnose and fix errors or unexpected behavior. Use when the user reports a bug, error message, or unexpected output.',
+    source: 'example',
+    path: '',
+  },
+];
+
 export const USER_SKILLS_DIR = join(homedir(), '.config', 'workwithme', 'skills');
 
 export function listSkills(): SkillEntry[] {
   return [
-    ...scanSkillsDir(EXAMPLES_DIR, 'example'),
+    ...BUILTIN_EXAMPLES,
     ...scanSkillsDir(USER_SKILLS_DIR, 'user'),
   ];
 }

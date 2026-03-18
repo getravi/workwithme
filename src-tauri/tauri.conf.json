@@ -35,7 +35,8 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "../sidecar": "sidecar"
+      "../sidecar/dist/bundle.cjs": "sidecar/bundle.cjs",
+      "../sidecar/dist/node_modules/keytar": "sidecar/node_modules/keytar"
     }
   }
 }
