@@ -998,9 +998,10 @@ function App() {
          </div>
       </aside>
 
-      <SettingsModal 
-        isOpen={isSettingsOpen} 
-        onClose={() => setIsSettingsOpen(false)} 
+      <SettingsModal
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        isConnected={isConnected}
       />
 
     </div>

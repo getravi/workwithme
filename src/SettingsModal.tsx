@@ -7,9 +7,10 @@ type AuthStatus = "idle" | "saving" | "success" | "error" | "oauth_loading";
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
+  isConnected: boolean;
 }
 
-export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
+export function SettingsModal({ isOpen, onClose, isConnected }: SettingsModalProps) {
   const [availableProviders, setAvailableProviders] = useState<string[]>([]);
   const [oauthProviders, setOauthProviders] = useState<{id: string, name: string}[]>([]);
   const [configuredProviders, setConfiguredProviders] = useState<string[]>([]);
@@ -68,9 +69,10 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     }
   }, [selectedProvider]);
 
+  // Fetch when modal opens, and again whenever the connection is restored
   useEffect(() => {
-    if (isOpen) fetchAuthStatus();
-  }, [isOpen, fetchAuthStatus]);
+    if (isOpen && isConnected) fetchAuthStatus();
+  }, [isOpen, isConnected, fetchAuthStatus]);
 
   // Cleanup when modal closes or component unmounts
   useEffect(() => {
@@ -216,7 +218,15 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
 
         {/* Content */}
         <div className="p-4 space-y-4 overflow-y-auto">
-          
+
+          {/* Disconnected banner */}
+          {!isConnected && (
+            <div className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-[12px]">
+              <span className="w-2 h-2 rounded-full bg-red-500 flex-shrink-0" />
+              <span>Sidecar is not running. Start it and the settings will load automatically.</span>
+            </div>
+          )}
+
           <div>
             <h3 className="text-[12px] font-semibold text-gray-400 uppercase tracking-wider mb-2">Configure LLM Access</h3>
             <p className="text-[13px] text-gray-500 mb-3">
@@ -224,28 +234,33 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
             </p>
 
             <form onSubmit={handleSaveKey} className="space-y-3">
-              
+
               <div className="space-y-1.5">
                 <label className="text-[13px] font-medium text-gray-300">Provider</label>
-                <select 
+                <select
                   value={selectedProvider}
                   onChange={(e) => setSelectedProvider(e.target.value)}
-                  className="w-full bg-[#111827] border border-[#374151] rounded-lg px-3 py-2 text-[13px] text-gray-200 focus:outline-none focus:border-[#c5f016] transition-colors appearance-none"
+                  disabled={!isConnected}
+                  className="w-full bg-[#111827] border border-[#374151] rounded-lg px-3 py-2 text-[13px] text-gray-200 focus:outline-none focus:border-[#c5f016] transition-colors appearance-none disabled:opacity-50"
                 >
-                  {availableProviders.map((p) => (
-                    <option key={p} value={p}>{p.charAt(0).toUpperCase() + p.slice(1)}</option>
-                  ))}
+                  {availableProviders.length === 0
+                    ? <option value="">—</option>
+                    : availableProviders.map((p) => (
+                        <option key={p} value={p}>{p.charAt(0).toUpperCase() + p.slice(1)}</option>
+                      ))
+                  }
                 </select>
               </div>
 
               <div className="space-y-1.5">
                 <label className="text-[13px] font-medium text-gray-300">API Key</label>
-                <input 
+                <input
                   type="password"
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
                   placeholder="sk-..."
-                  className="w-full bg-[#111827] border border-[#374151] rounded-lg px-3 py-2 text-gray-200 focus:outline-none focus:border-[#c5f016] focus:shadow-[0_0_15px_rgba(197,240,22,0.1)] transition-all font-mono text-[13px]"
+                  disabled={!isConnected}
+                  className="w-full bg-[#111827] border border-[#374151] rounded-lg px-3 py-2 text-gray-200 focus:outline-none focus:border-[#c5f016] focus:shadow-[0_0_15px_rgba(197,240,22,0.1)] transition-all font-mono text-[13px] disabled:opacity-50"
                 />
               </div>
 
@@ -266,7 +281,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
               <div className="pt-1 flex justify-end">
                 <button
                   type="submit"
-                  disabled={!apiKey.trim() || status === "saving"}
+                  disabled={!isConnected || !apiKey.trim() || status === "saving"}
                   className="flex items-center gap-2 px-4 py-2 bg-[#c5f016] text-[#111827] text-[13px] font-medium rounded-lg hover:bg-[#d6f733] disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
                 >
                   {status === "saving" ? (
@@ -285,18 +300,24 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
             <p className="text-[13px] text-gray-500 mb-3">
               Login to your existing subscriptions directly via the browser.
             </p>
-            <div className="grid grid-cols-2 gap-2">
-              {oauthProviders.map(provider => (
-                <button
-                  key={provider.id}
-                  onClick={() => handleOAuthLogin(provider.id)}
-                  disabled={status === "oauth_loading"}
-                  className="bg-[#111827] border border-[#374151] hover:border-[#c5f016] text-gray-300 text-[13px] font-medium py-2 px-3 rounded-lg transition-all disabled:opacity-50 text-left truncate"
-                >
-                  {provider.name}
-                </button>
-              ))}
-            </div>
+            {!isConnected ? (
+              <p className="text-[13px] text-gray-600 italic">Waiting for sidecar connection...</p>
+            ) : oauthProviders.length === 0 ? (
+              <p className="text-[13px] text-gray-600 italic">No subscription providers available.</p>
+            ) : (
+              <div className="grid grid-cols-2 gap-2">
+                {oauthProviders.map(provider => (
+                  <button
+                    key={provider.id}
+                    onClick={() => handleOAuthLogin(provider.id)}
+                    disabled={status === "oauth_loading"}
+                    className="bg-[#111827] border border-[#374151] hover:border-[#c5f016] text-gray-300 text-[13px] font-medium py-2 px-3 rounded-lg transition-all disabled:opacity-50 text-left truncate"
+                  >
+                    {provider.name}
+                  </button>
+                ))}
+              </div>
+            )}
 
             {/* OAuth Status Indicator */}
             {status === "oauth_loading" && (
