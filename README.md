@@ -37,6 +37,7 @@ Proprietary AI coworkers tie you to a single provider, a single pricing model, a
 ## Prerequisites
 
 - [Node.js](https://nodejs.org/) v18+
+- [pnpm](https://pnpm.io/) v10+
 - [Rust](https://www.rust-lang.org/tools/install)
 - [Tauri v2 prerequisites](https://v2.tauri.app/start/prerequisites/) for your platform
 
@@ -52,18 +53,18 @@ Proprietary AI coworkers tie you to a single provider, a single pricing model, a
 
 2. **Install dependencies:**
    ```bash
-   npm install
-   cd sidecar && npm install && cd ..
+   pnpm install
+   cd sidecar && pnpm install && cd ..
    ```
 
 3. **Run in development mode:**
    ```bash
-   npm run tauri:dev
+   pnpm run tauri:dev
    ```
 
 4. **Build for production:**
    ```bash
-   npm run tauri:build
+   pnpm run tauri:build
    ```
 
 ---

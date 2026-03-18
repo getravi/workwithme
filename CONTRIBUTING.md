@@ -16,7 +16,7 @@ The frontend communicates with the sidecar over WebSocket for streaming agent ev
 ### Adding Extensions
 
 You can add community pi-extensions or build your own:
-1. Install the extension package in `sidecar/` (e.g. `npm install github:author/my-extension`)
+1. Install the extension package in `sidecar/` (e.g. `pnpm add github:author/my-extension`)
 2. Import and register it in `sidecar/server.ts` in the `extensions` array
 3. Restart the sidecar
 
@@ -56,11 +56,12 @@ If you have an idea for an enhancement, please submit a feature request issue wi
    ```
 2. Install dependencies:
    ```bash
-   npm install
+   pnpm install
+   cd sidecar && pnpm install && cd ..
    ```
 3. Run the development server in Tauri:
    ```bash
-   npm run tauri dev
+   pnpm run tauri:dev
    ```
 
 Thank you!

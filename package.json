@@ -3,14 +3,18 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "packageManager": "pnpm@10.32.1",
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
+  },
   "scripts": {
     "tauri": "tauri",
-    "dev": "concurrently \"npm run sidecar\" \"vite\"",
-    "sidecar": "cd sidecar && npm start",
+    "dev": "concurrently \"pnpm run sidecar\" \"vite\"",
+    "sidecar": "pnpm --dir sidecar start",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri:build": "npm run build && tauri build",
-    "tauri:dev": "npm run dev"
+    "tauri:build": "pnpm run build && tauri build",
+    "tauri:dev": "pnpm run dev"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.10.1",
