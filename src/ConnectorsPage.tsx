@@ -130,8 +130,8 @@ export function ConnectorsPage({ onOpenSettings }: ConnectorsPageProps) {
               <div
                 key={connector.id}
                 onClick={connector.type === "oauth" ? onOpenSettings : undefined}
-                className={`bg-[#141d2e] border border-[#1f2937] rounded-xl p-4 flex items-center gap-3 hover:border-[#374151] transition-colors ${
-                  connector.type === "oauth" ? "cursor-pointer" : ""
+                className={`bg-[#141d2e] border border-[#1f2937] rounded-xl p-4 flex items-center gap-3 transition-colors ${
+                  connector.type === "oauth" ? "cursor-pointer hover:border-[#374151]" : "cursor-default"
                 }`}
               >
                 <ConnectorIcon name={connector.name} />
