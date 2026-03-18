@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Zap, Search, Plus, MoreHorizontal } from "lucide-react";
+import { Zap, Search, Plus } from "lucide-react";
 import { API_BASE } from "./config";
 
 interface SkillEntry {
@@ -213,11 +213,6 @@ export function SkillsPage() {
                     <p className="text-[13px] font-semibold text-gray-100 truncate">{skill.name}</p>
                     <p className="text-[12px] text-gray-500 mt-1 line-clamp-2 leading-relaxed">{skill.description}</p>
                   </div>
-                  {skill.source === "user" && (
-                    <button className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded text-gray-500 hover:text-gray-300 hover:bg-[#1f2937] flex-shrink-0">
-                      <MoreHorizontal className="w-3.5 h-3.5" />
-                    </button>
-                  )}
                 </div>
                 <div className="mt-2">
                   <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
