@@ -1,4 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
+import { listConnectors } from './connectors.js';
+
+const mockLoadMcpConfig = vi.fn(() => ({
+  mcpServers: { filesystem: {}, github: {} },
+}));
 
 vi.mock('@mariozechner/pi-ai/oauth', () => ({
   getOAuthProviders: () => [
@@ -8,17 +13,11 @@ vi.mock('@mariozechner/pi-ai/oauth', () => ({
 }));
 
 vi.mock('pi-mcp-adapter/config', () => ({
-  loadMcpConfig: () => ({
-    mcpServers: {
-      filesystem: {},
-      github: {},
-    },
-  }),
+  loadMcpConfig: (...args: any[]) => mockLoadMcpConfig(...args),
 }));
 
 describe('listConnectors', () => {
-  it('marks configured oauth providers as connected', async () => {
-    const { listConnectors } = await import('./connectors.js');
+  it('marks configured oauth providers as connected', () => {
     const mockAuth = { list: () => ['anthropic'] } as any;
     const result = listConnectors(mockAuth);
 
@@ -27,8 +26,7 @@ describe('listConnectors', () => {
     expect(anthropic?.type).toBe('oauth');
   });
 
-  it('marks unconfigured oauth providers as available', async () => {
-    const { listConnectors } = await import('./connectors.js');
+  it('marks unconfigured oauth providers as available', () => {
     const mockAuth = { list: () => ['anthropic'] } as any;
     const result = listConnectors(mockAuth);
 
@@ -36,8 +34,7 @@ describe('listConnectors', () => {
     expect(google?.status).toBe('available');
   });
 
-  it('includes mcp servers from config as connected', async () => {
-    const { listConnectors } = await import('./connectors.js');
+  it('includes mcp servers from config as connected', () => {
     const mockAuth = { list: () => [] } as any;
     const result = listConnectors(mockAuth);
 
@@ -46,13 +43,21 @@ describe('listConnectors', () => {
     expect(mcpIds).toContain('mcp/github');
   });
 
-  it('all mcp entries have status connected', async () => {
-    const { listConnectors } = await import('./connectors.js');
+  it('all mcp entries have status connected', () => {
     const mockAuth = { list: () => [] } as any;
     const result = listConnectors(mockAuth);
 
     for (const c of result.filter(c => c.type === 'mcp')) {
       expect(c.status).toBe('connected');
     }
+  });
+
+  it('returns empty mcp list when loadMcpConfig throws, oauth still returned', () => {
+    mockLoadMcpConfig.mockImplementationOnce(() => { throw new Error('config error'); });
+    const mockAuth = { list: () => ['anthropic'] } as any;
+    const result = listConnectors(mockAuth);
+
+    expect(result.filter(c => c.type === 'mcp')).toHaveLength(0);
+    expect(result.some(c => c.type === 'oauth')).toBe(true);
   });
 });
