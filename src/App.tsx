@@ -625,7 +625,7 @@ function App() {
 
       {/* Unified sidebar — 52px collapsed (icon rail), sidebarWidth expanded */}
       <aside
-        className="flex-shrink-0 border-r border-[#1f2937] bg-[#141d2e] flex flex-col overflow-hidden relative transition-all duration-300"
+        className="flex-shrink-0 border-r border-[#1f2937] bg-[#141d2e] flex flex-col overflow-hidden relative transition-all duration-300 rounded-tr-2xl rounded-br-2xl"
         style={{ width: isLeftSidebarOpen ? sidebarWidth : 52 }}
       >
         {/* macOS traffic lights zone — drag region, toggle button sits at bottom-right */}
