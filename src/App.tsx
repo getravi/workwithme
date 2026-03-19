@@ -798,11 +798,7 @@ function App() {
       ) : activeView === 'connectors' ? (
         <ConnectorsPage onOpenSettings={() => setIsSettingsOpen(true)} refreshKey={connectorsRefreshKey} />
       ) : (
-      <main className="flex-1 flex flex-col bg-[#111827] relative min-w-0">
-
-        {/* Concave corners where sidebar meets main panel */}
-        <div className="absolute top-0 -left-4 w-4 h-4 bg-[#111827] pointer-events-none z-10" style={{ borderBottomRightRadius: 16 }} />
-        <div className="absolute bottom-0 -left-4 w-4 h-4 bg-[#111827] pointer-events-none z-10" style={{ borderTopRightRadius: 16 }} />
+      <main className="flex-1 flex flex-col bg-[#111827] relative min-w-0 rounded-tl-2xl rounded-bl-2xl z-10">
 
         {/* Header Overlay */}
         <header className="absolute top-0 left-0 right-0 p-3 flex items-center justify-between z-10" data-tauri-drag-region>
