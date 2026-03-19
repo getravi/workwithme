@@ -12,7 +12,7 @@
     "dev": "concurrently \"pnpm run sidecar\" \"vite\"",
     "sidecar": "pnpm --dir sidecar start",
     "build": "tsc && vite build",
-    "build:sidecar": "pnpm --dir sidecar run build:binary",
+    "build:sidecar": "pnpm --dir sidecar run build:binary -- --targets aarch64-apple-darwin,x86_64-apple-darwin,x86_64-unknown-linux-gnu,x86_64-pc-windows-msvc",
     "preview": "vite preview",
     "tauri:build": "pnpm run build:sidecar && pnpm run build && tauri build",
     "tauri:dev": "pnpm run dev"

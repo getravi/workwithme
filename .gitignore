@@ -15,6 +15,7 @@ npm-debug.log
 
 # Sidecar specific
 sidecar/node_modules
+sidecar/.node-cache/
 
 # Env files
 .env
