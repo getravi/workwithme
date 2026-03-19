@@ -42,7 +42,7 @@ fn start_sidecar(app: &tauri::AppHandle) {
         return;
     }
 
-    let Some(binary_path) = find_sidecar_binary(app) else {
+    let Some(binary_path) = find_sidecar_binary() else {
         eprintln!("[sidecar] could not locate sidecar binary — skipping auto-start");
         return;
     };
@@ -78,6 +78,8 @@ fn tauri_target_triple() -> &'static str {
     return "x86_64-apple-darwin";
     #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
     return "x86_64-unknown-linux-gnu";
+    #[cfg(all(target_arch = "aarch64", target_os = "linux"))]
+    return "aarch64-unknown-linux-gnu";
     #[cfg(all(target_arch = "x86_64", target_os = "windows"))]
     return "x86_64-pc-windows-msvc";
     #[allow(unreachable_code)]
@@ -87,8 +89,7 @@ fn tauri_target_triple() -> &'static str {
 /// Locate the sidecar SEA binary. Tries:
 ///   1. Alongside the main exe (production: externalBin placement by Tauri)
 ///   2. `src-tauri/binaries/` relative to project root (dev builds)
-fn find_sidecar_binary(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-    let _ = app;
+fn find_sidecar_binary() -> Option<std::path::PathBuf> {
     let triple = tauri_target_triple();
     // On Windows, binaries have .exe suffix.
     #[cfg(target_os = "windows")]
