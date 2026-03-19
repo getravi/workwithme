@@ -21,7 +21,6 @@
     "cors": "^2.8.6",
     "express": "^5.2.1",
     "glimpseui": "github:HazAT/glimpse",
-    "keytar": "^7.9.0",
     "pi-chrome-cdp": "github:pasky/chrome-cdp-skill",
     "pi-mcp-adapter": "github:nicobailon/pi-mcp-adapter",
     "pi-parallel": "github:HazAT/pi-parallel",
@@ -36,6 +35,7 @@
     "@types/ws": "^8.18.1",
     "@vitest/coverage-v8": "^4.1.0",
     "esbuild": "^0.27.4",
+    "postject": "1.0.0-alpha.6",
     "tsx": "^4.21.0",
     "vitest": "^4.1.0"
   }
