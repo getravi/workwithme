@@ -622,20 +622,46 @@ function App() {
 
   return (
     <div className="flex h-screen w-full bg-[#111827] text-white overflow-hidden">
-      
+
+      {/* Persistent icon rail — always visible */}
+      <div className="flex-shrink-0 w-10 bg-[#141d2e] border-r border-[#1f2937] flex flex-col items-center pt-[52px] pb-2 gap-1 z-40">
+        <button
+          onClick={() => setIsLeftSidebarOpen(o => !o)}
+          className="p-2 rounded-lg text-gray-500 hover:text-gray-200 hover:bg-[#1f2937] transition-colors"
+          title={isLeftSidebarOpen ? "Hide sidebar" : "Show sidebar"}
+        >
+          <SidebarIcon className="w-4 h-4" />
+        </button>
+        <div className="w-5 border-t border-[#1f2937] my-1" />
+        <button
+          onClick={() => setActiveView('chat')}
+          className={`p-2 rounded-lg transition-colors ${activeView === 'chat' ? 'text-[#c5f016] bg-[#1f2937]' : 'text-gray-500 hover:text-gray-200 hover:bg-[#1f2937]'}`}
+          title="Chat"
+        >
+          <MessageSquare className="w-4 h-4" />
+        </button>
+        <button
+          onClick={() => setActiveView('skills')}
+          className={`p-2 rounded-lg transition-colors ${activeView === 'skills' ? 'text-[#c5f016] bg-[#1f2937]' : 'text-gray-500 hover:text-gray-200 hover:bg-[#1f2937]'}`}
+          title="Skills"
+        >
+          <Zap className="w-4 h-4" />
+        </button>
+        <button
+          onClick={() => setActiveView('connectors')}
+          className={`p-2 rounded-lg transition-colors ${activeView === 'connectors' ? 'text-[#c5f016] bg-[#1f2937]' : 'text-gray-500 hover:text-gray-200 hover:bg-[#1f2937]'}`}
+          title="Connectors"
+        >
+          <Network className="w-4 h-4" />
+        </button>
+      </div>
+
       {/* Left Sidebar (Chats & Projects) */}
       <aside
         className={`flex-shrink-0 border-r border-[#1f2937] bg-[#141d2e] flex flex-col overflow-hidden relative ${isLeftSidebarOpen ? 'transition-none' : 'transition-all duration-300'}`}
         style={{ width: isLeftSidebarOpen ? sidebarWidth : 0 }}
       >
-        <div className="pl-[80px] pr-3 py-3 flex items-center gap-2 border-b border-[#1f2937]/50" data-tauri-drag-region>
-          <button
-            onClick={() => setIsLeftSidebarOpen(false)}
-            className="p-1 rounded-lg text-gray-400 hover:text-white hover:bg-[#1f2937] transition-colors flex-shrink-0"
-            title="Hide sidebar"
-          >
-            <SidebarIcon className="w-4 h-4" />
-          </button>
+        <div className="px-3 py-3 flex items-center gap-2 border-b border-[#1f2937]/50" data-tauri-drag-region>
           <Bot className="w-4 h-4 text-gray-400 flex-shrink-0" />
           <h2 className="text-[13px] font-semibold text-gray-200 truncate">Work with <span className="text-[#c5f016]">Me</span></h2>
         </div>
@@ -776,16 +802,7 @@ function App() {
         
         {/* Header Overlay */}
         <header className="absolute top-0 left-0 right-0 p-3 flex items-center justify-between z-10" data-tauri-drag-region>
-          <div className={`flex items-center gap-2 ${!isLeftSidebarOpen ? 'pl-[80px]' : ''}`}>
-            {!isLeftSidebarOpen && (
-              <button
-                onClick={() => setIsLeftSidebarOpen(true)}
-                className="p-1.5 rounded-lg bg-[#182234] border border-[#1f2937] text-gray-400 hover:text-white transition-colors shadow-sm"
-              >
-                <SidebarIcon className="w-4 h-4" />
-              </button>
-            )}
-
+          <div className="flex items-center gap-2">
             {projectDir && (
               <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-[#182234] border border-[#374151] text-gray-300 text-[12px] font-medium transition-all shadow-sm animate-in fade-in slide-in-from-left-2 duration-300">
                 <FolderOpen className="w-3 h-3 opacity-70" />
