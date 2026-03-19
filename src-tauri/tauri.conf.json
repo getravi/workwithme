@@ -34,9 +34,8 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": {
-      "../sidecar/dist/bundle.cjs": "sidecar/bundle.cjs",
-      "../sidecar/dist/node_modules/keytar": "sidecar/node_modules/keytar"
-    }
+    "externalBin": [
+      "binaries/sidecar"
+    ]
   }
 }

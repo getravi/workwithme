@@ -34,38 +34,33 @@ pub fn run() {
         .expect("error while running tauri application");
 }
 
-/// Spawn `node bundle.cjs` unless port 4242 is already bound.
+/// Spawn the sidecar SEA binary unless port 4242 is already bound.
 /// Called from a background thread.
 fn start_sidecar(app: &tauri::AppHandle) {
-    // If something is already listening on 4242 (e.g. `pnpm run dev` started it
-    // via the beforeDevCommand), skip spawning to avoid a port conflict.
     if is_port_bound(4242) {
         println!("[sidecar] port 4242 already in use — skipping auto-start");
         return;
     }
 
-    let Some(bundle_path) = find_sidecar_bundle(app) else {
-        eprintln!("[sidecar] could not locate bundle.cjs — skipping auto-start");
+    let Some(binary_path) = find_sidecar_binary(app) else {
+        eprintln!("[sidecar] could not locate sidecar binary — skipping auto-start");
         return;
     };
 
-    println!("[sidecar] starting {:?}", bundle_path);
+    println!("[sidecar] starting {:?}", binary_path);
 
-    let result = std::process::Command::new("node")
-        .arg(&bundle_path)
-        // Inherit stdout/stderr so sidecar logs appear in the Tauri console.
+    match std::process::Command::new(&binary_path)
         .stdout(std::process::Stdio::inherit())
         .stderr(std::process::Stdio::inherit())
-        .spawn();
-
-    match result {
+        .spawn()
+    {
         Ok(child) => {
             if let Ok(mut guard) = app.state::<SidecarProcess>().0.lock() {
                 *guard = Some(child);
             }
         }
         Err(e) => {
-            eprintln!("[sidecar] failed to spawn node bundle.cjs: {e}");
+            eprintln!("[sidecar] failed to spawn sidecar: {e}");
         }
     }
 }
@@ -75,35 +70,49 @@ fn is_port_bound(port: u16) -> bool {
     std::net::TcpStream::connect(("127.0.0.1", port)).is_ok()
 }
 
-/// Locate bundle.cjs. Tries, in order:
-///   1. `<resource_dir>/sidecar/bundle.cjs` — production bundle
-///   2. `<exe>/../../../../sidecar/dist/bundle.cjs` — dev build
-///   3. `<cwd>/sidecar/dist/bundle.cjs` — fallback
-fn find_sidecar_bundle(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-    // 1. Production: Tauri places resources in the app's resource directory.
-    if let Ok(resource_dir) = app.path().resource_dir() {
-        let candidate = resource_dir.join("sidecar").join("bundle.cjs");
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-    }
+/// Returns the Tauri-style target triple for this build.
+fn tauri_target_triple() -> &'static str {
+    #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
+    return "aarch64-apple-darwin";
+    #[cfg(all(target_arch = "x86_64", target_os = "macos"))]
+    return "x86_64-apple-darwin";
+    #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+    return "x86_64-unknown-linux-gnu";
+    #[cfg(all(target_arch = "x86_64", target_os = "windows"))]
+    return "x86_64-pc-windows-msvc";
+    #[allow(unreachable_code)]
+    "unknown"
+}
 
-    // 2. Development: exe lives at src-tauri/target/debug/<name>, so go up 4 levels
-    //    to reach the project root, then into sidecar/dist/.
+/// Locate the sidecar SEA binary. Tries:
+///   1. Alongside the main exe (production: externalBin placement by Tauri)
+///   2. `src-tauri/binaries/` relative to project root (dev builds)
+fn find_sidecar_binary(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    let _ = app;
+    let triple = tauri_target_triple();
+    // On Windows, binaries have .exe suffix.
+    #[cfg(target_os = "windows")]
+    let bin_name = format!("sidecar-{}.exe", triple);
+    #[cfg(not(target_os = "windows"))]
+    let bin_name = format!("sidecar-{}", triple);
+
+    // 1. Production: Tauri places externalBin alongside the main executable.
     if let Ok(exe) = std::env::current_exe() {
-        if let Some(project_root) = exe.ancestors().nth(4) {
-            let candidate = project_root.join("sidecar").join("dist").join("bundle.cjs");
+        if let Some(exe_dir) = exe.parent() {
+            let candidate = exe_dir.join(&bin_name);
             if candidate.is_file() {
                 return Some(candidate);
             }
         }
     }
 
-    // 3. Fallback: current working directory.
-    if let Ok(cwd) = std::env::current_dir() {
-        let candidate = cwd.join("sidecar").join("dist").join("bundle.cjs");
-        if candidate.is_file() {
-            return Some(candidate);
+    // 2. Dev: exe at src-tauri/target/debug/<name> → up 4 levels to project root.
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(project_root) = exe.ancestors().nth(4) {
+            let candidate = project_root.join("src-tauri").join("binaries").join(&bin_name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
         }
     }
 
