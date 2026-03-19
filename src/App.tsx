@@ -621,7 +621,7 @@ function App() {
   };
 
   return (
-    <div className="flex h-screen w-full bg-[#111827] text-white overflow-hidden">
+    <div className="flex h-screen w-full bg-[#141d2e] text-white overflow-hidden">
 
       {/* Unified sidebar — 52px collapsed (icon rail), sidebarWidth expanded */}
       <aside
