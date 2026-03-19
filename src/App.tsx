@@ -682,9 +682,9 @@ function App() {
           <div className="mb-4">
             <div className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider mb-2 px-1 flex items-center justify-between">
               <span>Project</span>
-              <button 
+              <button
                 onClick={handleSelectProject}
-                className="p-1 hover:bg-[#1f2937] rounded text-[#c5f016] transition-colors"
+                className="p-1 hover:bg-[#1f2937] rounded text-gray-400 hover:text-gray-200 transition-colors"
                 title="Open Folder"
               >
                 <FolderOpen className="w-3 h-3" />
@@ -787,7 +787,7 @@ function App() {
             )}
 
             {projectDir && (
-              <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-[#182234] border border-[#c5f016]/20 text-[#c5f016] text-[11px] font-medium transition-all shadow-sm animate-in fade-in slide-in-from-left-2 duration-300">
+              <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-[#182234] border border-[#374151] text-gray-300 text-[11px] font-medium transition-all shadow-sm animate-in fade-in slide-in-from-left-2 duration-300">
                 <FolderOpen className="w-3 h-3 opacity-70" />
                 <span className="opacity-80">Working on:</span>
                 <span className="font-semibold truncate max-w-[150px]">{projectDir.split('/').pop() || projectDir}</span>
