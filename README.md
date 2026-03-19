@@ -36,6 +36,9 @@ Proprietary AI coworkers tie you to a single provider, a single pricing model, a
 
 ## Prerequisites
 
+For **end-users**: Just download and run the app — no prerequisites needed.
+
+For **developers**: You'll need the following to build from source:
 - [Node.js](https://nodejs.org/) v18+
 - [pnpm](https://pnpm.io/) v10+
 - [Rust](https://www.rust-lang.org/tools/install)

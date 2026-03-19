@@ -64,4 +64,23 @@ If you have an idea for an enhancement, please submit a feature request issue wi
    pnpm run tauri:dev
    ```
 
+   Note: `pnpm run dev` runs `tsx server.ts` directly for local development — no change from previous workflow.
+
+### Building for Release
+
+Before building or releasing the app:
+
+1. Build the sidecar SEA binary:
+   ```bash
+   pnpm run build:sidecar
+   ```
+   This populates `src-tauri/binaries/` with the Self-Extracting Archive (SEA) binaries. This step is required before any production build.
+
+2. Then proceed with your Tauri build:
+   ```bash
+   pnpm run tauri:build
+   ```
+
+**Note:** `sidecar/.node-cache/` is gitignored and auto-populated on first build. It contains cached Node.js binary downloads used by the SEA build process.
+
 Thank you!
