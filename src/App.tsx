@@ -680,7 +680,7 @@ function App() {
 
         <div className="flex-1 overflow-y-auto px-2.5 py-2 scrollbar-thin scrollbar-thumb-gray-800">
           <div className="mb-4">
-            <div className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider mb-2 px-1 flex items-center justify-between">
+            <div className="text-[12px] font-semibold text-gray-500 uppercase tracking-wider mb-2 px-1 flex items-center justify-between">
               <span>Project</span>
               <button
                 onClick={handleSelectProject}
@@ -696,7 +696,7 @@ function App() {
                   <Terminal className="w-3.5 h-3.5" />
                   <span className="truncate font-medium">{projectDir.split('/').pop() || projectDir}</span>
                 </div>
-                <div className="text-[10px] text-gray-500 mt-1 truncate px-6 opacity-60">
+                <div className="text-[12px] text-gray-500 mt-1 truncate px-6 opacity-60">
                    {projectDir}
                 </div>
               </div>
@@ -706,7 +706,7 @@ function App() {
           <div className="space-y-3">
             {groupedActiveSessions.map(([project, projectSessions]) => (
               <div key={project} className="space-y-1">
-                <div className="text-[10px] font-bold text-gray-500 uppercase tracking-tighter mb-1 px-1 flex items-center gap-2 opacity-50">
+                <div className="text-[12px] font-bold text-gray-500 uppercase tracking-tighter mb-1 px-1 flex items-center gap-2 opacity-50">
                   <FolderOpen className="w-2.5 h-2.5" />
                   <span className="truncate">{project.split('/').pop() || project}</span>
                 </div>
@@ -721,7 +721,7 @@ function App() {
                 <button
                   type="button"
                   onClick={() => setShowArchived((value) => !value)}
-                  className="w-full flex items-center justify-between px-1 text-[10px] font-bold text-gray-500 uppercase tracking-[0.2em] hover:text-gray-300 transition-colors"
+                  className="w-full flex items-center justify-between px-1 text-[12px] font-bold text-gray-500 uppercase tracking-[0.2em] hover:text-gray-300 transition-colors"
                 >
                   <span>Archived</span>
                   <span>{showArchived ? "Hide" : `${archivedSessions.length}`}</span>
@@ -730,7 +730,7 @@ function App() {
                   <div className="space-y-4">
                     {groupedArchivedSessions.map(([project, projectSessions]) => (
                       <div key={project} className="space-y-1">
-                        <div className="text-[10px] font-bold text-gray-500 uppercase tracking-tighter mb-1 px-1 flex items-center gap-2 opacity-40">
+                        <div className="text-[12px] font-bold text-gray-500 uppercase tracking-tighter mb-1 px-1 flex items-center gap-2 opacity-40">
                           <FolderOpen className="w-2.5 h-2.5" />
                           <span className="truncate">{project.split('/').pop() || project}</span>
                         </div>
@@ -787,7 +787,7 @@ function App() {
             )}
 
             {projectDir && (
-              <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-[#182234] border border-[#374151] text-gray-300 text-[11px] font-medium transition-all shadow-sm animate-in fade-in slide-in-from-left-2 duration-300">
+              <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-[#182234] border border-[#374151] text-gray-300 text-[12px] font-medium transition-all shadow-sm animate-in fade-in slide-in-from-left-2 duration-300">
                 <FolderOpen className="w-3 h-3 opacity-70" />
                 <span className="opacity-80">Working on:</span>
                 <span className="font-semibold truncate max-w-[150px]">{projectDir.split('/').pop() || projectDir}</span>
@@ -1044,11 +1044,11 @@ function App() {
                                {tool.name}
                             </span>
                          </div>
-                         <span className="text-[10px] uppercase text-gray-500 font-bold bg-[#111827] px-2 py-0.5 rounded">
+                         <span className="text-[12px] uppercase text-gray-500 font-bold bg-[#111827] px-2 py-0.5 rounded">
                             {tool.status}
                          </span>
                       </div>
-                      <div className="p-2.5 text-[11px] font-mono text-gray-400 overflow-x-auto whitespace-pre-wrap max-h-44 overflow-y-auto">
+                      <div className="p-2.5 text-[12px] font-mono text-gray-400 overflow-x-auto whitespace-pre-wrap max-h-44 overflow-y-auto">
                          {tool.args && (
                            <div className="mb-2">
                              <span className="text-gray-500 block mb-1">Args:</span>

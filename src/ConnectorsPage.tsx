@@ -50,18 +50,20 @@ const REQUEST_TIMEOUT_MS = 30_000;
 
 // ── ConnectorLogo ────────────────────────────────────────────────────────────
 
+const LOGO_CONTAINER = "w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0";
+
 function ConnectorLogo({ entry }: { entry: ConnectorEntry }) {
   if (entry.logoSvg) {
     return (
       <div
-        className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 bg-white/5 p-1.5"
+        className={`${LOGO_CONTAINER} bg-white/5 p-1.5 [&>svg]:w-full [&>svg]:h-full [&>svg]:max-w-full [&>svg]:max-h-full`}
         dangerouslySetInnerHTML={{ __html: entry.logoSvg }}
       />
     );
   }
   const bg = ICON_COLORS[entry.name.toLowerCase()] ?? "bg-[#374151]";
   return (
-    <div className={`w-9 h-9 ${bg} rounded-lg flex items-center justify-center text-white font-bold text-[14px] flex-shrink-0`}>
+    <div className={`${LOGO_CONTAINER} ${bg} text-white font-bold text-[14px]`}>
       {entry.name.charAt(0).toUpperCase()}
     </div>
   );
@@ -73,7 +75,7 @@ function StatusDot({ status }: { status: "connected" | "available" }) {
   return (
     <div className="mt-1 flex items-center gap-1.5">
       <div className={`w-1.5 h-1.5 rounded-full ${status === "connected" ? "bg-green-500" : "bg-gray-600"}`} />
-      <span className={`text-[10px] font-medium ${status === "connected" ? "text-green-400" : "text-gray-500"}`}>
+      <span className={`text-[12px] font-medium ${status === "connected" ? "text-green-400" : "text-gray-500"}`}>
         {status === "connected" ? "Connected" : "Available"}
       </span>
     </div>
@@ -377,7 +379,7 @@ function ConnectorCard({ connector, expanded, onCardClick, onConnected, onDiscon
       </div>
 
       {disconnectError && (
-        <p className="text-[11px] text-red-400 mt-1 px-1">{disconnectError}</p>
+        <p className="text-[12px] text-red-400 mt-1 px-1">{disconnectError}</p>
       )}
 
       {expanded && isRemote && isAvailable && (
@@ -452,7 +454,7 @@ function ConnectForm({ connector, onCancel, onConnected }: ConnectFormProps) {
       <div className="h-px bg-[#1f2937]" />
 
       <div className="flex flex-col gap-1">
-        <label className="text-[11px] text-gray-400">Server URL</label>
+        <label className="text-[12px] text-gray-400">Server URL</label>
         <input
           className={`w-full bg-[#1f2937] border rounded-lg px-3 py-2 text-[12px] text-gray-100 focus:outline-none ${
             errors.url ? 'border-red-500/60' : 'border-[#374151] focus:border-[#c5f016]/50'
@@ -461,17 +463,17 @@ function ConnectForm({ connector, onCancel, onConnected }: ConnectFormProps) {
           onChange={(e) => { setUrl(e.target.value); clearFieldError('url'); }}
           placeholder="https://mcp.example.com"
         />
-        {errors.url && <p className="text-[11px] text-red-400">{errors.url}</p>}
+        {errors.url && <p className="text-[12px] text-red-400">{errors.url}</p>}
       </div>
 
       {connector.requiresToken && (
         <div className="flex flex-col gap-1">
           <div className="flex items-center justify-between">
-            <label className="text-[11px] text-gray-400">Auth token</label>
+            <label className="text-[12px] text-gray-400">Auth token</label>
             {connector.docsUrl && (
               <button
                 onClick={() => openUrl(connector.docsUrl!)}
-                className="text-[11px] text-[#c5f016]/80 hover:text-[#c5f016] transition-colors"
+                className="text-[12px] text-[#c5f016]/80 hover:text-[#c5f016] transition-colors"
               >
                 Get token ↗
               </button>
@@ -486,11 +488,11 @@ function ConnectForm({ connector, onCancel, onConnected }: ConnectFormProps) {
             onChange={(e) => { setToken(e.target.value); clearFieldError('token'); }}
             placeholder="Paste your token here"
           />
-          {errors.token && <p className="text-[11px] text-red-400">{errors.token}</p>}
+          {errors.token && <p className="text-[12px] text-red-400">{errors.token}</p>}
         </div>
       )}
 
-      {errors._form && <p className="text-[11px] text-red-400">{errors._form}</p>}
+      {errors._form && <p className="text-[12px] text-red-400">{errors._form}</p>}
 
       <div className="flex justify-end gap-2">
         <button
@@ -579,7 +581,7 @@ function CustomConnectorPanel({ existingIds, onCancel, onSuccess }: CustomConnec
       <p className="text-[13px] font-semibold text-gray-100">Add custom connector</p>
 
       <div className="flex flex-col gap-1">
-        <label className="text-[11px] text-gray-400">Name</label>
+        <label className="text-[12px] text-gray-400">Name</label>
         <input
           className={`w-full bg-[#1f2937] border rounded-lg px-3 py-2 text-[12px] text-gray-100 focus:outline-none ${
             errors.name ? 'border-red-500/60' : 'border-[#374151] focus:border-[#c5f016]/50'
@@ -589,11 +591,11 @@ function CustomConnectorPanel({ existingIds, onCancel, onSuccess }: CustomConnec
           value={name}
           onChange={(e) => { setName(e.target.value); clearFieldError('name'); }}
         />
-        {errors.name && <p className="text-[11px] text-red-400">{errors.name}</p>}
+        {errors.name && <p className="text-[12px] text-red-400">{errors.name}</p>}
       </div>
 
       <div className="flex flex-col gap-1">
-        <label className="text-[11px] text-gray-400">Server URL</label>
+        <label className="text-[12px] text-gray-400">Server URL</label>
         <input
           className={`w-full bg-[#1f2937] border rounded-lg px-3 py-2 text-[12px] text-gray-100 focus:outline-none ${
             errors.url ? 'border-red-500/60' : 'border-[#374151] focus:border-[#c5f016]/50'
@@ -602,11 +604,11 @@ function CustomConnectorPanel({ existingIds, onCancel, onSuccess }: CustomConnec
           value={url}
           onChange={(e) => { setUrl(e.target.value); clearFieldError('url'); }}
         />
-        {errors.url && <p className="text-[11px] text-red-400">{errors.url}</p>}
+        {errors.url && <p className="text-[12px] text-red-400">{errors.url}</p>}
       </div>
 
       <div className="flex flex-col gap-1">
-        <label className="text-[11px] text-gray-400">Auth token</label>
+        <label className="text-[12px] text-gray-400">Auth token</label>
         <input
           type="password"
           className={`w-full bg-[#1f2937] border rounded-lg px-3 py-2 text-[12px] text-gray-100 focus:outline-none ${
@@ -616,10 +618,10 @@ function CustomConnectorPanel({ existingIds, onCancel, onSuccess }: CustomConnec
           value={token}
           onChange={(e) => { setToken(e.target.value); clearFieldError('token'); }}
         />
-        {errors.token && <p className="text-[11px] text-red-400">{errors.token}</p>}
+        {errors.token && <p className="text-[12px] text-red-400">{errors.token}</p>}
       </div>
 
-      {errors._form && <p className="text-[11px] text-red-400">{errors._form}</p>}
+      {errors._form && <p className="text-[12px] text-red-400">{errors._form}</p>}
 
       <div className="flex justify-end gap-2">
         <button
