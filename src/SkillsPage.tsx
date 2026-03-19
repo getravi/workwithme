@@ -229,7 +229,7 @@ export function SkillsPage() {
       {/* Header */}
       <div className="px-6 pt-5 pb-3 flex items-center justify-between border-b border-[#1f2937]">
         <h1 className="text-[18px] font-semibold text-gray-100 flex items-center gap-2">
-          <Zap className="w-5 h-5 text-[#c5f016]" />
+          <Zap className="w-5 h-5 text-gray-400" />
           Skills
         </h1>
         <div className="flex items-center gap-2">
@@ -336,7 +336,7 @@ export function SkillsPage() {
                       onClick={() => setSelectedSkill(selectedSkill?.id === skill.id ? null : skill)}
                       className={`bg-[#141d2e] border rounded-xl p-4 cursor-pointer transition-colors ${
                         selectedSkill?.id === skill.id
-                          ? "border-[#c5f016]/40 bg-[#1a2a10]"
+                          ? "border-[#c5f016]/40 bg-[#1f2937]"
                           : "border-[#1f2937] hover:border-[#374151]"
                       }`}
                     >

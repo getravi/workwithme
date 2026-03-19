@@ -173,7 +173,7 @@ export function ConnectorsPage({ onOpenSettings, refreshKey = 0 }: ConnectorsPag
       {/* Header */}
       <div className="px-6 pt-5 pb-3 flex items-center justify-between border-b border-[#1f2937]">
         <h1 className="text-[18px] font-semibold text-gray-100 flex items-center gap-2">
-          <Network className="w-5 h-5 text-[#c5f016]" />
+          <Network className="w-5 h-5 text-gray-400" />
           Connectors
         </h1>
         <div className="flex items-center gap-2">
