@@ -370,10 +370,10 @@ function ConnectorCard({ connector, expanded, onCardClick, onConnected, onDiscon
         {isRemote && isConnected && (
           <button
             onClick={handleDisconnect}
-            className="absolute top-3 right-3 text-gray-600 hover:text-gray-300 transition-colors"
-            title="Disconnect"
+            className="absolute top-2.5 right-2.5 px-2 py-0.5 rounded text-[12px] font-medium text-gray-500 hover:text-red-400 hover:bg-red-500/10 transition-colors border border-transparent hover:border-red-500/20"
+            title="Disconnect this connector"
           >
-            <X className="w-3.5 h-3.5" />
+            Disconnect
           </button>
         )}
       </div>
