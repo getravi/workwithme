@@ -14,7 +14,7 @@
  */
 
 import { build } from 'esbuild';
-import { execFileSync, execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import {
   mkdirSync, copyFileSync, writeFileSync, readFileSync,
   existsSync, rmSync, createWriteStream,
@@ -174,17 +174,21 @@ async function buildTarget(target) {
 
 function extractNodeBinary(archiveFile, ext, nodePkg, binInArchive, destFile) {
   if (ext === 'tar.gz') {
-    // Extract via shell redirect to avoid ENOBUFS — node binary is ~100 MB
-    execSync(`tar -xzf '${archiveFile}' -O '${nodePkg}/${binInArchive}' > '${destFile}'`, { shell: true });
+    const entryPath = `${nodePkg}/${binInArchive}`;
+    const buf = execFileSync('tar', ['-xzf', archiveFile, '-O', entryPath], { stdio: 'pipe', maxBuffer: 200 * 1024 * 1024 });
+    writeFileSync(destFile, buf);
     execFileSync('chmod', ['+x', destFile]);
   } else if (ext === 'zip') {
     const extractDir = join(DIST_DIR, 'node-win-extract');
-    execFileSync('powershell', [
-      '-Command',
-      `Expand-Archive -Path '${archiveFile}' -DestinationPath '${extractDir}' -Force`,
-    ]);
-    copyFileSync(join(extractDir, nodePkg, binInArchive), destFile);
-    rmSync(extractDir, { recursive: true, force: true });
+    try {
+      execFileSync('powershell', [
+        '-NoProfile', '-Command',
+        `Expand-Archive -Path '${archiveFile}' -DestinationPath '${extractDir}' -Force`,
+      ]);
+      copyFileSync(join(extractDir, nodePkg, binInArchive), destFile);
+    } finally {
+      rmSync(extractDir, { recursive: true, force: true });
+    }
   }
 }
 
@@ -198,6 +202,8 @@ function download(url, destFile) {
         return download(res.headers.location, destFile).then(resolve).catch(reject);
       }
       if (res.statusCode !== 200) {
+        file.close();
+        rmSync(destFile, { force: true });
         return reject(new Error(`HTTP ${res.statusCode} downloading ${url}`));
       }
       res.pipe(file);
