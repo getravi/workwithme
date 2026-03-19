@@ -624,7 +624,9 @@ function App() {
     <div className="flex h-screen w-full bg-[#111827] text-white overflow-hidden">
 
       {/* Persistent icon rail — always visible */}
-      <div className="flex-shrink-0 w-10 bg-[#141d2e] border-r border-[#1f2937] flex flex-col items-center pt-[52px] pb-2 gap-1 z-40">
+      <div className="flex-shrink-0 w-10 bg-[#141d2e] border-r border-[#1f2937] flex flex-col items-center pt-[52px] pb-2 gap-1 z-40 relative" data-tauri-drag-region>
+        {/* Drag region covering macOS traffic lights zone */}
+        <div className="absolute top-0 left-0 right-0 h-[52px]" data-tauri-drag-region />
         <button
           onClick={() => setIsLeftSidebarOpen(o => !o)}
           className="p-2 rounded-lg text-gray-500 hover:text-gray-200 hover:bg-[#1f2937] transition-colors"
