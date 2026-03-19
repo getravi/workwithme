@@ -636,7 +636,7 @@ function App() {
           >
             <SidebarIcon className="w-4 h-4" />
           </button>
-          <Bot className="w-4 h-4 text-[#c5f016] flex-shrink-0" />
+          <Bot className="w-4 h-4 text-gray-400 flex-shrink-0" />
           <h2 className="text-[13px] font-semibold text-gray-200 truncate">Work with <span className="text-[#c5f016]">Me</span></h2>
         </div>
         
@@ -691,8 +691,8 @@ function App() {
               </button>
             </div>
             {projectDir && (
-              <div className="px-2 py-1.5 rounded-lg bg-[#c5f016]/5 border border-[#c5f016]/20">
-                <div className="flex items-center gap-2 text-[13px] text-[#c5f016]">
+              <div className="px-2 py-1.5 rounded-lg bg-[#1f2937] border border-[#374151]">
+                <div className="flex items-center gap-2 text-[13px] text-gray-300">
                   <Terminal className="w-3.5 h-3.5" />
                   <span className="truncate font-medium">{projectDir.split('/').pop() || projectDir}</span>
                 </div>
@@ -857,7 +857,7 @@ function App() {
           {messages.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-gray-500 space-y-3 max-w-md mx-auto text-center">
               <div className="w-16 h-16 rounded-2xl bg-[#182234] border border-[#1f2937] flex items-center justify-center shadow-lg">
-                 <Bot className="w-8 h-8 text-[#c5f016]" />
+                 <Bot className="w-8 h-8 text-gray-400" />
               </div>
               <h2 className="text-xl font-bold text-gray-200">Hello, I'm your productivity agent.</h2>
               <p className="text-[13px] text-gray-400">Attach files, ask me to write code, or open the preview pane to see artifacts render in real-time.</p>
@@ -875,8 +875,8 @@ function App() {
                 >
                   <div className="flex-shrink-0 mt-1">
                     {msg.role === "assistant" ? (
-                      <div className="w-7 h-7 rounded-lg bg-[#182234] border border-[#c5f016]/30 flex items-center justify-center flex-shrink-0 shadow-[0_0_10px_rgba(197,240,22,0.1)]">
-                         <Bot className="w-4 h-4 text-[#c5f016]" />
+                      <div className="w-7 h-7 rounded-lg bg-[#182234] border border-[#1f2937] flex items-center justify-center flex-shrink-0">
+                         <Bot className="w-4 h-4 text-gray-400" />
                       </div>
                     ) : (
                       <div className="w-7 h-7 rounded-lg bg-[#fde047] flex items-center justify-center flex-shrink-0 text-[#111827] text-[12px] font-bold shadow-md">
