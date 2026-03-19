@@ -623,170 +623,168 @@ function App() {
   return (
     <div className="flex h-screen w-full bg-[#111827] text-white overflow-hidden">
 
-      {/* Persistent icon rail — always visible */}
-      <div className="flex-shrink-0 w-10 bg-[#141d2e] border-r border-[#1f2937] flex flex-col items-center pt-[52px] pb-2 gap-1 z-40 relative" data-tauri-drag-region>
-        {/* Drag region covering macOS traffic lights zone */}
-        <div className="absolute top-0 left-0 right-0 h-[52px]" data-tauri-drag-region />
-        <button
-          onClick={() => setIsLeftSidebarOpen(o => !o)}
-          className="p-2 rounded-lg text-gray-500 hover:text-gray-200 hover:bg-[#1f2937] transition-colors"
-          title={isLeftSidebarOpen ? "Hide sidebar" : "Show sidebar"}
-        >
-          <SidebarIcon className="w-4 h-4" />
-        </button>
-        <div className="w-5 border-t border-[#1f2937] my-1" />
-        <button
-          onClick={() => setActiveView('chat')}
-          className={`p-2 rounded-lg transition-colors ${activeView === 'chat' ? 'text-[#c5f016] bg-[#1f2937]' : 'text-gray-500 hover:text-gray-200 hover:bg-[#1f2937]'}`}
-          title="Chat"
-        >
-          <MessageSquare className="w-4 h-4" />
-        </button>
-        <button
-          onClick={() => setActiveView('skills')}
-          className={`p-2 rounded-lg transition-colors ${activeView === 'skills' ? 'text-[#c5f016] bg-[#1f2937]' : 'text-gray-500 hover:text-gray-200 hover:bg-[#1f2937]'}`}
-          title="Skills"
-        >
-          <Zap className="w-4 h-4" />
-        </button>
-        <button
-          onClick={() => setActiveView('connectors')}
-          className={`p-2 rounded-lg transition-colors ${activeView === 'connectors' ? 'text-[#c5f016] bg-[#1f2937]' : 'text-gray-500 hover:text-gray-200 hover:bg-[#1f2937]'}`}
-          title="Connectors"
-        >
-          <Network className="w-4 h-4" />
-        </button>
-      </div>
-
-      {/* Left Sidebar (Chats & Projects) */}
+      {/* Unified sidebar — 52px collapsed (icon rail), sidebarWidth expanded */}
       <aside
-        className={`flex-shrink-0 border-r border-[#1f2937] bg-[#141d2e] flex flex-col overflow-hidden relative ${isLeftSidebarOpen ? 'transition-none' : 'transition-all duration-300'}`}
-        style={{ width: isLeftSidebarOpen ? sidebarWidth : 0 }}
+        className="flex-shrink-0 border-r border-[#1f2937] bg-[#141d2e] flex flex-col overflow-hidden relative transition-all duration-300"
+        style={{ width: isLeftSidebarOpen ? sidebarWidth : 52 }}
       >
-        <div className="px-3 py-3 flex items-center gap-2 border-b border-[#1f2937]/50" data-tauri-drag-region>
-          <Bot className="w-4 h-4 text-gray-400 flex-shrink-0" />
-          <h2 className="text-[13px] font-semibold text-gray-200 truncate">Work with <span className="text-[#c5f016]">Me</span></h2>
-        </div>
-        
-        <div className="p-2.5">
-          <button 
-            onClick={handleNewChat}
-            className="w-full flex items-center gap-2 bg-[#1f2937] hover:bg-[#374151] rounded-lg px-2.5 py-1.5 text-[13px] text-[#f3f4f6] font-medium transition-colors border border-transparent hover:border-[#4b5563]">
-            <Plus className="w-3.5 h-3.5 text-[#c5f016]" />
-            New Chat
-          </button>
-        </div>
-
-        {/* Skills + Connectors nav */}
-        <div className="px-2.5 py-1 flex flex-col gap-0.5">
+        {/* macOS traffic lights zone — drag region, toggle button sits at bottom-right */}
+        <div className="h-[52px] flex-shrink-0 flex items-end justify-end px-2 pb-1" data-tauri-drag-region>
           <button
-            onClick={() => setActiveView('skills')}
-            className={`w-full flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-[13px] font-medium transition-colors ${
-              activeView === 'skills'
-                ? 'bg-[#1f2937] text-[#c5f016]'
-                : 'text-gray-400 hover:bg-[#1f2937] hover:text-gray-200'
-            }`}
+            onClick={() => setIsLeftSidebarOpen(o => !o)}
+            className="p-1.5 rounded-lg text-gray-500 hover:text-gray-200 hover:bg-[#1f2937] transition-colors"
+            title={isLeftSidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
           >
-            <Zap className="w-3.5 h-3.5" />
-            Skills
-          </button>
-          <button
-            onClick={() => setActiveView('connectors')}
-            className={`w-full flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-[13px] font-medium transition-colors ${
-              activeView === 'connectors'
-                ? 'bg-[#1f2937] text-[#c5f016]'
-                : 'text-gray-400 hover:bg-[#1f2937] hover:text-gray-200'
-            }`}
-          >
-            <Network className="w-3.5 h-3.5" />
-            Connectors
+            <SidebarIcon className="w-4 h-4" />
           </button>
         </div>
 
-        {/* Divider */}
-        <div className="mx-2.5 my-1.5 border-t border-[#1f2937]/60" />
-
-        <div className="flex-1 overflow-y-auto px-2.5 py-2 scrollbar-thin scrollbar-thumb-gray-800">
-          <div className="mb-4">
-            <div className="text-[12px] font-semibold text-gray-500 uppercase tracking-wider mb-2 px-1 flex items-center justify-between">
-              <span>Project</span>
-              <button
-                onClick={handleSelectProject}
-                className="p-1 hover:bg-[#1f2937] rounded text-gray-400 hover:text-gray-200 transition-colors"
-                title="Open Folder"
-              >
-                <FolderOpen className="w-3 h-3" />
-              </button>
-            </div>
-            {projectDir && (
-              <div className="px-2 py-1.5 rounded-lg bg-[#1f2937] border border-[#374151]">
-                <div className="flex items-center gap-2 text-[13px] text-gray-300">
-                  <Terminal className="w-3.5 h-3.5" />
-                  <span className="truncate font-medium">{projectDir.split('/').pop() || projectDir}</span>
-                </div>
-                <div className="text-[12px] text-gray-500 mt-1 truncate px-6 opacity-60">
-                   {projectDir}
-                </div>
-              </div>
-            )}
+        {/* App name — expanded only, sits below traffic lights */}
+        {isLeftSidebarOpen && (
+          <div className="px-3 pb-2.5 flex items-center gap-2 border-b border-[#1f2937]/50">
+            <Bot className="w-4 h-4 text-gray-400 flex-shrink-0" />
+            <h2 className="text-[13px] font-semibold text-gray-200 truncate">Work with <span className="text-[#c5f016]">Me</span></h2>
           </div>
+        )}
 
-          <div className="space-y-3">
-            {groupedActiveSessions.map(([project, projectSessions]) => (
-              <div key={project} className="space-y-1">
-                <div className="text-[12px] font-bold text-gray-500 uppercase tracking-tighter mb-1 px-1 flex items-center gap-2 opacity-50">
-                  <FolderOpen className="w-2.5 h-2.5" />
-                  <span className="truncate">{project.split('/').pop() || project}</span>
+        {/* New Chat */}
+        <div className={isLeftSidebarOpen ? "p-2.5" : "flex justify-center py-2"}>
+          {isLeftSidebarOpen ? (
+            <button
+              onClick={handleNewChat}
+              className="w-full flex items-center gap-2 bg-[#1f2937] hover:bg-[#374151] rounded-lg px-2.5 py-1.5 text-[13px] text-[#f3f4f6] font-medium transition-colors border border-transparent hover:border-[#4b5563]"
+            >
+              <Plus className="w-3.5 h-3.5 text-[#c5f016]" />
+              New Chat
+            </button>
+          ) : (
+            <button
+              onClick={handleNewChat}
+              className="p-2 rounded-lg text-gray-500 hover:text-gray-200 hover:bg-[#1f2937] transition-colors"
+              title="New Chat"
+            >
+              <Plus className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+
+        {/* Nav items — icon+label when expanded, icon-only when collapsed */}
+        <div className={`flex flex-col ${isLeftSidebarOpen ? 'px-2.5 gap-0.5 pb-1' : 'items-center gap-1 px-1 pb-1'}`}>
+          {([
+            { view: 'chat' as const, Icon: MessageSquare, label: 'Chat' },
+            { view: 'skills' as const, Icon: Zap, label: 'Skills' },
+            { view: 'connectors' as const, Icon: Network, label: 'Connectors' },
+          ]).map(({ view, Icon, label }) => (
+            <button
+              key={view}
+              onClick={() => setActiveView(view)}
+              title={label}
+              className={`rounded-lg transition-colors ${isLeftSidebarOpen
+                ? `w-full flex items-center gap-2 px-2.5 py-1.5 text-[13px] font-medium ${activeView === view ? 'bg-[#1f2937] text-[#c5f016]' : 'text-gray-400 hover:bg-[#1f2937] hover:text-gray-200'}`
+                : `p-2 ${activeView === view ? 'text-[#c5f016] bg-[#1f2937]' : 'text-gray-500 hover:text-gray-200 hover:bg-[#1f2937]'}`
+              }`}
+            >
+              <Icon className={isLeftSidebarOpen ? "w-3.5 h-3.5 flex-shrink-0" : "w-4 h-4"} />
+              {isLeftSidebarOpen && label}
+            </button>
+          ))}
+        </div>
+
+        {/* Divider + session list — expanded only */}
+        {isLeftSidebarOpen && (
+          <>
+            <div className="mx-2.5 my-1.5 border-t border-[#1f2937]/60" />
+            <div className="flex-1 overflow-y-auto px-2.5 py-2 scrollbar-thin scrollbar-thumb-gray-800">
+              <div className="mb-4">
+                <div className="text-[12px] font-semibold text-gray-500 uppercase tracking-wider mb-2 px-1 flex items-center justify-between">
+                  <span>Project</span>
+                  <button
+                    onClick={handleSelectProject}
+                    className="p-1 hover:bg-[#1f2937] rounded text-gray-400 hover:text-gray-200 transition-colors"
+                    title="Open Folder"
+                  >
+                    <FolderOpen className="w-3 h-3" />
+                  </button>
                 </div>
-                {projectSessions.map(renderSessionRow)}
-              </div>
-            ))}
-            {activeSessions.length === 0 && archivedSessions.length === 0 && (
-              <div className="text-[12px] text-gray-600 px-2 italic">No history yet</div>
-            )}
-            {archivedSessions.length > 0 && (
-              <div className="space-y-2 pt-2 border-t border-[#1f2937]/60">
-                <button
-                  type="button"
-                  onClick={() => setShowArchived((value) => !value)}
-                  className="w-full flex items-center justify-between px-1 text-[12px] font-bold text-gray-500 uppercase tracking-[0.2em] hover:text-gray-300 transition-colors"
-                >
-                  <span>Archived</span>
-                  <span>{showArchived ? "Hide" : `${archivedSessions.length}`}</span>
-                </button>
-                {showArchived && (
-                  <div className="space-y-4">
-                    {groupedArchivedSessions.map(([project, projectSessions]) => (
-                      <div key={project} className="space-y-1">
-                        <div className="text-[12px] font-bold text-gray-500 uppercase tracking-tighter mb-1 px-1 flex items-center gap-2 opacity-40">
-                          <FolderOpen className="w-2.5 h-2.5" />
-                          <span className="truncate">{project.split('/').pop() || project}</span>
-                        </div>
-                        {projectSessions.map(renderSessionRow)}
-                      </div>
-                    ))}
+                {projectDir && (
+                  <div className="px-2 py-1.5 rounded-lg bg-[#1f2937] border border-[#374151]">
+                    <div className="flex items-center gap-2 text-[13px] text-gray-300">
+                      <Terminal className="w-3.5 h-3.5" />
+                      <span className="truncate font-medium">{projectDir.split('/').pop() || projectDir}</span>
+                    </div>
+                    <div className="text-[12px] text-gray-500 mt-1 truncate px-6 opacity-60">
+                       {projectDir}
+                    </div>
                   </div>
                 )}
               </div>
-            )}
-          </div>
-        </div>
-        
-        <div className="px-3 py-2.5 border-t border-[#1f2937]/50 flex items-center justify-between">
-           <button 
-              onClick={() => setIsSettingsOpen(true)}
-              className="text-gray-400 hover:text-white transition-colors"
-              title="Open Settings"
-           >
-              <Settings className="w-4 h-4" />
-           </button>
-           <div className="flex items-center gap-2">
-             <div className={`w-2.5 h-2.5 rounded-full ${isConnected ? "bg-green-500" : "bg-red-500"}`} />
-             <span className="text-[12px] text-gray-400">{isConnected ? "Connected" : "Disconnected"}</span>
-           </div>
+
+              <div className="space-y-3">
+                {groupedActiveSessions.map(([project, projectSessions]) => (
+                  <div key={project} className="space-y-1">
+                    <div className="text-[12px] font-bold text-gray-500 uppercase tracking-tighter mb-1 px-1 flex items-center gap-2 opacity-50">
+                      <FolderOpen className="w-2.5 h-2.5" />
+                      <span className="truncate">{project.split('/').pop() || project}</span>
+                    </div>
+                    {projectSessions.map(renderSessionRow)}
+                  </div>
+                ))}
+                {activeSessions.length === 0 && archivedSessions.length === 0 && (
+                  <div className="text-[12px] text-gray-600 px-2 italic">No history yet</div>
+                )}
+                {archivedSessions.length > 0 && (
+                  <div className="space-y-2 pt-2 border-t border-[#1f2937]/60">
+                    <button
+                      type="button"
+                      onClick={() => setShowArchived((value) => !value)}
+                      className="w-full flex items-center justify-between px-1 text-[12px] font-bold text-gray-500 uppercase tracking-[0.2em] hover:text-gray-300 transition-colors"
+                    >
+                      <span>Archived</span>
+                      <span>{showArchived ? "Hide" : `${archivedSessions.length}`}</span>
+                    </button>
+                    {showArchived && (
+                      <div className="space-y-4">
+                        {groupedArchivedSessions.map(([project, projectSessions]) => (
+                          <div key={project} className="space-y-1">
+                            <div className="text-[12px] font-bold text-gray-500 uppercase tracking-tighter mb-1 px-1 flex items-center gap-2 opacity-40">
+                              <FolderOpen className="w-2.5 h-2.5" />
+                              <span className="truncate">{project.split('/').pop() || project}</span>
+                            </div>
+                            {projectSessions.map(renderSessionRow)}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* Spacer pushes footer to bottom when collapsed */}
+        {!isLeftSidebarOpen && <div className="flex-1" />}
+
+        {/* Footer */}
+        <div className={`border-t border-[#1f2937]/50 ${isLeftSidebarOpen ? 'px-3 py-2.5 flex items-center justify-between' : 'py-2.5 flex flex-col items-center gap-2'}`}>
+          <button
+            onClick={() => setIsSettingsOpen(true)}
+            className="text-gray-400 hover:text-white transition-colors"
+            title="Open Settings"
+          >
+            <Settings className="w-4 h-4" />
+          </button>
+          {isLeftSidebarOpen ? (
+            <div className="flex items-center gap-2">
+              <div className={`w-2.5 h-2.5 rounded-full ${isConnected ? "bg-green-500" : "bg-red-500"}`} />
+              <span className="text-[12px] text-gray-400">{isConnected ? "Connected" : "Disconnected"}</span>
+            </div>
+          ) : (
+            <div className={`w-2 h-2 rounded-full ${isConnected ? "bg-green-500" : "bg-red-500"}`} />
+          )}
         </div>
 
-        {/* Resize handle */}
+        {/* Resize handle — expanded only */}
         {isLeftSidebarOpen && (
           <div
             onMouseDown={handleSidebarResizeStart}
