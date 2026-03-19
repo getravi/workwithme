@@ -72,6 +72,8 @@ function App() {
   
   // UI State
   const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState(true);
+  const [sidebarWidth, setSidebarWidth] = useState(240);
+  const sidebarDragRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [isPreviewMaximized, setIsPreviewMaximized] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -96,6 +98,24 @@ function App() {
   const reconnectTimeoutRef = useRef<number | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const reconnectAttemptsRef = useRef(0);
+
+  const handleSidebarResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    sidebarDragRef.current = { startX: e.clientX, startWidth: sidebarWidth };
+    const onMove = (ev: MouseEvent) => {
+      if (!sidebarDragRef.current) return;
+      const delta = ev.clientX - sidebarDragRef.current.startX;
+      const next = Math.min(400, Math.max(160, sidebarDragRef.current.startWidth + delta));
+      setSidebarWidth(next);
+    };
+    const onUp = () => {
+      sidebarDragRef.current = null;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, [sidebarWidth]);
 
   const wsSend = useCallback((payload: object): boolean => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -537,12 +557,7 @@ function App() {
   };
 
   const renderSessionRow = (session: Session) => {
-    const label =
-      session.name ||
-      (session.firstMessage && session.firstMessage.length > 30
-        ? `${session.firstMessage.slice(0, 30)}...`
-        : session.firstMessage) ||
-      "New Session";
+    const label = session.name || session.firstMessage || "New Session";
     const isCurrent = session.id === currentSessionId;
     const archiveActionLabel = session.archived ? "Restore chat" : "Archive chat";
 
@@ -609,12 +624,20 @@ function App() {
     <div className="flex h-screen w-full bg-[#111827] text-white overflow-hidden">
       
       {/* Left Sidebar (Chats & Projects) */}
-      <aside className={`${isLeftSidebarOpen ? 'w-60' : 'w-0'} flex-shrink-0 transition-all duration-300 border-r border-[#1f2937] bg-[#141d2e] flex flex-col overflow-hidden`}>
-        <div className="px-3 py-2.5 flex items-center justify-between border-b border-[#1f2937]/50">
-          <div className="flex items-center gap-2">
-            <Bot className="w-5 h-5 text-[#c5f016]" />
-            <h2 className="text-[13px] font-semibold text-gray-200">Work with <span className="text-[#c5f016]">Me</span></h2>
-          </div>
+      <aside
+        className={`flex-shrink-0 border-r border-[#1f2937] bg-[#141d2e] flex flex-col overflow-hidden relative ${isLeftSidebarOpen ? 'transition-none' : 'transition-all duration-300'}`}
+        style={{ width: isLeftSidebarOpen ? sidebarWidth : 0 }}
+      >
+        <div className="pl-[80px] pr-3 py-3 flex items-center gap-2 border-b border-[#1f2937]/50" data-tauri-drag-region>
+          <button
+            onClick={() => setIsLeftSidebarOpen(false)}
+            className="p-1 rounded-lg text-gray-400 hover:text-white hover:bg-[#1f2937] transition-colors flex-shrink-0"
+            title="Hide sidebar"
+          >
+            <SidebarIcon className="w-4 h-4" />
+          </button>
+          <Bot className="w-4 h-4 text-[#c5f016] flex-shrink-0" />
+          <h2 className="text-[13px] font-semibold text-gray-200 truncate">Work with <span className="text-[#c5f016]">Me</span></h2>
         </div>
         
         <div className="p-2.5">
@@ -730,10 +753,18 @@ function App() {
               <Settings className="w-4 h-4" />
            </button>
            <div className="flex items-center gap-2">
-             <div className={`w-2.5 h-2.5 rounded-full ${isConnected ? "bg-green-500 shadow-[0_0_8px_#c5f016]" : "bg-red-500"}`} />
+             <div className={`w-2.5 h-2.5 rounded-full ${isConnected ? "bg-green-500" : "bg-red-500"}`} />
              <span className="text-[12px] text-gray-400">{isConnected ? "Connected" : "Disconnected"}</span>
            </div>
         </div>
+
+        {/* Resize handle */}
+        {isLeftSidebarOpen && (
+          <div
+            onMouseDown={handleSidebarResizeStart}
+            className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-[#c5f016]/30 active:bg-[#c5f016]/50 transition-colors z-50"
+          />
+        )}
       </aside>
 
       {activeView === 'skills' ? (
@@ -744,14 +775,16 @@ function App() {
       <main className="flex-1 flex flex-col bg-[#111827] relative min-w-0">
         
         {/* Header Overlay */}
-        <header className="absolute top-0 left-0 right-0 p-3 flex items-center justify-between pointer-events-none z-10">
-          <div className="flex items-center gap-2 pointer-events-auto">
-            <button 
-              onClick={() => setIsLeftSidebarOpen(!isLeftSidebarOpen)}
-              className="p-1.5 rounded-lg bg-[#182234] border border-[#1f2937] text-gray-400 hover:text-white transition-colors shadow-sm"
-            >
-              <SidebarIcon className="w-4 h-4" />
-            </button>
+        <header className="absolute top-0 left-0 right-0 p-3 flex items-center justify-between z-10" data-tauri-drag-region>
+          <div className={`flex items-center gap-2 ${!isLeftSidebarOpen ? 'pl-[80px]' : ''}`}>
+            {!isLeftSidebarOpen && (
+              <button
+                onClick={() => setIsLeftSidebarOpen(true)}
+                className="p-1.5 rounded-lg bg-[#182234] border border-[#1f2937] text-gray-400 hover:text-white transition-colors shadow-sm"
+              >
+                <SidebarIcon className="w-4 h-4" />
+              </button>
+            )}
 
             {projectDir && (
               <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-[#182234] border border-[#c5f016]/20 text-[#c5f016] text-[11px] font-medium transition-all shadow-sm animate-in fade-in slide-in-from-left-2 duration-300">
@@ -778,8 +811,8 @@ function App() {
             </div>
           </div>
           
-          <div className="flex items-center gap-2 pointer-events-auto">
-            <button 
+          <div className="flex items-center gap-2">
+            <button
               onClick={() => { if (isPreviewOpen) setIsPreviewMaximized(false); setIsPreviewOpen(o => !o); }}
               className="p-1.5 rounded-lg bg-[#182234] border border-[#1f2937] text-gray-400 hover:text-white transition-colors shadow-sm"
               title="Toggle Artifacts/Preview Pane"
@@ -877,7 +910,7 @@ function App() {
         <div className="p-3 mx-auto w-full max-w-4xl relative z-20 bg-gradient-to-t from-[#111827] via-[#111827] to-transparent pt-6">
           <form 
             onSubmit={handleSubmit}
-            className="relative flex flex-col bg-[#182234] rounded-xl border border-[#374151] shadow-xl focus-within:border-[#c5f016]/50 focus-within:shadow-[0_0_20px_rgba(197,240,22,0.15)] transition-all duration-300"
+            className="relative flex flex-col bg-[#182234] rounded-xl border border-[#374151] shadow-xl focus-within:border-[#c5f016]/50 transition-all duration-200"
           >
             <div className="px-3 pt-3 pb-1.5">
               {/* Attachments Display */}
@@ -960,9 +993,6 @@ function App() {
                </div>
             </div>
           </form>
-          <div className="mt-2 text-center text-[11px] text-gray-500 font-medium">
-             Agent SDK • Claude Cowork Concept UI
-          </div>
         </div>
       </main>
       )}
