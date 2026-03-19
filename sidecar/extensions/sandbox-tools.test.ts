@@ -118,22 +118,26 @@ describe('sandbox-tools extension', () => {
     };
     await handlers['tool_result'](event);
 
-    const returnMsg = await commands['sandbox-allow'].handler('need network access');
+    const notify = vi.fn();
+    const ctx = { ui: { notify } };
+    await commands['sandbox-allow'].handler('need network access', ctx);
     expect(sendToClient).toHaveBeenCalledOnce();
     const call = sendToClient.mock.calls[0][0];
     expect(call.type).toBe('sandbox_approval_request');
     expect(call.approvalId).toBeTruthy();
     expect(call.reason).toBe('need network access');
-    expect(returnMsg).toContain('Approval request sent');
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining('Approval request sent'), 'info');
   });
 
   it('/sandbox-allow: returns "no pending" message when no violations', async () => {
     const sendToClient = vi.fn();
     mod.setSendToClient(sendToClient);
 
-    const returnMsg = await commands['sandbox-allow'].handler('reason');
+    const notify = vi.fn();
+    const ctx = { ui: { notify } };
+    await commands['sandbox-allow'].handler('reason', ctx);
     expect(sendToClient).not.toHaveBeenCalled();
-    expect(returnMsg).toContain('No pending');
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining('No pending'), 'warning');
   });
 
   it('grantApproval sets bypass flag', async () => {
@@ -159,7 +163,7 @@ describe('sandbox-tools extension', () => {
     await handlers['tool_result'](event);
 
     // pendingApprovals is not exported — verify indirectly via /sandbox-allow
-    await commands['sandbox-allow'].handler('need access');
+    await commands['sandbox-allow'].handler('need access', { ui: { notify: vi.fn() } });
     expect(sendToClient).toHaveBeenCalledOnce();
     const call = sendToClient.mock.calls[0][0];
     expect(call).toHaveProperty('approvalId');

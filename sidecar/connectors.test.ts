@@ -138,11 +138,11 @@ describe('listConnectors', () => {
   });
 
   it('marks configured oauth providers as connected', async () => {
-    const mockAuth = { list: () => ['anthropic'] } as any;
+    const mockAuth = { list: () => ['google'] } as any;
     const { connectors } = await listConnectors(mockAuth);
-    const anthropic = connectors.find(c => c.id === 'oauth/anthropic');
-    expect(anthropic?.status).toBe('connected');
-    expect(anthropic?.type).toBe('oauth');
+    const google = connectors.find(c => c.id === 'oauth/google');
+    expect(google?.status).toBe('connected');
+    expect(google?.type).toBe('oauth');
   });
 
   it('marks unconfigured oauth providers as available', async () => {
