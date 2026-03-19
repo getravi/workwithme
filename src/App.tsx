@@ -625,7 +625,7 @@ function App() {
 
       {/* Unified sidebar — 52px collapsed (icon rail), sidebarWidth expanded */}
       <aside
-        className="flex-shrink-0 border-r border-[#1f2937] bg-[#141d2e] flex flex-col overflow-hidden relative transition-all duration-300 rounded-tr-2xl rounded-br-2xl"
+        className="flex-shrink-0 border-r border-[#1f2937] bg-[#141d2e] flex flex-col overflow-hidden relative transition-all duration-300"
         style={{ width: isLeftSidebarOpen ? sidebarWidth : 52 }}
       >
         {/* macOS traffic lights zone — drag region, toggle button sits at bottom-right */}
@@ -799,7 +799,11 @@ function App() {
         <ConnectorsPage onOpenSettings={() => setIsSettingsOpen(true)} refreshKey={connectorsRefreshKey} />
       ) : (
       <main className="flex-1 flex flex-col bg-[#111827] relative min-w-0">
-        
+
+        {/* Concave corners where sidebar meets main panel */}
+        <div className="absolute top-0 -left-4 w-4 h-4 bg-[#111827] pointer-events-none z-10" style={{ borderBottomRightRadius: 16 }} />
+        <div className="absolute bottom-0 -left-4 w-4 h-4 bg-[#111827] pointer-events-none z-10" style={{ borderTopRightRadius: 16 }} />
+
         {/* Header Overlay */}
         <header className="absolute top-0 left-0 right-0 p-3 flex items-center justify-between z-10" data-tauri-drag-region>
           <div className="flex items-center gap-2">
