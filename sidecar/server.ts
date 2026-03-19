@@ -27,7 +27,7 @@ import piParallel from "./node_modules/pi-parallel/extension/index.ts";
 import aiLabelling from "./extensions/ai-labelling.ts";
 import sandboxToolsExtension, { setSendToClient, grantApproval } from "./extensions/sandbox-tools.js";
 import { SandboxService } from "./sandbox/SandboxService.js";
-import { listSkills, writeUserSkill } from './skills.js';
+import { listSkills, writeUserSkill, getSkillContent } from './skills.js';
 import { listConnectors, addRemoteMcpConnector, removeRemoteMcpConnector } from './connectors.js';
 
 
@@ -495,6 +495,26 @@ app.get('/api/skills', (_req: Request, res: Response) => {
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
+});
+
+// REST Endpoint to get a single skill's content
+app.get('/api/skills/:source/:slug', (req: Request, res: Response) => {
+  const { source, slug } = req.params;
+  if (!['user', 'example'].includes(source)) {
+    res.status(400).json({ error: 'Invalid source' });
+    return;
+  }
+  // Prevent path traversal
+  if (/[^a-z0-9_-]/i.test(slug)) {
+    res.status(400).json({ error: 'Invalid slug' });
+    return;
+  }
+  const content = getSkillContent(source, slug);
+  if (content === null) {
+    res.status(404).json({ error: 'Skill not found' });
+    return;
+  }
+  res.json({ content });
 });
 
 const MAX_SKILL_CONTENT_BYTES = 100_000;
