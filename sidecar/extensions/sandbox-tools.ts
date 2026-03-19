@@ -20,7 +20,9 @@
  * See: docs/architecture/sandbox-runtime.md
  */
 
-import type { ExtensionAPI, BashToolResultEvent, ToolResultEventResult } from '@mariozechner/pi-coding-agent';
+import type { ExtensionAPI, ExtensionCommandContext, ToolResultEvent } from '@mariozechner/pi-coding-agent';
+
+type BashToolResultEvent = Extract<ToolResultEvent, { toolName: 'bash' }>;
 import { SandboxManager } from '@anthropic-ai/sandbox-runtime';
 import { SandboxService } from '../sandbox/SandboxService.js';
 import { WS_EVENTS } from '../../src/types.js';
@@ -117,16 +119,17 @@ export default function sandboxToolsExtension(pi: ExtensionAPI) {
    * uses event.isError=true for non-zero exit codes. We read output from
    * content and return { content: [...original, escapeHatchBlock] }.
    */
-  pi.on('tool_result', (event: BashToolResultEvent): ToolResultEventResult | undefined => {
+  pi.on('tool_result', (event: ToolResultEvent) => {
     if (event.toolName !== 'bash') return;
+    const bashEvent = event as BashToolResultEvent;
 
     // Extract text from all TextContent blocks
-    const output = event.content
-      .filter((c): c is { type: 'text'; text: string } => c.type === 'text')
-      .map(c => c.text)
+    const output = bashEvent.content
+      .filter((c): c is { type: 'text'; text: string } => (c as { type: string }).type === 'text')
+      .map((c: { type: 'text'; text: string }) => c.text)
       .join('\n');
 
-    if (!isSandboxViolation(output, event.isError)) return;
+    if (!isSandboxViolation(output, bashEvent.isError)) return;
 
     const approvalId = crypto.randomUUID();
     const timer = setTimeout(() => pendingApprovals.delete(approvalId), 30_000); // 30s per architecture doc
@@ -148,7 +151,7 @@ export default function sandboxToolsExtension(pi: ExtensionAPI) {
 
     // Return modified content — Pi SDK picks up the returned content array
     return {
-      content: [...event.content, { type: 'text', text: escapeHatchText }],
+      content: [...bashEvent.content, { type: 'text', text: escapeHatchText }],
     };
   });
 
@@ -168,7 +171,7 @@ export default function sandboxToolsExtension(pi: ExtensionAPI) {
    */
   pi.registerCommand('sandbox-allow', {
     description: 'Request approval to run a blocked command outside the sandbox',
-    handler: async (args: string): Promise<string> => {
+    handler: async (args: string, ctx: ExtensionCommandContext): Promise<void> => {
       const reason = args?.trim() || 'No reason provided';
 
       // Pick the most recent pending approval
@@ -176,7 +179,8 @@ export default function sandboxToolsExtension(pi: ExtensionAPI) {
       const approval = approvals[0];
 
       if (!approval) {
-        return 'No pending sandbox violation to approve. Run the command first to trigger a violation.';
+        ctx.ui.notify('No pending sandbox violation to approve. Run the command first to trigger a violation.', 'warning');
+        return;
       }
 
       if (_sendToClient) {
@@ -186,10 +190,11 @@ export default function sandboxToolsExtension(pi: ExtensionAPI) {
           violationContext: approval.violationContext,
           reason,
         });
-        return 'Approval request sent. Please confirm in the workwithme UI. Once approved, retry the command.';
+        ctx.ui.notify('Approval request sent. Please confirm in the workwithme UI. Once approved, retry the command.', 'info');
+        return;
       }
 
-      return 'Unable to send approval request — no active session connection.';
+      ctx.ui.notify('Unable to send approval request — no active session connection.', 'error');
     },
   });
 }
