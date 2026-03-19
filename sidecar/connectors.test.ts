@@ -12,7 +12,6 @@ import {
   addRemoteMcpConnector,
   removeRemoteMcpConnector,
 } from './connectors.js';
-import keytar from 'keytar';
 import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -32,12 +31,10 @@ vi.mock('pi-mcp-adapter/config', () => ({
   loadMcpConfig: (...args: any[]) => mockLoadMcpConfig(...args),
 }));
 
-vi.mock('keytar', () => ({
-  default: {
-    getPassword: vi.fn(),
-    setPassword: vi.fn(),
-    deletePassword: vi.fn(),
-  },
+vi.mock('./keychain.js', () => ({
+  keychainGet: vi.fn(),
+  keychainSet: vi.fn(),
+  keychainDelete: vi.fn(),
 }));
 
 const MCP_PATH = join(homedir(), '.pi', 'agent', 'mcp.json');
@@ -46,7 +43,7 @@ const MCP_PATH = join(homedir(), '.pi', 'agent', 'mcp.json');
 
 describe('listConnectors', () => {
   beforeEach(() => {
-    vi.mocked(keytar.getPassword).mockResolvedValue(null);
+    vi.mocked(keychainGet).mockResolvedValue(null);
     mockLoadMcpConfig.mockReturnValue({ mcpServers: {} });
   });
 
@@ -72,22 +69,22 @@ describe('listConnectors', () => {
   });
 
   it('catalog entry is available and stale keychain entry is deleted when keychain-only', async () => {
-    vi.mocked(keytar.getPassword).mockImplementation(async (_svc, account) =>
-      account === 'remote-mcp/stripe' ? 'stale_token' : null
+    vi.mocked(keychainGet).mockImplementation(async (slug) =>
+      slug === 'stripe' ? 'stale_token' : null
     );
-    vi.mocked(keytar.deletePassword).mockResolvedValue(true);
+    vi.mocked(keychainDelete).mockResolvedValue(true);
     const mockAuth = { list: () => [] } as any;
     const { connectors } = await listConnectors(mockAuth);
     const stripe = connectors.find(c => c.id === 'remote-mcp/stripe');
     expect(stripe?.status).toBe('available');
     await new Promise(resolve => setTimeout(resolve, 0));
-    expect(keytar.deletePassword).toHaveBeenCalledWith('workwithme', 'remote-mcp/stripe');
+    expect(keychainDelete).toHaveBeenCalledWith('stripe');
   });
 
   it('catalog entry is connected when in mcp.json AND keychain has token', async () => {
     mockLoadMcpConfig.mockReturnValue({ mcpServers: { stripe: { url: 'https://mcp.stripe.com', type: 'streamable-http' } } });
-    vi.mocked(keytar.getPassword).mockImplementation(async (_svc, account) =>
-      account === 'remote-mcp/stripe' ? 'tok_123' : null
+    vi.mocked(keychainGet).mockImplementation(async (slug) =>
+      slug === 'stripe' ? 'tok_123' : null
     );
     const mockAuth = { list: () => [] } as any;
     const { connectors } = await listConnectors(mockAuth);
@@ -97,7 +94,7 @@ describe('listConnectors', () => {
 
   it('catalog entry is available when in mcp.json but no keychain token', async () => {
     mockLoadMcpConfig.mockReturnValue({ mcpServers: { stripe: { url: 'https://mcp.stripe.com', type: 'streamable-http' } } });
-    vi.mocked(keytar.getPassword).mockResolvedValue(null);
+    vi.mocked(keychainGet).mockResolvedValue(null);
     const mockAuth = { list: () => [] } as any;
     const { connectors } = await listConnectors(mockAuth);
     const stripe = connectors.find(c => c.id === 'remote-mcp/stripe');
@@ -125,7 +122,7 @@ describe('listConnectors', () => {
   });
 
   it('returns warning field when keychain read fails', async () => {
-    vi.mocked(keytar.getPassword).mockRejectedValue(new Error('keychain locked'));
+    vi.mocked(keychainGet).mockRejectedValue(new Error('keychain locked'));
     const mockAuth = { list: () => [] } as any;
     const { connectors, warning } = await listConnectors(mockAuth);
     expect(warning).toBeTruthy();
@@ -191,37 +188,6 @@ describe('REMOTE_MCP_CATALOG', () => {
   });
 });
 
-// ── Keychain helpers ──────────────────────────────────────────────────────────
-
-describe('keychainGet', () => {
-  it('calls keytar with correct service/account and returns token', async () => {
-    vi.mocked(keytar.getPassword).mockResolvedValueOnce('mytoken');
-    const result = await keychainGet('stripe');
-    expect(keytar.getPassword).toHaveBeenCalledWith('workwithme', 'remote-mcp/stripe');
-    expect(result).toBe('mytoken');
-  });
-  it('returns null if not found', async () => {
-    vi.mocked(keytar.getPassword).mockResolvedValueOnce(null);
-    expect(await keychainGet('stripe')).toBeNull();
-  });
-});
-
-describe('keychainSet', () => {
-  it('calls keytar with correct args', async () => {
-    vi.mocked(keytar.setPassword).mockResolvedValueOnce(undefined as any);
-    await keychainSet('stripe', 'tok_secret');
-    expect(keytar.setPassword).toHaveBeenCalledWith('workwithme', 'remote-mcp/stripe', 'tok_secret');
-  });
-});
-
-describe('keychainDelete', () => {
-  it('calls keytar and returns boolean', async () => {
-    vi.mocked(keytar.deletePassword).mockResolvedValueOnce(true);
-    expect(await keychainDelete('stripe')).toBe(true);
-    expect(keytar.deletePassword).toHaveBeenCalledWith('workwithme', 'remote-mcp/stripe');
-  });
-});
-
 // ── mcp.json helpers ──────────────────────────────────────────────────────────
 
 describe('writeMcpEntry / readRawMcpConfig / removeMcpEntry', () => {
@@ -266,8 +232,8 @@ describe('addRemoteMcpConnector', () => {
   let originalContent: string | null = null;
   beforeEach(() => {
     originalContent = existsSync(MCP_PATH) ? readFileSync(MCP_PATH, 'utf-8') : null;
-    vi.mocked(keytar.setPassword).mockResolvedValue(undefined as any);
-    vi.mocked(keytar.getPassword).mockResolvedValue(null);
+    vi.mocked(keychainSet).mockResolvedValue(undefined as any);
+    vi.mocked(keychainGet).mockResolvedValue(null);
   });
   afterEach(() => {
     if (originalContent !== null) {
@@ -301,6 +267,7 @@ describe('addRemoteMcpConnector', () => {
     const result = await addRemoteMcpConnector({ id: 'my-server', name: 'My Server', url: 'https://example.com', token: 'tok' });
     expect(result.entry?.status).toBe('connected');
     expect(result.entry?.id).toBe('remote-mcp/my-server');
+    expect(keychainSet).toHaveBeenCalledWith('my-server', 'tok');
   });
 
   it('409 on duplicate id already in mcp.json', async () => {
@@ -328,13 +295,13 @@ describe('addRemoteMcpConnector', () => {
 
 describe('removeRemoteMcpConnector', () => {
   it('returns notFound if not in mcp.json and not in keychain', async () => {
-    vi.mocked(keytar.deletePassword).mockResolvedValue(false);
+    vi.mocked(keychainDelete).mockResolvedValue(false);
     const result = await removeRemoteMcpConnector('nonexistent-xyz');
     expect(result.notFound).toBe(true);
   });
 
   it('returns success when removed from keychain', async () => {
-    vi.mocked(keytar.deletePassword).mockResolvedValue(true);
+    vi.mocked(keychainDelete).mockResolvedValue(true);
     const result = await removeRemoteMcpConnector('my-server');
     expect(result.success).toBe(true);
   });

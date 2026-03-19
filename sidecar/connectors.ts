@@ -1,7 +1,7 @@
 import { getOAuthProviders } from '@mariozechner/pi-ai/oauth';
 import { loadMcpConfig } from 'pi-mcp-adapter/config';
 import type { AuthStorage } from '@mariozechner/pi-coding-agent';
-import keytar from 'keytar';
+import { keychainGet, keychainSet, keychainDelete } from './keychain.js';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -565,22 +565,11 @@ export const REMOTE_MCP_CATALOG: CatalogEntry[] = [
 
 export const CATALOG_SLUGS: Set<string> = new Set(REMOTE_MCP_CATALOG.map(e => e.slug));
 
-const KEYCHAIN_SERVICE = 'workwithme';
 // Same path as pi-mcp-adapter's DEFAULT_CONFIG_PATH (~/.pi/agent/mcp.json).
 // pi-mcp-adapter does not export this constant so we duplicate it here.
 const MCP_CONFIG_PATH = join(homedir(), '.pi', 'agent', 'mcp.json');
 
-export async function keychainGet(slug: string): Promise<string | null> {
-  return keytar.getPassword(KEYCHAIN_SERVICE, `remote-mcp/${slug}`);
-}
-
-export async function keychainSet(slug: string, token: string): Promise<void> {
-  return keytar.setPassword(KEYCHAIN_SERVICE, `remote-mcp/${slug}`, token);
-}
-
-export async function keychainDelete(slug: string): Promise<boolean> {
-  return keytar.deletePassword(KEYCHAIN_SERVICE, `remote-mcp/${slug}`);
-}
+export { keychainGet, keychainSet, keychainDelete };
 
 export function readRawMcpConfig(): Record<string, unknown> {
   if (!existsSync(MCP_CONFIG_PATH)) return {};
