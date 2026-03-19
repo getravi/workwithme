@@ -16,6 +16,13 @@ npm-debug.log
 # Sidecar specific
 sidecar/node_modules
 sidecar/.node-cache/
+sidecar/.pkg-cache/
+
+# Compiled sidecar binaries (built by build:sidecar)
+src-tauri/binaries/
+
+# Claude Code superpowers skills cache
+.superpowers/
 
 # Env files
 .env
