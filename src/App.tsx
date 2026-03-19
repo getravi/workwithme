@@ -798,7 +798,7 @@ function App() {
       ) : activeView === 'connectors' ? (
         <ConnectorsPage onOpenSettings={() => setIsSettingsOpen(true)} refreshKey={connectorsRefreshKey} />
       ) : (
-      <main className="flex-1 flex flex-col bg-[#111827] relative min-w-0 rounded-tl-2xl rounded-bl-2xl z-10">
+      <main className="flex-1 flex flex-col bg-[#111827] relative min-w-0 rounded-tl-[20px] rounded-bl-[20px] -ml-5 z-10 overflow-hidden">
 
         {/* Header Overlay */}
         <header className="absolute top-0 left-0 right-0 p-3 flex items-center justify-between z-10" data-tauri-drag-region>
