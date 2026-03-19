@@ -14,15 +14,17 @@
       {
         "title": "Work With Me (Alpha)",
         "width": 800,
-        "height": 600
+        "height": 600,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true
       }
     ],
     "security": {
       "csp": null
-    },
-    "plugins": {
-      "opener": {}
     }
+  },
+  "plugins": {
+    "opener": {}
   },
   "bundle": {
     "active": true,
