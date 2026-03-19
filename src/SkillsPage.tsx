@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { Zap, Search, Plus, ChevronDown, X } from "lucide-react";
 import { API_BASE } from "./config";
+import { MarkdownMessage } from "./MarkdownMessage";
 
 interface SkillEntry {
   id: string;
@@ -166,9 +167,7 @@ function SkillDetailPanel({ skill, onClose }: SkillDetailPanelProps) {
         )}
         {error && <p className="text-red-400 text-[12px]">{error}</p>}
         {!loading && !error && content !== null && (
-          <pre className="text-[12px] text-gray-300 whitespace-pre-wrap leading-relaxed font-mono">
-            {stripFrontmatter(content)}
-          </pre>
+          <MarkdownMessage content={stripFrontmatter(content)} isStreaming={false} />
         )}
       </div>
     </div>
