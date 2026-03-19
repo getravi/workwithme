@@ -150,14 +150,15 @@ async function buildTarget(target) {
     }
   }
 
-  // Inject SEA blob using postject
-  const postjectBin = join(SIDECAR_DIR, 'node_modules', '.bin', 'postject');
+  // Inject SEA blob using postject (invoke via node to avoid .bin shim issues on Windows)
+  const postjectCli = join(SIDECAR_DIR, 'node_modules', 'postject', 'dist', 'cli.js');
   const postjectArgs = [
+    postjectCli,
     binaryOut, 'NODE_SEA_BLOB', SEA_BLOB,
     '--sentinel-fuse', 'NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2',
   ];
   if (target.platform === 'darwin') postjectArgs.push('--macho-segment-name', 'NODE_SEA');
-  execFileSync(postjectBin, postjectArgs, { stdio: 'inherit' });
+  execFileSync(process.execPath, postjectArgs, { stdio: 'inherit' });
   console.log(`  [postject] SEA blob injected`);
 
   // macOS: ad-hoc sign
