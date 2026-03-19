@@ -933,7 +933,7 @@ function App() {
               )}
               <textarea
                 className="w-full max-h-44 min-h-[38px] bg-transparent resize-none text-[#f3f4f6] placeholder-gray-500 focus:outline-none text-[13px]"
-                placeholder="Message Agent..."
+                placeholder={isProcessing ? "Steer the agent... (sends a mid-task correction)" : "Message Agent..."}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => {
