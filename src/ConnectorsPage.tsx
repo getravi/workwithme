@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { Network, Search, Plus, X } from "lucide-react";
+import { Network, Search, Plus, X, ChevronDown } from "lucide-react";
 import { API_BASE } from "./config";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
@@ -220,16 +220,19 @@ export function ConnectorsPage({ onOpenSettings, refreshKey = 0 }: ConnectorsPag
             </button>
           ))}
         </div>
-        <select
-          value={category}
-          onChange={(e) => setCategory(e.target.value)}
-          className="bg-[#1f2937] border border-[#374151] rounded-lg px-2.5 py-1 text-[12px] text-gray-300 focus:outline-none focus:border-[#c5f016]/50"
-        >
-          <option value="All">All categories</option>
-          {CATEGORIES.map(cat => (
-            <option key={cat} value={cat}>{cat}</option>
-          ))}
-        </select>
+        <div className="relative">
+          <select
+            value={category}
+            onChange={(e) => setCategory(e.target.value)}
+            className="appearance-none bg-[#1f2937] border border-[#374151] rounded-lg pl-3 pr-7 py-1 text-[12px] text-gray-300 focus:outline-none focus:border-[#c5f016]/50 cursor-pointer"
+          >
+            <option value="All">All categories</option>
+            {CATEGORIES.map(cat => (
+              <option key={cat} value={cat}>{cat}</option>
+            ))}
+          </select>
+          <ChevronDown className="w-3 h-3 absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none" />
+        </div>
       </div>
 
       {/* Warning banner */}

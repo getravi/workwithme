@@ -683,7 +683,7 @@ function App() {
             onClick={() => setActiveView('skills')}
             className={`w-full flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-[13px] font-medium transition-colors ${
               activeView === 'skills'
-                ? 'bg-[#1f2937] text-gray-100'
+                ? 'bg-[#1f2937] text-[#c5f016]'
                 : 'text-gray-400 hover:bg-[#1f2937] hover:text-gray-200'
             }`}
           >
@@ -694,7 +694,7 @@ function App() {
             onClick={() => setActiveView('connectors')}
             className={`w-full flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-[13px] font-medium transition-colors ${
               activeView === 'connectors'
-                ? 'bg-[#1f2937] text-gray-100'
+                ? 'bg-[#1f2937] text-[#c5f016]'
                 : 'text-gray-400 hover:bg-[#1f2937] hover:text-gray-200'
             }`}
           >
@@ -790,7 +790,7 @@ function App() {
         {isLeftSidebarOpen && (
           <div
             onMouseDown={handleSidebarResizeStart}
-            className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-[#c5f016]/30 active:bg-[#c5f016]/50 transition-colors z-50"
+            className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-white/10 active:bg-white/20 transition-colors z-50"
           />
         )}
       </aside>
