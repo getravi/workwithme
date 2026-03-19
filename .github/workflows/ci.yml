@@ -104,7 +104,12 @@ jobs:
         working-directory: sidecar
 
       - name: Build sidecar SEA binary
-        run: pnpm exec node scripts/build-binary.mjs
+        run: |
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            pnpm exec node scripts/build-binary.mjs --targets aarch64-apple-darwin,x86_64-apple-darwin
+          else
+            pnpm exec node scripts/build-binary.mjs
+          fi
         working-directory: sidecar
 
       - name: Build Tauri app (non-tag)

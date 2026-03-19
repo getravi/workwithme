@@ -86,9 +86,9 @@ async function linuxDelete(account: string): Promise<boolean> {
 }
 
 // ── Windows: PowerShell PasswordVault ──────────────────────────────────────
-// Note: account is validated by the caller to match /^[a-z0-9][a-z0-9-]{0,62}$/
-// so interpolation into the script is safe. Passwords are passed via -EncodedCommand
-// to avoid quoting issues.
+// Note: 'account' contains 'remote-mcp/<slug>' where slug is validated by the caller
+// to match /^[a-z0-9][a-z0-9-]{0,62}$/ — no shell-unsafe characters.
+// Passwords are passed via base64 + -EncodedCommand to avoid quoting issues.
 
 function encodePSCommand(script: string): string {
   return Buffer.from(script, 'utf16le').toString('base64');

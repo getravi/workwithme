@@ -216,6 +216,65 @@ describe('keychain (Linux)', () => {
   });
 });
 
+describe('keychain (Windows)', () => {
+  beforeEach(() => {
+    vi.stubGlobal('process', { ...process, platform: 'win32' });
+    execFile.mockReset();
+  });
+
+  describe('keychainGet', () => {
+    it('calls powershell with EncodedCommand and returns token', async () => {
+      mockExecSuccess('tok_win\n');
+      const result = await keychainGet('stripe');
+      expect(execFile).toHaveBeenCalledWith(
+        'powershell',
+        ['-NoProfile', '-EncodedCommand', expect.any(String)],
+        expect.any(Function)
+      );
+      expect(result).toBe('tok_win');
+    });
+
+    it('returns null when powershell outputs empty string', async () => {
+      mockExecSuccess('');
+      expect(await keychainGet('stripe')).toBeNull();
+    });
+
+    it('returns null when powershell fails', async () => {
+      mockExecError(1);
+      expect(await keychainGet('stripe')).toBeNull();
+    });
+  });
+
+  describe('keychainSet', () => {
+    it('calls powershell with EncodedCommand', async () => {
+      mockExecSuccess();
+      await keychainSet('stripe', 'tok_secret');
+      expect(execFile).toHaveBeenCalledWith(
+        'powershell',
+        ['-NoProfile', '-EncodedCommand', expect.any(String)],
+        expect.any(Function)
+      );
+    });
+  });
+
+  describe('keychainDelete', () => {
+    it('returns true when powershell outputs "ok"', async () => {
+      mockExecSuccess('ok\n');
+      expect(await keychainDelete('stripe')).toBe(true);
+    });
+
+    it('returns false when powershell outputs "notfound"', async () => {
+      mockExecSuccess('notfound\n');
+      expect(await keychainDelete('stripe')).toBe(false);
+    });
+
+    it('returns false when powershell fails', async () => {
+      mockExecError(1);
+      expect(await keychainDelete('stripe')).toBe(false);
+    });
+  });
+});
+
 describe('keychain (unsupported platform)', () => {
   beforeEach(() => {
     vi.stubGlobal('process', { ...process, platform: 'freebsd' });

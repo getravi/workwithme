@@ -59,6 +59,13 @@ If you have an idea for an enhancement, please submit a feature request issue wi
    pnpm install
    cd sidecar && pnpm install && cd ..
    ```
+
+   **Linux:** Ensure `libsecret-tools` is installed for keychain storage support:
+   ```bash
+   sudo apt-get install libsecret-tools  # Ubuntu/Debian
+   ```
+   Without this package, token storage will silently return null, causing connectors to show as "available" but unable to authenticate.
+
 3. Run the development server in Tauri:
    ```bash
    pnpm run tauri:dev

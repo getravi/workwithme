@@ -38,6 +38,7 @@ const ALL_TARGETS = [
   { triple: 'aarch64-apple-darwin',        nodeOs: 'darwin', nodeArch: 'arm64', ext: 'tar.gz', binInArchive: 'bin/node', platform: 'darwin' },
   { triple: 'x86_64-apple-darwin',         nodeOs: 'darwin', nodeArch: 'x64',   ext: 'tar.gz', binInArchive: 'bin/node', platform: 'darwin' },
   { triple: 'x86_64-unknown-linux-gnu',    nodeOs: 'linux',  nodeArch: 'x64',   ext: 'tar.gz', binInArchive: 'bin/node', platform: 'linux' },
+  { triple: 'aarch64-unknown-linux-gnu',   nodeOs: 'linux',  nodeArch: 'arm64', ext: 'tar.gz', binInArchive: 'bin/node', platform: 'linux' },
   { triple: 'x86_64-pc-windows-msvc',      nodeOs: 'win',    nodeArch: 'x64',   ext: 'zip',    binInArchive: 'node.exe', platform: 'win32', outSuffix: '.exe' },
 ];
 
