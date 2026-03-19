@@ -62,8 +62,8 @@ export default function (pi: ExtensionAPI) {
       );
 
       const summary = response.content
-        .filter((c): c is { type: "text"; text: string } => c.type === "text")
-        .map((c) => c.text)
+        .filter((c): c is { type: "text"; text: string } => (c as { type: string }).type === "text")
+        .map((c: { type: "text"; text: string }) => c.text)
         .join("")
         .trim();
 
