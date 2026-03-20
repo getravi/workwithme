@@ -36,6 +36,7 @@ import { listConnectors, addRemoteMcpConnector, removeRemoteMcpConnector } from 
 import { auditLog } from './audit.js';
 import { Type } from '@sinclair/typebox';
 import { TypeCompiler } from '@sinclair/typebox/compiler';
+import { rateLimit } from 'express-rate-limit';
 
 
 // Basic express setup
@@ -56,6 +57,36 @@ app.use((_req, res, next) => {
   res.setHeader('Cache-Control', 'no-store');
   next();
 });
+
+// Rate limiting — prevents DoS / runaway callers from a compromised local process.
+// Localhost-only server so IP is always 127.0.0.1; limits are per sliding window.
+const authKeyLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 10,
+  standardHeaders: false,
+  legacyHeaders: false,
+  message: { error: 'Too many requests' },
+});
+
+const oauthLoginLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 5,
+  standardHeaders: false,
+  legacyHeaders: false,
+  message: { error: 'Too many requests' },
+});
+
+const generalApiLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 120,
+  standardHeaders: false,
+  legacyHeaders: false,
+  message: { error: 'Too many requests' },
+});
+
+app.use('/api/', generalApiLimiter);
+app.post('/api/auth/key', authKeyLimiter);
+app.get('/api/auth/login', oauthLoginLimiter);
 
 /**
  * Returns a safe error string suitable for client consumption.

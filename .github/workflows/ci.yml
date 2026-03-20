@@ -52,6 +52,9 @@ jobs:
       - name: Type-check frontend
         run: pnpm exec tsc --noEmit
 
+      - name: Run frontend tests
+        run: pnpm exec vitest run
+
       - name: Install sidecar dependencies
         run: pnpm install --frozen-lockfile
         working-directory: sidecar

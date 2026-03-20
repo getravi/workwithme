@@ -4,6 +4,11 @@ import { Network, Search, Plus, X, ChevronDown } from "lucide-react";
 import { API_BASE } from "./config";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
+/** Open a URL only if it is a safe https:// or http:// link. */
+function safeOpenUrl(url: string): void {
+  if (/^https?:\/\//i.test(url)) openUrl(url);
+}
+
 // ── Types ────────────────────────────────────────────────────────────────────
 
 interface ConnectorEntry {
@@ -476,7 +481,7 @@ function ConnectForm({ connector, onCancel, onConnected }: ConnectFormProps) {
             <label className="text-[12px] text-gray-400">Auth token</label>
             {connector.docsUrl && (
               <button
-                onClick={() => openUrl(connector.docsUrl!)}
+                onClick={() => safeOpenUrl(connector.docsUrl!)}
                 className="text-[12px] text-[#c5f016]/80 hover:text-[#c5f016] transition-colors"
               >
                 Get token ↗

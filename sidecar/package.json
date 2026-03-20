@@ -23,6 +23,7 @@
     "@sinclair/typebox": "^0.34.48",
     "cors": "^2.8.6",
     "express": "^5.2.1",
+    "express-rate-limit": "^8.3.1",
     "glimpseui": "github:HazAT/glimpse#1f41a70ab03abdb1adde849d83cfafdc1221e45f",
     "pi-chrome-cdp": "github:pasky/chrome-cdp-skill#1fd55c777125eff23e6ad3a972e694999a3a5bfb",
     "pi-mcp-adapter": "github:nicobailon/pi-mcp-adapter#01ba9a4e86bd16d895db319b913d73754a473acb",

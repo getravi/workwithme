@@ -16,6 +16,7 @@
     "build": "tsc && vite build",
     "build:sidecar": "pnpm --dir sidecar run build:binary -- --targets aarch64-apple-darwin,x86_64-apple-darwin,x86_64-unknown-linux-gnu,x86_64-pc-windows-msvc",
     "preview": "vite preview",
+    "test": "vitest run",
     "tauri:build": "pnpm run build:sidecar && pnpm run build && tauri build",
     "tauri:dev": "pnpm run dev"
   },
@@ -35,15 +36,20 @@
   "devDependencies": {
     "@tailwindcss/vite": "^4.2.1",
     "@tauri-apps/cli": "^2",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@types/react-syntax-highlighter": "^15.5.13",
     "@vitejs/plugin-react": "^4.6.0",
     "autoprefixer": "^10.4.27",
     "concurrently": "^9.2.1",
+    "jsdom": "^29.0.1",
     "postcss": "^8.5.8",
     "tailwindcss": "^4.2.1",
     "typescript": "~5.8.3",
-    "vite": "^7.0.4"
+    "vite": "^7.0.4",
+    "vitest": "^4.1.0"
   }
 }
