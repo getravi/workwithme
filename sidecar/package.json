@@ -23,12 +23,12 @@
     "@sinclair/typebox": "^0.34.48",
     "cors": "^2.8.6",
     "express": "^5.2.1",
-    "glimpseui": "github:HazAT/glimpse",
-    "pi-chrome-cdp": "github:pasky/chrome-cdp-skill",
-    "pi-mcp-adapter": "github:nicobailon/pi-mcp-adapter",
-    "pi-parallel": "github:HazAT/pi-parallel",
-    "pi-smart-sessions": "github:HazAT/pi-smart-sessions",
-    "pi-subagents": "github:nicobailon/pi-subagents",
+    "glimpseui": "github:HazAT/glimpse#1f41a70ab03abdb1adde849d83cfafdc1221e45f",
+    "pi-chrome-cdp": "github:pasky/chrome-cdp-skill#1fd55c777125eff23e6ad3a972e694999a3a5bfb",
+    "pi-mcp-adapter": "github:nicobailon/pi-mcp-adapter#01ba9a4e86bd16d895db319b913d73754a473acb",
+    "pi-parallel": "github:HazAT/pi-parallel#2fefd5ddfffbbbfb1e2d1a5012e3148d36ac663e",
+    "pi-smart-sessions": "github:HazAT/pi-smart-sessions#cc857f8aa59a591960729626b8ec8c15eb3e6b93",
+    "pi-subagents": "github:nicobailon/pi-subagents#5748ebab4ca2c9614969b23dd8f87b872fc3833d",
     "ws": "^8.19.0"
   },
   "devDependencies": {

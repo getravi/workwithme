@@ -30,23 +30,23 @@ importers:
         specifier: ^5.2.1
         version: 5.2.1
       glimpseui:
-        specifier: github:HazAT/glimpse
-        version: https://codeload.github.com/HazAT/glimpse/tar.gz/bc9e480a744d174b414aba4269edbda7355cea05
+        specifier: github:HazAT/glimpse#1f41a70ab03abdb1adde849d83cfafdc1221e45f
+        version: https://codeload.github.com/HazAT/glimpse/tar.gz/1f41a70ab03abdb1adde849d83cfafdc1221e45f
       pi-chrome-cdp:
-        specifier: github:pasky/chrome-cdp-skill
-        version: https://codeload.github.com/pasky/chrome-cdp-skill/tar.gz/6a27bea16fe30e4ef48df61208d4cfc8ec71c07c
+        specifier: github:pasky/chrome-cdp-skill#1fd55c777125eff23e6ad3a972e694999a3a5bfb
+        version: https://codeload.github.com/pasky/chrome-cdp-skill/tar.gz/1fd55c777125eff23e6ad3a972e694999a3a5bfb
       pi-mcp-adapter:
-        specifier: github:nicobailon/pi-mcp-adapter
+        specifier: github:nicobailon/pi-mcp-adapter#01ba9a4e86bd16d895db319b913d73754a473acb
         version: https://codeload.github.com/nicobailon/pi-mcp-adapter/tar.gz/01ba9a4e86bd16d895db319b913d73754a473acb(zod@4.3.6)
       pi-parallel:
-        specifier: github:HazAT/pi-parallel
+        specifier: github:HazAT/pi-parallel#2fefd5ddfffbbbfb1e2d1a5012e3148d36ac663e
         version: https://codeload.github.com/HazAT/pi-parallel/tar.gz/2fefd5ddfffbbbfb1e2d1a5012e3148d36ac663e(@mariozechner/pi-ai@0.61.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6))(@mariozechner/pi-coding-agent@0.61.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6))(@mariozechner/pi-tui@0.61.1)(@sinclair/typebox@0.34.48)
       pi-smart-sessions:
-        specifier: github:HazAT/pi-smart-sessions
+        specifier: github:HazAT/pi-smart-sessions#cc857f8aa59a591960729626b8ec8c15eb3e6b93
         version: https://codeload.github.com/HazAT/pi-smart-sessions/tar.gz/cc857f8aa59a591960729626b8ec8c15eb3e6b93(@mariozechner/pi-ai@0.61.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6))(@mariozechner/pi-coding-agent@0.61.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6))
       pi-subagents:
-        specifier: github:nicobailon/pi-subagents
-        version: https://codeload.github.com/nicobailon/pi-subagents/tar.gz/f974c59da415c8a617773c3ca52a80fc61e05e7f
+        specifier: github:nicobailon/pi-subagents#5748ebab4ca2c9614969b23dd8f87b872fc3833d
+        version: https://codeload.github.com/nicobailon/pi-subagents/tar.gz/5748ebab4ca2c9614969b23dd8f87b872fc3833d
       ws:
         specifier: ^8.19.0
         version: 8.19.0
@@ -1509,9 +1509,9 @@ packages:
     resolution: {integrity: sha512-b1O07XYq8eRuVzBNgJLstU6FYc1tS6wnMtF1I1D9lE8LxZSOGZ7LhxN54yPP6mGw5f2CkXY2BQUL9Fx41qvcIg==}
     engines: {node: '>= 14'}
 
-  glimpseui@https://codeload.github.com/HazAT/glimpse/tar.gz/bc9e480a744d174b414aba4269edbda7355cea05:
-    resolution: {tarball: https://codeload.github.com/HazAT/glimpse/tar.gz/bc9e480a744d174b414aba4269edbda7355cea05}
-    version: 0.5.1
+  glimpseui@https://codeload.github.com/HazAT/glimpse/tar.gz/1f41a70ab03abdb1adde849d83cfafdc1221e45f:
+    resolution: {tarball: https://codeload.github.com/HazAT/glimpse/tar.gz/1f41a70ab03abdb1adde849d83cfafdc1221e45f}
+    version: 0.6.0
     engines: {node: '>=18'}
     os: [darwin, linux, win32]
     hasBin: true
@@ -1883,8 +1883,8 @@ packages:
   pend@1.2.0:
     resolution: {integrity: sha512-F3asv42UuXchdzt+xXqfW1OGlVBe+mxa2mqI0pg5yAHZPvFmY3Y6drSf/GQ1A86WgWEN9Kzh/WrgKa6iGcHXLg==}
 
-  pi-chrome-cdp@https://codeload.github.com/pasky/chrome-cdp-skill/tar.gz/6a27bea16fe30e4ef48df61208d4cfc8ec71c07c:
-    resolution: {tarball: https://codeload.github.com/pasky/chrome-cdp-skill/tar.gz/6a27bea16fe30e4ef48df61208d4cfc8ec71c07c}
+  pi-chrome-cdp@https://codeload.github.com/pasky/chrome-cdp-skill/tar.gz/1fd55c777125eff23e6ad3a972e694999a3a5bfb:
+    resolution: {tarball: https://codeload.github.com/pasky/chrome-cdp-skill/tar.gz/1fd55c777125eff23e6ad3a972e694999a3a5bfb}
     version: 1.0.2
 
   pi-mcp-adapter@https://codeload.github.com/nicobailon/pi-mcp-adapter/tar.gz/01ba9a4e86bd16d895db319b913d73754a473acb:
@@ -1910,9 +1910,9 @@ packages:
       '@mariozechner/pi-ai': '*'
       '@mariozechner/pi-coding-agent': '*'
 
-  pi-subagents@https://codeload.github.com/nicobailon/pi-subagents/tar.gz/f974c59da415c8a617773c3ca52a80fc61e05e7f:
-    resolution: {tarball: https://codeload.github.com/nicobailon/pi-subagents/tar.gz/f974c59da415c8a617773c3ca52a80fc61e05e7f}
-    version: 0.11.3
+  pi-subagents@https://codeload.github.com/nicobailon/pi-subagents/tar.gz/5748ebab4ca2c9614969b23dd8f87b872fc3833d:
+    resolution: {tarball: https://codeload.github.com/nicobailon/pi-subagents/tar.gz/5748ebab4ca2c9614969b23dd8f87b872fc3833d}
+    version: 0.11.7
     hasBin: true
 
   picocolors@1.1.1:
@@ -4073,7 +4073,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  glimpseui@https://codeload.github.com/HazAT/glimpse/tar.gz/bc9e480a744d174b414aba4269edbda7355cea05: {}
+  glimpseui@https://codeload.github.com/HazAT/glimpse/tar.gz/1f41a70ab03abdb1adde849d83cfafdc1221e45f: {}
 
   glob@13.0.6:
     dependencies:
@@ -4384,7 +4384,7 @@ snapshots:
 
   pend@1.2.0: {}
 
-  pi-chrome-cdp@https://codeload.github.com/pasky/chrome-cdp-skill/tar.gz/6a27bea16fe30e4ef48df61208d4cfc8ec71c07c: {}
+  pi-chrome-cdp@https://codeload.github.com/pasky/chrome-cdp-skill/tar.gz/1fd55c777125eff23e6ad3a972e694999a3a5bfb: {}
 
   pi-mcp-adapter@https://codeload.github.com/nicobailon/pi-mcp-adapter/tar.gz/01ba9a4e86bd16d895db319b913d73754a473acb(zod@4.3.6):
     dependencies:
@@ -4410,7 +4410,7 @@ snapshots:
       '@mariozechner/pi-ai': 0.61.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)
       '@mariozechner/pi-coding-agent': 0.61.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)
 
-  pi-subagents@https://codeload.github.com/nicobailon/pi-subagents/tar.gz/f974c59da415c8a617773c3ca52a80fc61e05e7f: {}
+  pi-subagents@https://codeload.github.com/nicobailon/pi-subagents/tar.gz/5748ebab4ca2c9614969b23dd8f87b872fc3833d: {}
 
   picocolors@1.1.1: {}
 

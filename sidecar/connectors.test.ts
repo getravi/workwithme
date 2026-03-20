@@ -289,6 +289,71 @@ describe('addRemoteMcpConnector', () => {
     const result = await addRemoteMcpConnector({ id: 'same-id', name: 'X', url: 'https://same-url.example.com', token: 'tok' });
     expect(result.error?.message).toMatch(/name already exists/i);
   });
+
+  // ── SSRF protection (isPrivateOrLocalhostUrl) ──────────────────────────────
+
+  it('rejects https://localhost', async () => {
+    const r = await addRemoteMcpConnector({ id: 'my-server', name: 'X', url: 'https://localhost/api', token: 'tok' });
+    expect(r.error?.field).toBe('url');
+    expect(r.error?.message).toMatch(/private|localhost/i);
+  });
+
+  it('rejects https://127.0.0.1', async () => {
+    const r = await addRemoteMcpConnector({ id: 'my-server', name: 'X', url: 'https://127.0.0.1', token: 'tok' });
+    expect(r.error?.field).toBe('url');
+  });
+
+  it('rejects https://127.255.255.255 (loopback range)', async () => {
+    const r = await addRemoteMcpConnector({ id: 'my-server', name: 'X', url: 'https://127.255.255.255', token: 'tok' });
+    expect(r.error?.field).toBe('url');
+  });
+
+  it('rejects https://0.0.0.0', async () => {
+    const r = await addRemoteMcpConnector({ id: 'my-server', name: 'X', url: 'https://0.0.0.0', token: 'tok' });
+    expect(r.error?.field).toBe('url');
+  });
+
+  it('rejects https://10.0.0.1 (RFC 1918)', async () => {
+    const r = await addRemoteMcpConnector({ id: 'my-server', name: 'X', url: 'https://10.0.0.1', token: 'tok' });
+    expect(r.error?.field).toBe('url');
+  });
+
+  it('rejects https://192.168.1.1 (RFC 1918)', async () => {
+    const r = await addRemoteMcpConnector({ id: 'my-server', name: 'X', url: 'https://192.168.1.1', token: 'tok' });
+    expect(r.error?.field).toBe('url');
+  });
+
+  it('rejects https://172.16.0.1 (RFC 1918)', async () => {
+    const r = await addRemoteMcpConnector({ id: 'my-server', name: 'X', url: 'https://172.16.0.1', token: 'tok' });
+    expect(r.error?.field).toBe('url');
+  });
+
+  it('rejects https://172.31.255.255 (RFC 1918 upper bound)', async () => {
+    const r = await addRemoteMcpConnector({ id: 'my-server', name: 'X', url: 'https://172.31.255.255', token: 'tok' });
+    expect(r.error?.field).toBe('url');
+  });
+
+  it('allows https://172.32.0.1 (just outside RFC 1918 range)', async () => {
+    // Should NOT be blocked by SSRF guard — expects token/success path
+    const r = await addRemoteMcpConnector({ id: 'my-server', name: 'X', url: 'https://172.32.0.1', token: 'tok' });
+    expect(r.error?.field).not.toBe('url');
+  });
+
+  it('rejects https://169.254.169.254 (AWS metadata)', async () => {
+    const r = await addRemoteMcpConnector({ id: 'my-server', name: 'X', url: 'https://169.254.169.254/latest/meta-data/', token: 'tok' });
+    expect(r.error?.field).toBe('url');
+  });
+
+  it('rejects https://[::1] (IPv6 loopback)', async () => {
+    const r = await addRemoteMcpConnector({ id: 'my-server', name: 'X', url: 'https://[::1]', token: 'tok' });
+    expect(r.error?.field).toBe('url');
+  });
+
+  it('allows a legitimate public https:// URL', async () => {
+    const r = await addRemoteMcpConnector({ id: 'my-server', name: 'My Server', url: 'https://api.example.com/mcp', token: 'tok' });
+    expect(r.error).toBeUndefined();
+    expect(r.entry?.status).toBe('connected');
+  });
 });
 
 // ── removeRemoteMcpConnector ──────────────────────────────────────────────────
