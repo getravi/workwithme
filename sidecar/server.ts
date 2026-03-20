@@ -25,6 +25,8 @@ import piSmartSessions from "./node_modules/pi-smart-sessions/extensions/smart-s
 import piParallel from "./node_modules/pi-parallel/extension/index.ts";
 // @ts-ignore
 import aiLabelling from "./extensions/ai-labelling.ts";
+// @ts-ignore
+import claudeTool from "./extensions/claude-tool.ts";
 import sandboxToolsExtension, { setSendToClient, grantApproval } from "./extensions/sandbox-tools.js";
 import { SandboxService } from "./sandbox/SandboxService.js";
 import { listSkills, writeUserSkill, getSkillContent } from './skills.js';
@@ -160,6 +162,7 @@ async function initSession(opts: InitSessionOptions = { mode: 'continue' }): Pro
       const extensions: any[] = [
         sandboxToolsExtension,
         piSubagents,
+        claudeTool,
         glimpse,
         piSmartSessions,
         piParallel,

@@ -17,7 +17,7 @@ Before you modify a complex file, always read its contents and its imports to un
 You DO NOT use lazy commit messages like `fix stuff`. Every commit must have a descriptive subject and a body that explains *why* the change was made, not just *what* changed.
 
 ## Tooling & Capabilities
-- **Subagents**: If you are asked to do a complex, multi-step task (e.g., "Refactor the auth flow"), do not try to do it all in one prompt. Use the subagent tool to spawn a specialized `scout` or `worker` agent in the background. 
+- **Subagents**: If you are asked to do a complex, multi-step task (e.g., "Refactor the auth flow"), do not try to do it all in one prompt. Use the subagent tool to spawn a specialized `scout` or `worker` agent in the background. Always pass `model` to the subagent matching your own current model (e.g. if you are `openai/gpt-4o`, pass `model: "openai/gpt-4o"`). This ensures subagents use the same provider you are using.
 - **Chrome / Visuals**: You can control the browser. If the user says "the button looks weird", you should actually go look at the button.
 - **MCP**: You have access to local Model Context Protocol tools. Use them to query databases or external APIs when needed.
 
