@@ -5,6 +5,11 @@ const execFileAsync = promisify(execFile);
 
 const SERVICE = 'workwithme';
 
+/** Escape a string for safe interpolation into a PowerShell single-quoted string literal. */
+function escapePSLiteral(s: string): string {
+  return s.replace(/'/g, "''");
+}
+
 // ── macOS: security CLI ─────────────────────────────────────────────────────
 
 async function macosGet(account: string): Promise<string | null> {
@@ -99,7 +104,7 @@ async function windowsGet(account: string): Promise<string | null> {
     Add-Type -AssemblyName System.Security;
     $vault = New-Object Windows.Security.Credentials.PasswordVault;
     try {
-      $cred = $vault.Retrieve('${SERVICE}', '${account}');
+      $cred = $vault.Retrieve('${SERVICE}', '${escapePSLiteral(account)}');
       $cred.RetrievePassword();
       Write-Output $cred.Password
     } catch { Write-Output '' }
@@ -121,7 +126,7 @@ async function windowsSet(account: string, password: string): Promise<void> {
     Add-Type -AssemblyName System.Security;
     $vault = New-Object Windows.Security.Credentials.PasswordVault;
     $pw = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('${b64password}'));
-    $vault.Add([Windows.Security.Credentials.PasswordCredential]::new('${SERVICE}', '${account}', $pw))
+    $vault.Add([Windows.Security.Credentials.PasswordCredential]::new('${SERVICE}', '${escapePSLiteral(account)}', $pw))
   `;
   await execFileAsync('powershell', ['-NoProfile', '-EncodedCommand', encodePSCommand(script)]);
 }
@@ -131,7 +136,7 @@ async function windowsDelete(account: string): Promise<boolean> {
     Add-Type -AssemblyName System.Security;
     $vault = New-Object Windows.Security.Credentials.PasswordVault;
     try {
-      $vault.Remove($vault.Retrieve('${SERVICE}', '${account}')); Write-Output 'ok'
+      $vault.Remove($vault.Retrieve('${SERVICE}', '${escapePSLiteral(account)}')); Write-Output 'ok'
     } catch { Write-Output 'notfound' }
   `;
   try {

@@ -42,6 +42,15 @@ jobs:
         run: pnpm exec vitest run
         working-directory: sidecar
 
+      - name: Audit frontend dependencies
+        run: pnpm audit --audit-level=moderate
+        continue-on-error: true
+
+      - name: Audit sidecar dependencies
+        run: pnpm audit --audit-level=moderate
+        working-directory: sidecar
+        continue-on-error: true
+
   build:
     name: Build (${{ matrix.platform }})
     needs: checks

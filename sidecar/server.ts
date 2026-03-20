@@ -12,6 +12,8 @@ import type { AgentSession } from '@mariozechner/pi-coding-agent';
 import { getProviders } from "@mariozechner/pi-ai";
 import { getOAuthProviders, getOAuthProvider } from "@mariozechner/pi-ai/oauth";
 import path from 'path';
+import os from 'os';
+import { statSync } from 'fs';
 import { randomUUID } from 'crypto';
 import { WS_EVENTS } from '../src/types.js';
 
@@ -31,12 +33,19 @@ import sandboxToolsExtension, { setSendToClient, grantApproval } from "./extensi
 import { SandboxService } from "./sandbox/SandboxService.js";
 import { listSkills, writeUserSkill, getSkillContent } from './skills.js';
 import { listConnectors, addRemoteMcpConnector, removeRemoteMcpConnector } from './connectors.js';
+import { auditLog } from './audit.js';
+import { Type } from '@sinclair/typebox';
+import { TypeCompiler } from '@sinclair/typebox/compiler';
 
 
 // Basic express setup
 const app = express();
-app.use(cors());
-app.use(express.json());
+app.use(cors({
+  origin: ['http://localhost:1420', 'http://127.0.0.1:1420'],
+  methods: ['GET', 'POST', 'DELETE'],
+  allowedHeaders: ['Content-Type'],
+}));
+app.use(express.json({ limit: '1mb' }));
 
 const server = createServer(app);
 const wss = new WebSocketServer({ server });
@@ -216,6 +225,7 @@ app.post('/api/auth/key', (req: Request, res: Response) => {
 
     try {
        globalAuthStorage.set(provider, { type: "api_key", key: key });
+       auditLog('api_key_saved', { provider });
        res.json({ success: true });
     } catch(err) {
        res.status(500).json({ error: String(err) });
@@ -382,6 +392,7 @@ app.post('/api/sessions/archive', async (req: Request, res: Response) => {
             archivedAt: archived ? new Date().toISOString() : undefined
         });
 
+        auditLog('session_archived', { sessionPath, archived });
         const archiveState = getArchiveState(sessionPath);
         res.json({
             success: true,
@@ -398,6 +409,12 @@ app.post('/api/sessions/load', async (req: Request, res: Response) => {
     const { path: sessionPath } = req.body as { path?: string };
     if (!sessionPath) {
         res.status(400).json({ error: "Missing session path" });
+        return;
+    }
+
+    const pathError = validateSessionPath(sessionPath);
+    if (pathError) {
+        res.status(400).json({ error: pathError });
         return;
     }
 
@@ -442,12 +459,46 @@ app.post('/api/sessions/load', async (req: Request, res: Response) => {
             }
         }
 
+        auditLog('session_loaded', { sessionPath });
         res.json({ success: true, sessionId, messages, toolExecutions, cwd: sessionCwd });
     } catch (err) {
         console.error("Session load error:", err);
         res.status(500).json({ error: String(err) });
     }
 });
+
+// ── Path validation helpers ───────────────────────────────────────────────────
+
+/**
+ * Validates that a path is within the user's home directory and is an existing directory.
+ * Returns an error message, or null if valid.
+ */
+function validateProjectPath(rawPath: string): string | null {
+  const resolved = path.resolve(rawPath);
+  const homeDir = os.homedir();
+  if (!resolved.startsWith(homeDir + path.sep) && resolved !== homeDir) {
+    return 'Path must be within your home directory';
+  }
+  try {
+    if (!statSync(resolved).isDirectory()) return 'Path is not a directory';
+  } catch {
+    return 'Path does not exist';
+  }
+  return null;
+}
+
+/**
+ * Validates that a session path is within ~/.pi (the pi-coding-agent data directory).
+ * Returns an error message, or null if valid.
+ */
+function validateSessionPath(rawPath: string): string | null {
+  const resolved = path.resolve(rawPath);
+  const sessionDir = path.join(os.homedir(), '.pi');
+  if (!resolved.startsWith(sessionDir + path.sep) && resolved !== sessionDir) {
+    return 'Invalid session path';
+  }
+  return null;
+}
 
 // Project / CWD endpoints
 app.get('/api/project', (req: Request, res: Response) => {
@@ -463,14 +514,22 @@ app.post('/api/project', async (req: Request, res: Response) => {
         return;
     }
 
+    const pathError = validateProjectPath(projectPath);
+    if (pathError) {
+        res.status(400).json({ error: pathError });
+        return;
+    }
+
     try {
-        const session = await initSession({ mode: 'new', cwd: projectPath }); // Force new session on project root change
+        const resolved = path.resolve(projectPath);
+        const session = await initSession({ mode: 'new', cwd: resolved });
         const newSessionId = session.sessionManager.getSessionId();
 
         // Abort any in-flight work on the new session
         session.agent.abort();
 
-        res.json({ success: true, cwd: projectPath, sessionId: newSessionId });
+        auditLog('project_changed', { path: resolved });
+        res.json({ success: true, cwd: resolved, sessionId: newSessionId });
     } catch (err) {
         res.status(500).json({ error: String(err) });
     }
@@ -595,6 +654,25 @@ app.delete('/api/connectors/remote-mcp/:id', async (req: Request, res: Response)
   res.status(204).send();
 });
 
+// ── WebSocket security ────────────────────────────────────────────────────────
+
+const WsMessageSchema = TypeCompiler.Compile(Type.Object({
+  type: Type.String({ maxLength: 64 }),
+  sessionId: Type.Optional(Type.String({ maxLength: 128 })),
+  text: Type.Optional(Type.String({ maxLength: 100_000 })),
+  cwd: Type.Optional(Type.String({ maxLength: 4096 })),
+  images: Type.Optional(Type.Array(Type.Unknown(), { maxItems: 20 })),
+  streamingBehavior: Type.Optional(Type.String({ maxLength: 32 })),
+  approvalId: Type.Optional(Type.String({ maxLength: 128 })),
+  approved: Type.Optional(Type.Boolean()),
+}));
+
+const MAX_WS_MESSAGE_BYTES = 10_485_760; // 10 MB
+const WS_RATE_LIMIT_PER_SECOND = 10;
+
+interface WsRateLimit { count: number; resetAt: number; }
+const wsRateLimits = new Map<WebSocket, WsRateLimit>();
+
 // Websocket handling for streaming
 wss.on('connection', async (ws: WebSocket) => {
   if (clients.size >= MAX_WS_CONNECTIONS) {
@@ -627,6 +705,23 @@ wss.on('connection', async (ws: WebSocket) => {
   }
 
   ws.on('message', async (message: Buffer) => {
+    // Rate limiting
+    const now = Date.now();
+    let rl = wsRateLimits.get(ws) ?? { count: 0, resetAt: now + 1000 };
+    if (now > rl.resetAt) rl = { count: 0, resetAt: now + 1000 };
+    rl.count += 1;
+    wsRateLimits.set(ws, rl);
+    if (rl.count > WS_RATE_LIMIT_PER_SECOND) {
+      ws.close(1008, 'Rate limit exceeded');
+      return;
+    }
+
+    // Size guard
+    if (message.length > MAX_WS_MESSAGE_BYTES) {
+      ws.close(1009, 'Message too large');
+      return;
+    }
+
     try {
       const data = JSON.parse(message.toString()) as {
         type: string;
@@ -639,6 +734,12 @@ wss.on('connection', async (ws: WebSocket) => {
         approved?: boolean;
       };
 
+      // Schema validation
+      if (!WsMessageSchema.Check(data)) {
+        ws.send(JSON.stringify({ type: WS_EVENTS.ERROR, message: 'Invalid message format' }));
+        return;
+      }
+
       // Handle sandbox approval responses from the frontend.
       // The frontend sends { approvalId, approved: true | false }.
       // Only grant the bypass when the user explicitly approved — denial is a no-op
@@ -646,8 +747,10 @@ wss.on('connection', async (ws: WebSocket) => {
       if (data.type === WS_EVENTS.SANDBOX_APPROVAL_RESPONSE) {
         if (typeof data.approvalId === 'string' && data.approvalId.length > 0 && data.approved === true) {
           grantApproval(data.approvalId);
+          auditLog('sandbox_approval_granted', { approvalId: data.approvalId });
         } else if (!data.approved) {
           console.log('[sandbox] Approval denied by user for approvalId:', data.approvalId);
+          auditLog('sandbox_approval_denied', { approvalId: data.approvalId });
         } else {
           console.warn('[WS] SANDBOX_APPROVAL_RESPONSE missing valid approvalId');
         }
@@ -744,6 +847,7 @@ wss.on('connection', async (ws: WebSocket) => {
       client.subscriber();
     }
     clients.delete(client);
+    wsRateLimits.delete(ws);
   });
 });
 
@@ -773,7 +877,7 @@ bootstrap()
       }
       throw err;
     });
-    server.listen(PORT, () => {
+    server.listen(PORT, '127.0.0.1', () => {
       console.log(`WorkWithMe Sidecar running on http://localhost:${PORT}`);
     });
   });
