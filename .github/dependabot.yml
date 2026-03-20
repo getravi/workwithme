@@ -1,0 +1,25 @@
+version: 2
+updates:
+  # GitHub Actions — keep pinned SHAs up to date
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  # Frontend (root pnpm workspace)
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  # Sidecar (sidecar/ pnpm workspace)
+  - package-ecosystem: "npm"
+    directory: "/sidecar"
+    schedule:
+      interval: "weekly"
+
+  # Rust / Cargo
+  - package-ecosystem: "cargo"
+    directory: "/src-tauri"
+    schedule:
+      interval: "weekly"
