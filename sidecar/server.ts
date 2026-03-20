@@ -363,7 +363,9 @@ app.get('/api/auth/login', async (req: Request, res: Response) => {
         globalAuthStorage.set(providerId, { type: "oauth", ...credentials });
         sendEvent('success', { success: true });
     } catch (err) {
-        sendEvent(WS_EVENTS.ERROR, { error: err instanceof Error ? err.message : String(err) });
+        if (!res.destroyed) {
+            sendEvent(WS_EVENTS.ERROR, { error: safeError(err) });
+        }
     } finally {
         res.end();
     }
@@ -788,6 +790,12 @@ wss.on('connection', async (ws: WebSocket) => {
   }
 
   ws.on('message', async (message: Buffer) => {
+    // Size guard first — reject oversized frames before touching rate-limit state
+    if (message.length > MAX_WS_MESSAGE_BYTES) {
+      ws.close(1009, 'Message too large');
+      return;
+    }
+
     // Rate limiting
     const now = Date.now();
     let rl = wsRateLimits.get(ws) ?? { count: 0, resetAt: now + 1000 };
@@ -796,12 +804,6 @@ wss.on('connection', async (ws: WebSocket) => {
     wsRateLimits.set(ws, rl);
     if (rl.count > WS_RATE_LIMIT_PER_SECOND) {
       ws.close(1008, 'Rate limit exceeded');
-      return;
-    }
-
-    // Size guard
-    if (message.length > MAX_WS_MESSAGE_BYTES) {
-      ws.close(1009, 'Message too large');
       return;
     }
 
@@ -832,7 +834,7 @@ wss.on('connection', async (ws: WebSocket) => {
           grantApproval(data.approvalId);
           auditLog('sandbox_approval_granted', { approvalId: data.approvalId });
         } else if (!data.approved) {
-          console.log('[sandbox] Approval denied by user for approvalId:', data.approvalId);
+          console.debug('[sandbox] Approval denied by user for approvalId:', data.approvalId);
           auditLog('sandbox_approval_denied', { approvalId: data.approvalId });
         } else {
           console.warn('[WS] SANDBOX_APPROVAL_RESPONSE missing valid approvalId');
@@ -955,21 +957,27 @@ async function bootstrap(): Promise<void> {
   await SandboxService.generateMcpConfig(process.cwd());
 }
 
-// Start the server after async bootstrap completes
-const PORT = process.env.PORT || 4242;
-bootstrap()
-  .catch((err) => {
-    console.error('[bootstrap] Sandbox init failed (continuing without sandboxing):', err);
-  })
-  .finally(() => {
-    server.on('error', (err: NodeJS.ErrnoException) => {
-      if (err.code === 'EADDRINUSE') {
-        console.error(`[sidecar] Port ${PORT} is already in use. Is another instance running?`);
-        process.exit(1);
-      }
-      throw err;
+export { app, server, wss };
+
+// Start the server after async bootstrap completes.
+// Skipped when SIDECAR_TEST=1 so integration tests can import the Express app
+// without binding to a port or triggering sandbox initialization.
+if (process.env.SIDECAR_TEST !== '1') {
+  const PORT = process.env.PORT || 4242;
+  bootstrap()
+    .catch((err) => {
+      console.error('[bootstrap] Sandbox init failed (continuing without sandboxing):', err);
+    })
+    .finally(() => {
+      server.on('error', (err: NodeJS.ErrnoException) => {
+        if (err.code === 'EADDRINUSE') {
+          console.error(`[sidecar] Port ${PORT} is already in use. Is another instance running?`);
+          process.exit(1);
+        }
+        throw err;
+      });
+      server.listen(PORT, '127.0.0.1', () => {
+        console.log(`WorkWithMe Sidecar running on http://localhost:${PORT}`);
+      });
     });
-    server.listen(PORT, '127.0.0.1', () => {
-      console.log(`WorkWithMe Sidecar running on http://localhost:${PORT}`);
-    });
-  });
+}

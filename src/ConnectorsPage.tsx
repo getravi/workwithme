@@ -4,7 +4,14 @@ import { Network, Search, Plus, X, ChevronDown } from "lucide-react";
 import { API_BASE } from "./config";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
-/** Open a URL only if it is a safe https:// or http:// link. */
+/**
+ * Open a URL only if it is a safe https:// or http:// link.
+ * Plain http:// is intentionally allowed for connector docs links: the catalog
+ * originates from our own sidecar API (localhost), not untrusted external input,
+ * and opening a docs page in the system browser over http is not a meaningful
+ * attack vector for a local desktop app. If the catalog source ever changes to
+ * an untrusted third party, restrict this to ^https:\/\/ only.
+ */
 function safeOpenUrl(url: string): void {
   if (/^https?:\/\//i.test(url)) openUrl(url);
 }
@@ -51,8 +58,7 @@ const ICON_COLORS: Record<string, string> = {
   openai: "bg-[#10a37f]",
 };
 
-const FETCH_TIMEOUT_MS = 30_000;
-const REQUEST_TIMEOUT_MS = 30_000;
+const TIMEOUT_MS = 30_000;
 
 // ── ConnectorLogo ────────────────────────────────────────────────────────────
 
@@ -129,7 +135,7 @@ export function ConnectorsPage({ onOpenSettings, refreshKey = 0 }: ConnectorsPag
     setError(null);
     setDismissedWarning(false);
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
     try {
       const res = await fetch(`${API_BASE}/api/connectors`, { signal: controller.signal });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -341,7 +347,7 @@ function ConnectorCard({ connector, expanded, onCardClick, onConnected, onDiscon
     const slug = connector.id.replace('remote-mcp/', '');
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+      const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
       const res = await fetch(`${API_BASE}/api/connectors/remote-mcp/${encodeURIComponent(slug)}`, {
         method: 'DELETE',
         signal: controller.signal,
@@ -433,7 +439,7 @@ function ConnectForm({ connector, onCancel, onConnected }: ConnectFormProps) {
     setSubmitting(true);
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+      const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
       const res = await fetch(`${API_BASE}/api/connectors/remote-mcp`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -560,7 +566,7 @@ function CustomConnectorPanel({ existingIds, onCancel, onSuccess }: CustomConnec
     setSubmitting(true);
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+      const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
       const res = await fetch(`${API_BASE}/api/connectors/remote-mcp`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

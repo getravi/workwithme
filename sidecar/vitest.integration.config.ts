@@ -4,6 +4,7 @@ export default defineConfig({
   test: {
     environment: 'node',
     globals: true,
-    exclude: ['**/*.integration.test.ts', 'node_modules/**'],
+    include: ['**/*.integration.test.ts'],
+    env: { SIDECAR_TEST: '1' },
   },
 });
