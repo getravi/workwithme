@@ -19,7 +19,7 @@ importers:
         version: 0.61.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)
       '@mariozechner/pi-coding-agent':
         specifier: ^0.61.0
-        version: 0.61.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)
+        version: 0.61.1(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)
       '@sinclair/typebox':
         specifier: ^0.34.48
         version: 0.34.48
@@ -43,10 +43,10 @@ importers:
         version: https://codeload.github.com/nicobailon/pi-mcp-adapter/tar.gz/01ba9a4e86bd16d895db319b913d73754a473acb(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(zod@4.3.6)
       pi-parallel:
         specifier: github:HazAT/pi-parallel#2fefd5ddfffbbbfb1e2d1a5012e3148d36ac663e
-        version: https://codeload.github.com/HazAT/pi-parallel/tar.gz/2fefd5ddfffbbbfb1e2d1a5012e3148d36ac663e(@mariozechner/pi-ai@0.61.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6))(@mariozechner/pi-coding-agent@0.61.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6))(@mariozechner/pi-tui@0.61.1)(@sinclair/typebox@0.34.48)
+        version: https://codeload.github.com/HazAT/pi-parallel/tar.gz/2fefd5ddfffbbbfb1e2d1a5012e3148d36ac663e(@mariozechner/pi-ai@0.61.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6))(@mariozechner/pi-coding-agent@0.61.1(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6))(@mariozechner/pi-tui@0.61.1)(@sinclair/typebox@0.34.48)
       pi-smart-sessions:
         specifier: github:HazAT/pi-smart-sessions#cc857f8aa59a591960729626b8ec8c15eb3e6b93
-        version: https://codeload.github.com/HazAT/pi-smart-sessions/tar.gz/cc857f8aa59a591960729626b8ec8c15eb3e6b93(@mariozechner/pi-ai@0.61.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6))(@mariozechner/pi-coding-agent@0.61.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6))
+        version: https://codeload.github.com/HazAT/pi-smart-sessions/tar.gz/cc857f8aa59a591960729626b8ec8c15eb3e6b93(@mariozechner/pi-ai@0.61.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6))(@mariozechner/pi-coding-agent@0.61.1(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6))
       pi-subagents:
         specifier: github:nicobailon/pi-subagents#5748ebab4ca2c9614969b23dd8f87b872fc3833d
         version: https://codeload.github.com/nicobailon/pi-subagents/tar.gz/5748ebab4ca2c9614969b23dd8f87b872fc3833d
@@ -709,8 +709,8 @@ packages:
     engines: {node: '>=20.0.0'}
     hasBin: true
 
-  '@mariozechner/pi-coding-agent@0.61.0':
-    resolution: {integrity: sha512-fN0DEdefqM4q7bztx5UKGtn8D6vg1sIsJRB4ljq11EKgO44Z4TQ3mmOlzKL5zCa3Wg5YeM3lf+cJoe1CAFL4zg==}
+  '@mariozechner/pi-coding-agent@0.61.1':
+    resolution: {integrity: sha512-w0QTn+LFFdyFhpaaYDOacGwBjW4MKYrl40b6LPfKDuVJ+9fDfHl3kWkbx6xJb9brk6M5lEFMheC82UIQdkeK3Q==}
     engines: {node: '>=20.6.0'}
     hasBin: true
 
@@ -3356,11 +3356,11 @@ snapshots:
       - ws
       - zod
 
-  '@mariozechner/pi-coding-agent@0.61.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)':
+  '@mariozechner/pi-coding-agent@0.61.1(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)':
     dependencies:
       '@mariozechner/jiti': 2.6.5
       '@mariozechner/pi-agent-core': 0.61.1(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)
-      '@mariozechner/pi-ai': 0.61.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)
+      '@mariozechner/pi-ai': 0.61.1(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)
       '@mariozechner/pi-tui': 0.61.1
       '@silvia-odwyer/photon-node': 0.3.4
       chalk: 5.6.2
@@ -4866,17 +4866,17 @@ snapshots:
       - react-dom
       - supports-color
 
-  pi-parallel@https://codeload.github.com/HazAT/pi-parallel/tar.gz/2fefd5ddfffbbbfb1e2d1a5012e3148d36ac663e(@mariozechner/pi-ai@0.61.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6))(@mariozechner/pi-coding-agent@0.61.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6))(@mariozechner/pi-tui@0.61.1)(@sinclair/typebox@0.34.48):
+  pi-parallel@https://codeload.github.com/HazAT/pi-parallel/tar.gz/2fefd5ddfffbbbfb1e2d1a5012e3148d36ac663e(@mariozechner/pi-ai@0.61.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6))(@mariozechner/pi-coding-agent@0.61.1(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6))(@mariozechner/pi-tui@0.61.1)(@sinclair/typebox@0.34.48):
     dependencies:
       '@mariozechner/pi-ai': 0.61.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)
-      '@mariozechner/pi-coding-agent': 0.61.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)
+      '@mariozechner/pi-coding-agent': 0.61.1(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)
       '@mariozechner/pi-tui': 0.61.1
       '@sinclair/typebox': 0.34.48
 
-  pi-smart-sessions@https://codeload.github.com/HazAT/pi-smart-sessions/tar.gz/cc857f8aa59a591960729626b8ec8c15eb3e6b93(@mariozechner/pi-ai@0.61.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6))(@mariozechner/pi-coding-agent@0.61.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)):
+  pi-smart-sessions@https://codeload.github.com/HazAT/pi-smart-sessions/tar.gz/cc857f8aa59a591960729626b8ec8c15eb3e6b93(@mariozechner/pi-ai@0.61.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6))(@mariozechner/pi-coding-agent@0.61.1(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)):
     dependencies:
       '@mariozechner/pi-ai': 0.61.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)
-      '@mariozechner/pi-coding-agent': 0.61.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)
+      '@mariozechner/pi-coding-agent': 0.61.1(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)
 
   pi-subagents@https://codeload.github.com/nicobailon/pi-subagents/tar.gz/5748ebab4ca2c9614969b23dd8f87b872fc3833d: {}
 
