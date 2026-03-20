@@ -22,11 +22,9 @@
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
+import { writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { join, basename, dirname } from "node:path";
 import { homedir } from "node:os";
-import { fileURLToPath } from "node:url";
-import { execSync } from "node:child_process";
 
 // ── Constants ──
 const MAX_PARALLEL_CONCURRENT = 3;
@@ -324,6 +322,7 @@ export default function (pi: ExtensionAPI) {
 			if (!prompt) {
 				return {
 					content: [{ type: "text", text: "Error: either `prompt` or `tasks` is required." }],
+					details: {},
 					isError: true,
 				};
 			}
@@ -359,7 +358,7 @@ export default function (pi: ExtensionAPI) {
 						const delta = (message as any).event?.delta;
 						if (delta?.type === "text_delta" && delta.text) {
 							fullText += delta.text;
-							onUpdate?.(fullText);
+							(onUpdate as any)?.(fullText);
 						}
 						continue;
 					}

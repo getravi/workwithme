@@ -17,6 +17,7 @@
   "description": "",
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "*",
+    "@sinclair/typebox": "^0.34.48",
     "@anthropic-ai/sandbox-runtime": "^0.0.26",
     "@mariozechner/pi-ai": "^0.57.1",
     "@mariozechner/pi-coding-agent": "^0.57.1",
