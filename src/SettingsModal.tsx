@@ -24,6 +24,13 @@ export function SettingsModal({ isOpen, onClose, isConnected }: SettingsModalPro
   const [oauthProgress, setOauthProgress] = useState<string>("");
 
   const eventSourceRef = useRef<EventSource | null>(null);
+  const listenersRef = useRef<{
+    authInstructions: EventListener;
+    progress: EventListener;
+    prompt: EventListener;
+    success: EventListener;
+    appError: EventListener;
+  } | null>(null);
   const statusRef = useRef<AuthStatus>("idle");
   const successTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -33,6 +40,16 @@ export function SettingsModal({ isOpen, onClose, isConnected }: SettingsModalPro
   }, []);
 
   const cleanupOAuthFlow = useCallback(() => {
+    const es = eventSourceRef.current;
+    if (es && listenersRef.current) {
+      const l = listenersRef.current;
+      es.removeEventListener("auth_instructions", l.authInstructions);
+      es.removeEventListener("progress", l.progress);
+      es.removeEventListener("prompt", l.prompt);
+      es.removeEventListener("success", l.success);
+      es.removeEventListener("error", l.appError);
+      listenersRef.current = null;
+    }
     eventSourceRef.current?.close();
     eventSourceRef.current = null;
     if (successTimerRef.current) {
@@ -108,21 +125,24 @@ export function SettingsModal({ isOpen, onClose, isConnected }: SettingsModalPro
   };
 
   const handleOAuthLogin = (providerId: string) => {
-    // Prevent multiple concurrent OAuth flows
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close();
-      eventSourceRef.current = null;
-    }
+    // Belt-and-suspenders: buttons are disabled during oauth_loading, but guard here too
+    if (status === "oauth_loading") return;
+
+    cleanupOAuthFlow();
 
     updateStatus("oauth_loading");
     setOauthInstructions(null);
     setOauthProgress("Initiating login...");
     setErrorMessage("");
 
-    const eventSource = new EventSource(`${API_BASE}/api/auth/login?provider=${providerId}`);
+    // Use URL constructor so providerId is percent-encoded, preventing CRLF injection
+    const loginUrl = new URL(`${API_BASE}/api/auth/login`);
+    loginUrl.searchParams.set("provider", providerId);
+    const eventSource = new EventSource(loginUrl.toString());
     eventSourceRef.current = eventSource;
 
-    eventSource.addEventListener("auth_instructions", ((e: Event) => {
+    // Define named handlers so they can be removed by cleanupOAuthFlow
+    const onAuthInstructions: EventListener = (e) => {
       const msgEvent = e as MessageEvent;
       try {
         const data = JSON.parse(msgEvent.data);
@@ -132,9 +152,9 @@ export function SettingsModal({ isOpen, onClose, isConnected }: SettingsModalPro
         setErrorMessage("Received malformed response from server.");
         updateStatus("error");
       }
-    }) as EventListener);
+    };
 
-    eventSource.addEventListener("progress", ((e: Event) => {
+    const onProgress: EventListener = (e) => {
       const msgEvent = e as MessageEvent;
       try {
         const data = JSON.parse(msgEvent.data);
@@ -142,9 +162,9 @@ export function SettingsModal({ isOpen, onClose, isConnected }: SettingsModalPro
       } catch {
         // Ignore malformed progress updates
       }
-    }) as EventListener);
+    };
 
-    eventSource.addEventListener("prompt", ((e: Event) => {
+    const onPrompt: EventListener = (e) => {
       const msgEvent = e as MessageEvent;
       try {
         const data = JSON.parse(msgEvent.data);
@@ -152,20 +172,19 @@ export function SettingsModal({ isOpen, onClose, isConnected }: SettingsModalPro
       } catch {
         setOauthProgress("Manual input required");
       }
-    }) as EventListener);
+    };
 
-    eventSource.addEventListener("success", () => {
+    const onSuccess: EventListener = () => {
       updateStatus("success");
       setOauthInstructions(null);
       setOauthProgress("");
       fetchAuthStatus();
-      eventSourceRef.current?.close();
-      eventSourceRef.current = null;
+      cleanupOAuthFlow();
       successTimerRef.current = setTimeout(() => updateStatus("idle"), 3000);
-    });
+    };
 
     // Application-level errors (server sends event: error with data)
-    eventSource.addEventListener("error", ((e: Event) => {
+    const onAppError: EventListener = (e) => {
       const msgEvent = e as MessageEvent;
       if (msgEvent.data) {
         try {
@@ -177,20 +196,33 @@ export function SettingsModal({ isOpen, onClose, isConnected }: SettingsModalPro
         updateStatus("error");
         setOauthInstructions(null);
         setOauthProgress("");
-        eventSourceRef.current?.close();
-        eventSourceRef.current = null;
+        cleanupOAuthFlow();
       }
-    }) as EventListener);
+    };
+
+    listenersRef.current = {
+      authInstructions: onAuthInstructions,
+      progress: onProgress,
+      prompt: onPrompt,
+      success: onSuccess,
+      appError: onAppError,
+    };
+
+    eventSource.addEventListener("auth_instructions", onAuthInstructions);
+    eventSource.addEventListener("progress", onProgress);
+    eventSource.addEventListener("prompt", onPrompt);
+    eventSource.addEventListener("success", onSuccess);
+    eventSource.addEventListener("error", onAppError);
 
     // Transport-level errors (network drop, CORS, etc.)
     eventSource.onerror = () => {
       if (eventSource.readyState === EventSource.CLOSED) {
-        eventSourceRef.current = null;
         if (statusRef.current === "oauth_loading") {
           updateStatus("error");
           setErrorMessage("Connection lost during login flow.");
           setOauthInstructions(null);
           setOauthProgress("");
+          cleanupOAuthFlow();
         }
       }
     };
