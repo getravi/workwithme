@@ -328,8 +328,16 @@ function App() {
 
       ws.onclose = () => {
         setIsConnected(false);
-        const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current), 30000);
+        const attempt = reconnectAttemptsRef.current;
         reconnectAttemptsRef.current += 1;
+        if (attempt >= 5) {
+          setError(
+            "Unable to reach the sidecar after several attempts. " +
+            "Port 4242 may be in use by another application. " +
+            "Try quitting and restarting WorkWithMe."
+          );
+        }
+        const delay = Math.min(1000 * Math.pow(2, attempt), 30000);
         reconnectTimeoutRef.current = setTimeout(connectWs, delay);
       };
 

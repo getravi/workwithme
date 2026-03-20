@@ -142,3 +142,17 @@ jobs:
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
+
+      - name: Generate and upload SHA256 checksums (tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd src-tauri/target/release/bundle
+          CHECKSUM_FILE="SHA256SUMS-${{ runner.os }}.txt"
+          find . \( -name "*.dmg" -o -name "*.AppImage" -o -name "*.deb" \
+                    -o -name "*.msi" -o -name "*.exe" -o -name "*.app.tar.gz" \) \
+               -not -name "SHA256SUMS*" | sort | xargs sha256sum > "$CHECKSUM_FILE"
+          cat "$CHECKSUM_FILE"
+          gh release upload "${{ github.ref_name }}" "$CHECKSUM_FILE" --clobber

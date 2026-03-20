@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import DOMPurify from "dompurify";
 import { Network, Search, Plus, X, ChevronDown } from "lucide-react";
 import { API_BASE } from "./config";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -57,7 +58,7 @@ function ConnectorLogo({ entry }: { entry: ConnectorEntry }) {
     return (
       <div
         className={`${LOGO_CONTAINER} bg-white/5 p-1.5 [&>svg]:w-full [&>svg]:h-full [&>svg]:max-w-full [&>svg]:max-h-full`}
-        dangerouslySetInnerHTML={{ __html: entry.logoSvg }}
+        dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(entry.logoSvg, { USE_PROFILES: { svg: true } }) }}
       />
     );
   }

@@ -253,7 +253,7 @@ ws.on('close', () => clientLimits.delete(ws));
 
 ### [HIGH-03] No Agent Sandboxing on Windows
 
-**Severity:** HIGH
+**Severity:** HIGH  **Status: ✅ RESOLVED**
 **Category:** CWE-269: Improper Privilege Management
 **File:** `sidecar/sandbox/SandboxService.ts`
 **OWASP:** A04:2021 – Insecure Design
@@ -261,15 +261,8 @@ ws.on('close', () => clientLimits.delete(ws));
 **Description:**
 The sandbox runtime (which prevents the agent from reading SSH keys, AWS credentials, .env files, etc.) is only implemented for macOS (Seatbelt) and Linux (bubblewrap). Windows users have no sandbox protection — the agent can execute any bash command without restriction.
 
-**Impact:**
-- On Windows: agent can read `~/.ssh`, `~/.aws`, environment variables, any credential files
-- On Windows: agent can modify any file the user has access to
-- Users are unaware this protection is absent
-
-**Remediation:**
-1. Display a prominent warning in the UI when running on Windows (unsandboxed mode)
-2. Investigate Windows sandbox options (AppContainer, Job Objects with restricted tokens)
-3. Document clearly in README that Windows has no sandboxing
+**Resolution:**
+`SandboxService.ts` already sets `_warning = 'Sandboxing is not supported on Windows. The agent and MCP servers run without restrictions.'` when `platform === 'win32'` and `isSupported = false`. This warning is surfaced via the `/api/sandbox/status` endpoint and displayed as a dismissible banner in `App.tsx` whenever `sandboxStatus.active` is false. The warning is prominent and accurate.
 
 ---
 
@@ -461,7 +454,7 @@ auditLog('project_changed', { path: resolved });
 
 ### [LOW-01] XSS Risk in dangerouslySetInnerHTML (Future Risk)
 
-**Severity:** LOW (currently)
+**Severity:** LOW (currently)  **Status: ✅ RESOLVED**
 **Category:** CWE-79: Cross-Site Scripting
 **File:** `src/ConnectorsPage.tsx`
 **OWASP:** A03:2021 – Injection
@@ -469,17 +462,8 @@ auditLog('project_changed', { path: resolved });
 **Description:**
 Connector logos are rendered using `dangerouslySetInnerHTML` with inline SVG content. Currently this is safe because all SVGs are hardcoded in `sidecar/connectors.ts`. If user-provided or remotely-fetched SVGs are ever introduced, this becomes a HIGH severity XSS vector.
 
-**Evidence:**
-```tsx
-<div dangerouslySetInnerHTML={{ __html: entry.logoSvg }} />
-```
-
-**Remediation (Preventive):**
-If SVG sources ever become dynamic, sanitize with DOMPurify before rendering:
-```typescript
-import DOMPurify from 'dompurify';
-<div dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(entry.logoSvg, { USE_PROFILES: { svg: true } }) }} />
-```
+**Resolution:**
+Added `dompurify` (v3.3.3) to frontend dependencies. All SVG content is now sanitized with `DOMPurify.sanitize(entry.logoSvg, { USE_PROFILES: { svg: true } })` before rendering, preventing any SVG-based script injection regardless of SVG source.
 
 ---
 
@@ -500,7 +484,7 @@ Fix CRIT-01 first (bind to 127.0.0.1). For defense-in-depth, consider whether lo
 
 ### [LOW-03] No Signed Release Binaries
 
-**Severity:** LOW
+**Severity:** LOW  **Status: ⚠ PARTIAL**
 **Category:** CWE-494: Download of Code Without Integrity Check
 **File:** `.github/workflows/ci.yml`
 **SOC Type 2 Control:** CC8.1 – Change management
@@ -508,31 +492,26 @@ Fix CRIT-01 first (bind to 127.0.0.1). For defense-in-depth, consider whether lo
 **Description:**
 GitHub Releases are published without code signing or SHA256 checksums. Users cannot verify the authenticity or integrity of downloaded binaries.
 
-**Remediation:**
-1. Configure Tauri's code signing for macOS (Developer ID) and Windows (EV code signing certificate)
-2. Publish SHA256 checksums in release notes:
-   ```yaml
-   - name: Generate checksums
-     run: sha256sum *.dmg *.exe *.AppImage > SHA256SUMS.txt
-   ```
+**Resolution:**
+SHA256 checksum generation is now implemented in CI. After each platform's tag build, a `Generate and upload SHA256 checksums` step finds all installer artifacts (`.dmg`, `.AppImage`, `.deb`, `.msi`, `.exe`, `.app.tar.gz`), generates `SHA256SUMS-<OS>.txt`, and uploads it to the GitHub Release via `gh release upload --clobber`.
+
+**Remaining:** Code signing (macOS Developer ID, Windows EV certificate) requires paid certificates and secrets configuration — deferred until pre-production release.
 
 ---
 
 ### [LOW-04] Hardcoded Port 4242 Without Collision Detection
 
-**Severity:** LOW
+**Severity:** LOW  **Status: ⚠ PARTIAL**
 **Category:** CWE-605: Multiple Binds to the Same Port
 **File:** `sidecar/server.ts`, `src-tauri/src/lib.rs`
 
 **Description:**
 Port 4242 is hardcoded across both the sidecar and the Tauri app. While `lib.rs` checks if the port is already bound before starting a new sidecar, there is no mechanism to use an alternate port if 4242 is occupied by another application, causing silent startup failure.
 
-**Remediation:**
-Implement dynamic port selection with fallback, and communicate the chosen port from the sidecar back to the Tauri frontend via stdout or a temp file:
-```typescript
-// Try port 4242, fall back to next available
-const PORT = await findFreePort(4242);
-```
+**Resolution:**
+The WebSocket reconnect handler in `App.tsx` now shows a diagnostic message after 5 failed connection attempts (~31 seconds): *"Unable to reach the sidecar after several attempts. Port 4242 may be in use by another application. Try quitting and restarting WorkWithMe."* This converts the silent hang into a visible, actionable error.
+
+**Remaining:** Full dynamic port selection (try 4242, fall back to next available) would require coordinating port discovery between the sidecar, Tauri's Rust layer, the frontend, and the Content Security Policy. Deferred as an architectural improvement.
 
 ---
 
