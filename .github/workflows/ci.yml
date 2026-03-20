@@ -1,5 +1,26 @@
 name: CI
 
+# SECURITY NOTE — Action pinning:
+# All third-party GitHub Actions below should be pinned to an immutable commit SHA
+# instead of a mutable tag (e.g. @v4, @stable). Mutable tags can be silently
+# redirected to malicious code if the upstream repo is compromised (supply-chain attack).
+#
+# To pin, replace each "@<tag>" with "@<full-40-char-SHA>  # <tag>" using:
+#   gh api /repos/<owner>/<repo>/git/refs/tags/<tag>   (get the tag SHA)
+#   gh api /repos/<owner>/<repo>/git/tags/<tag-sha>    (dereference to commit SHA)
+#
+# Example:
+#   uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+#
+# Actions to pin (run `gh api` above for each, or use tool like `pin-github-action`):
+#   actions/checkout@v4
+#   pnpm/action-setup@v4
+#   actions/setup-node@v4
+#   dtolnay/rust-toolchain@stable
+#   Swatinem/rust-cache@v2
+#   actions/cache@v4
+#   tauri-apps/tauri-action@v0   ← especially this; @v0 is an extremely broad mutable tag
+
 on:
   push:
     branches: [main]
@@ -11,6 +32,9 @@ jobs:
   checks:
     name: Type Check
     runs-on: ubuntu-22.04
+    # Least-privilege: this job only needs to read repo contents
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -44,18 +68,20 @@ jobs:
 
       - name: Audit frontend dependencies
         run: pnpm audit --audit-level=moderate
+        # TODO: remove continue-on-error once all audit findings are reviewed/resolved
         continue-on-error: true
 
       - name: Audit sidecar dependencies
         run: pnpm audit --audit-level=moderate
         working-directory: sidecar
+        # TODO: remove continue-on-error once all audit findings are reviewed/resolved
         continue-on-error: true
 
   build:
     name: Build (${{ matrix.platform }})
     needs: checks
     permissions:
-      contents: write
+      contents: write  # Required for tauri-action to create/update releases on tag pushes
     strategy:
       fail-fast: false
       matrix:

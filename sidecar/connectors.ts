@@ -738,6 +738,28 @@ export async function listConnectors(authStorage: AuthStorage): Promise<ListConn
 const SLUG_REGEX = /^[a-z0-9][a-z0-9-]{0,62}$/;
 const MAX_CUSTOM_CONNECTORS = 200;
 
+/**
+ * Returns true if the URL hostname resolves to a private, loopback, or link-local
+ * address by hostname string analysis (no DNS lookup).
+ * Prevents SSRF: a crafted URL could send the user's MCP auth token to an attacker-
+ * controlled service running on localhost or the local network.
+ */
+function isPrivateOrLocalhostUrl(urlString: string): boolean {
+  try {
+    const { hostname } = new URL(urlString);
+    const h = hostname.toLowerCase().replace(/^\[|\]$/g, ''); // strip IPv6 brackets
+    if (h === 'localhost' || h === '::1' || h === '0:0:0:0:0:0:0:1') return true;
+    if (/^127\./.test(h) || h === '0.0.0.0') return true;
+    if (/^169\.254\./.test(h)) return true;   // AWS/Azure metadata / link-local
+    if (/^10\./.test(h)) return true;          // RFC 1918
+    if (/^192\.168\./.test(h)) return true;    // RFC 1918
+    if (/^172\.(1[6-9]|2[0-9]|3[01])\./.test(h)) return true; // RFC 1918
+    return false;
+  } catch {
+    return true; // Unparseable URL — reject
+  }
+}
+
 export interface ConnectorError {
   field?: string;
   message: string;
@@ -786,6 +808,9 @@ export async function addRemoteMcpConnector(input: AddConnectorInput): Promise<A
   }
   if (trimmedUrl.length > 2048) {
     return { error: { field: 'url', message: 'URL is too long', status: 400 } };
+  }
+  if (isPrivateOrLocalhostUrl(trimmedUrl)) {
+    return { error: { field: 'url', message: 'Private and localhost URLs are not allowed for remote MCP servers', status: 400 } };
   }
 
   const catalogEntry = REMOTE_MCP_CATALOG.find(e => e.slug === id);

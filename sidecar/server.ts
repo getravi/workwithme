@@ -47,6 +47,37 @@ app.use(cors({
 }));
 app.use(express.json({ limit: '1mb' }));
 
+// Security headers — defense-in-depth for a localhost API server
+app.use((_req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('X-DNS-Prefetch-Control', 'off');
+  res.setHeader('Cache-Control', 'no-store');
+  next();
+});
+
+/**
+ * Returns a safe error string suitable for client consumption.
+ * Logs the full error internally; returns a generic message that avoids
+ * exposing stack traces, file paths, or internal state.
+ */
+function safeError(err: unknown, fallback = 'An internal error occurred'): string {
+  // For known, user-facing error strings (e.g. from SDK validation) return as-is.
+  // For Error objects with a short, non-stack message, return the message.
+  // Anything else (stack traces, paths) → generic fallback.
+  if (err instanceof Error) {
+    const msg = err.message;
+    // Reject messages that look like stack traces or contain file paths
+    if (msg.includes('\n') || msg.includes('    at ') || msg.includes('/') || msg.includes('\\')) {
+      return fallback;
+    }
+    return msg.length < 200 ? msg : fallback;
+  }
+  const s = String(err);
+  return s.length < 200 && !s.includes('\n') ? s : fallback;
+}
+
 const server = createServer(app);
 const wss = new WebSocketServer({ server });
 
@@ -58,7 +89,9 @@ interface ClientRecord {
 
 const sessionMap = new Map<string, AgentSession>();
 const clients = new Set<ClientRecord>();
-const MAX_WS_CONNECTIONS = 50;
+// A local desktop app legitimately needs at most 2-3 WS connections (e.g. app + devtools).
+// 50 was far too high and invited resource exhaustion.
+const MAX_WS_CONNECTIONS = 5;
 const ARCHIVE_CUSTOM_TYPE = 'workwithme.archive';
 
 type ArchiveEntryData = {
@@ -222,13 +255,24 @@ app.post('/api/auth/key', (req: Request, res: Response) => {
         res.status(400).json({ error: "Missing provider or key" });
         return;
     }
+    // Provider must be a known identifier (alphanumeric + dashes)
+    if (!/^[a-z0-9][a-z0-9-]{0,63}$/i.test(provider)) {
+        res.status(400).json({ error: 'Invalid provider identifier' });
+        return;
+    }
+    // API keys are typically 20-512 printable ASCII characters
+    if (key.length < 8 || key.length > 512 || !/^[\x20-\x7E]+$/.test(key)) {
+        res.status(400).json({ error: 'Invalid API key format' });
+        return;
+    }
 
     try {
        globalAuthStorage.set(provider, { type: "api_key", key: key });
        auditLog('api_key_saved', { provider });
        res.json({ success: true });
     } catch(err) {
-       res.status(500).json({ error: String(err) });
+       console.error('[api/auth/key]', err);
+       res.status(500).json({ error: safeError(err) });
     }
 });
 
@@ -241,7 +285,8 @@ app.get('/api/auth/oauth-providers', (_req: Request, res: Response) => {
         }));
         res.json({ providers });
     } catch(err) {
-        res.status(500).json({ error: String(err) });
+        console.error('[api/auth/oauth-providers]', err);
+        res.status(500).json({ error: safeError(err) });
     }
 });
 
@@ -351,7 +396,8 @@ app.post('/api/model', (req: Request, res: Response) => {
         session.agent.setModel(targetModel);
         res.json({ success: true, currentModel: { id: targetModel.id, provider: targetModel.provider } });
     } catch(err) {
-        res.status(500).json({ error: String(err) });
+        console.error('[api/model]', err);
+        res.status(500).json({ error: safeError(err) });
     }
 });
 
@@ -374,7 +420,7 @@ app.get('/api/sessions', async (req: Request, res: Response) => {
         const sessions = await listSessions(includeArchived);
         res.json(sessions);
     } catch (err) {
-        res.status(500).json({ error: String(err) });
+        res.status(500).json({ error: safeError(err) });
     }
 });
 
@@ -382,6 +428,12 @@ app.post('/api/sessions/archive', async (req: Request, res: Response) => {
     const { path: sessionPath, archived } = req.body as { path?: string; archived?: boolean };
     if (!sessionPath || typeof archived !== 'boolean') {
         res.status(400).json({ error: "Missing session path or archived flag" });
+        return;
+    }
+
+    const pathError = validateSessionPath(sessionPath);
+    if (pathError) {
+        res.status(400).json({ error: pathError });
         return;
     }
 
@@ -401,7 +453,7 @@ app.post('/api/sessions/archive', async (req: Request, res: Response) => {
         });
     } catch (err) {
         console.error("Session archive error:", err);
-        res.status(500).json({ error: String(err) });
+        res.status(500).json({ error: safeError(err) });
     }
 });
 
@@ -463,7 +515,7 @@ app.post('/api/sessions/load', async (req: Request, res: Response) => {
         res.json({ success: true, sessionId, messages, toolExecutions, cwd: sessionCwd });
     } catch (err) {
         console.error("Session load error:", err);
-        res.status(500).json({ error: String(err) });
+        res.status(500).json({ error: safeError(err) });
     }
 });
 
@@ -531,7 +583,7 @@ app.post('/api/project', async (req: Request, res: Response) => {
         auditLog('project_changed', { path: resolved });
         res.json({ success: true, cwd: resolved, sessionId: newSessionId });
     } catch (err) {
-        res.status(500).json({ error: String(err) });
+        res.status(500).json({ error: safeError(err) });
     }
 });
 
@@ -555,7 +607,7 @@ app.get('/api/skills', (_req: Request, res: Response) => {
   try {
     res.json(listSkills());
   } catch (err) {
-    res.status(500).json({ error: String(err) });
+    res.status(500).json({ error: safeError(err) });
   }
 });
 
@@ -596,7 +648,7 @@ app.post('/api/skills', (req: Request, res: Response) => {
     const filePath = writeUserSkill(name, content);
     res.json({ success: true, path: filePath });
   } catch (err) {
-    const message = String(err);
+    const message = safeError(err);
     if (message.includes('already exists')) {
       res.status(409).json({ error: message });
     } else {
@@ -611,7 +663,7 @@ app.get('/api/connectors', async (_req: Request, res: Response) => {
     const result = await listConnectors(globalAuthStorage);
     res.json(result);
   } catch (err) {
-    res.status(500).json({ error: String(err) });
+    res.status(500).json({ error: safeError(err) });
   }
 });
 
@@ -768,11 +820,19 @@ wss.on('connection', async (ws: WebSocket) => {
         }
 
         if (data.type === WS_EVENTS.NEW_CHAT) {
+           // Validate working directory if provided — same rule as POST /api/project
+           if (data.cwd) {
+             const cwdError = validateProjectPath(data.cwd);
+             if (cwdError) {
+               ws.send(JSON.stringify({ type: WS_EVENTS.ERROR, message: cwdError }));
+               return;
+             }
+           }
            let newSession: AgentSession;
            try {
              newSession = await initSession({ mode: 'new', cwd: data.cwd ?? process.cwd() });
            } catch (initErr) {
-             ws.send(JSON.stringify({ type: WS_EVENTS.ERROR, message: "Failed to create session: " + (initErr instanceof Error ? initErr.message : String(initErr)) }));
+             ws.send(JSON.stringify({ type: WS_EVENTS.ERROR, message: "Failed to create session" }));
              return;
            }
            const newSessionId = newSession.sessionManager.getSessionId();
@@ -788,7 +848,8 @@ wss.on('connection', async (ws: WebSocket) => {
              try {
                session = await initSession({ mode: 'continue' });
              } catch (initErr) {
-               ws.send(JSON.stringify({ type: WS_EVENTS.ERROR, message: "Failed to initialize session: " + (initErr instanceof Error ? initErr.message : String(initErr)) }));
+               console.error('[WS] Failed to initialize session:', initErr);
+               ws.send(JSON.stringify({ type: WS_EVENTS.ERROR, message: "Failed to initialize session" }));
                return;
              }
            }
@@ -826,14 +887,14 @@ wss.on('connection', async (ws: WebSocket) => {
            } catch (promptErr) {
               const sId = session ? session.sessionManager.getSessionId() : "unknown";
               console.error(`[Session ${sId}] Prompt error:`, promptErr);
-              ws.send(JSON.stringify({ type: WS_EVENTS.ERROR, message: String(promptErr), sessionId: sId }));
+              ws.send(JSON.stringify({ type: WS_EVENTS.ERROR, message: safeError(promptErr, 'Prompt failed'), sessionId: sId }));
            }
         } else if (data.type === WS_EVENTS.STEER) {
            try {
              await session.prompt(data.text ?? '', { streamingBehavior: 'steer' });
            } catch (steerErr) {
              console.error("Steer error:", steerErr);
-             ws.send(JSON.stringify({ type: WS_EVENTS.ERROR, message: String(steerErr) }));
+             ws.send(JSON.stringify({ type: WS_EVENTS.ERROR, message: safeError(steerErr, 'Steer failed') }));
            }
         }
       }
