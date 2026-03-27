@@ -30,7 +30,15 @@ Total uncompressed:       ~109 MB
 DMG compressed:           ~34 MB
 ```
 
-**Note:** The sidecar is 100MB because Node.js SEA binaries inherently include the entire Node.js runtime (~85-90MB). The prior estimate of 3.2MB was incorrect. Compression in the DMG reduces the visible size to ~34MB, which is acceptable for a production app with this stack.
+**Important Note on Sidecar Size**:
+- The sidecar is 100MB because Node.js SEA (Single Executable Application) binaries inherently include the entire Node.js runtime (~85-90MB)
+- This is NOT a bug or sign of incorrect bundling
+- The prior estimate of 3.2MB was aspirational/incorrect - impossible to achieve with Node.js
+- DMG compression reduces the 109MB app bundle to ~34MB, which is reasonable
+- To significantly reduce size, would need to:
+  - Replace Node.js sidecar with pure Rust implementation (~3MB savings, major rewrite)
+  - Use lighter UI framework instead of React (~1-2MB savings, major rewrite)
+  - Accept current size as baseline for this tech stack
 
 **What Optimization Impact Actually Is:**
 - ✅ **Rust LTO:** Reduces Rust binary by ~10-20% (hard to see in compressed DMG)
@@ -281,20 +289,47 @@ sha256sum -c SHA256SUMS-macOS.txt
 - They're both Mach-O executables, so you can't tell by file type
 - **Solution:** Check app bundle size: uncompressed ~40MB is correct, ~250MB is wrong
 
-### Gotcha 4: externalBin Must Match Actual Binary Names
+### Gotcha 4: externalBin Must Match Actual Binary Names + macOS Code Signing Complexity
 
-**FIXED in v0.1.6** - Previous versions (v0.1.4, v0.1.5) were corrupted due to this issue.
+**FIXED in v0.1.6** - Previous versions (v0.1.4, v0.1.5) were corrupted due to multiple issues.
 
+**Part A: externalBin Path Mismatch**
 - The sidecar build script outputs: `sidecar-aarch64-apple-darwin`, `sidecar-x86_64-apple-darwin`, etc.
 - externalBin config was pointing to: `binaries/sidecar` (no platform suffix)
-- Result: Tauri couldn't find the binary and failed to bundle it properly, causing app corruption
-- Solution: CI workflow now renames the platform-specific binary to the generic name Tauri expects
+- Result: Tauri couldn't find the binary and failed to bundle it properly
+- Solution: CI workflow renames platform-specific binary to generic name
   ```bash
   # On macOS: sidecar-aarch64-apple-darwin → sidecar
   # On Linux: sidecar-x86_64-unknown-linux-gnu → sidecar
   # On Windows: sidecar-x86_64-pc-windows-msvc.exe → sidecar.exe
   ```
-- Result: App launches successfully without "damaged" error
+
+**Part B: macOS Code Signing with External Binaries**
+- When Tauri bundles an external binary, the app signature becomes invalid
+- Attempts that FAILED:
+  1. Re-sign after build: "code has no resources but signature indicates they must be present"
+  2. Remove + fresh ad-hoc signature: Resource metadata conflicts persist
+  3. Use --preserve-metadata: Conflicts remain
+- Root cause: Tauri creates signature with resource requirements that don't match actual bundle after external binary is added
+- Solution: Use minimal entitlements file without resource requirements
+  ```bash
+  codesign --remove-signature "$APP_BUNDLE"
+  codesign --sign - --force --deep --entitlements .github/entitlements.plist "$APP_BUNDLE"
+  ```
+
+**Workaround for Users (if still experiencing issues)**:
+```bash
+# Remove quarantine attribute that triggers strict gatekeeper checks
+xattr -rd com.apple.quarantine /Applications/workwithme.app
+# Then the app will launch
+open /Applications/workwithme.app
+```
+
+**Key Discovery**: App DOES launch when run directly from mounted DMG despite signature validation errors. The "damaged" error occurs specifically when:
+1. App is copied to /Applications (different location)
+2. Gatekeeper does fresh signature check on quarantined app
+
+This is why the workaround works - removing quarantine attribute bypasses the strict gatekeeper check.
 
 ### Gotcha 5: Version Mismatches Have Cascading Effects
 - Forgetting tauri.conf.json causes binaries to be labeled with old version
