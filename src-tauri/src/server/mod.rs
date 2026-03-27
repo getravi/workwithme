@@ -3,6 +3,8 @@ pub mod skills;
 pub mod keychain;
 pub mod audit;
 pub mod sessions;
+pub mod mcp;
+pub mod oauth;
 
 use axum::{
     extract::{ws::WebSocketUpgrade, Path},
@@ -37,6 +39,12 @@ pub async fn create_app() -> Result<Router, String> {
         .route("/api/sessions/:id", get(sessions_endpoints::get))
         .route("/api/sessions/:id", axum::routing::put(sessions_endpoints::update))
         .route("/api/sessions/:id/archive", post(sessions_endpoints::archive))
+        // MCP endpoints
+        .route("/api/mcp", get(mcp_endpoints::get_config))
+        .route("/api/mcp", post(mcp_endpoints::update_config))
+        .route("/api/mcp/catalog", get(mcp_endpoints::get_catalog))
+        // OAuth endpoints
+        .route("/api/auth/oauth-providers", get(oauth_endpoints::list_providers))
         // CORS middleware to allow frontend requests
         .layer(CorsLayer::permissive());
 
@@ -188,6 +196,75 @@ mod audit_endpoints {
                 }))
             )
         }
+    }
+}
+
+/// OAuth API endpoints
+mod oauth_endpoints {
+    use super::*;
+
+    /// List available OAuth providers
+    pub async fn list_providers() -> Json<serde_json::Value> {
+        let providers = oauth::get_oauth_providers();
+        Json(json!({
+            "providers": providers.iter().map(|p| {
+                json!({
+                    "id": p.id,
+                    "name": p.name
+                })
+            }).collect::<Vec<_>>()
+        }))
+    }
+}
+
+/// MCP API endpoints
+mod mcp_endpoints {
+    use super::*;
+
+    /// Get current MCP configuration
+    pub async fn get_config() -> Json<serde_json::Value> {
+        match mcp::load_mcp_config() {
+            Ok(config) => {
+                Json(json!({
+                    "success": true,
+                    "config": config
+                }))
+            }
+            Err(e) => {
+                Json(json!({
+                    "success": false,
+                    "error": e
+                }))
+            }
+        }
+    }
+
+    /// Update MCP configuration
+    pub async fn update_config(Json(config): Json<serde_json::Value>) -> (StatusCode, Json<serde_json::Value>) {
+        match mcp::save_mcp_config(config) {
+            Ok(_) => (
+                StatusCode::OK,
+                Json(json!({
+                    "success": true
+                }))
+            ),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "success": false,
+                    "error": e
+                }))
+            )
+        }
+    }
+
+    /// Get MCP service catalog
+    pub async fn get_catalog() -> Json<serde_json::Value> {
+        let catalog = mcp::get_catalog();
+        Json(json!({
+            "success": true,
+            "catalog": catalog
+        }))
     }
 }
 
