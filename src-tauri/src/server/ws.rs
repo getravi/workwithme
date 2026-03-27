@@ -2,6 +2,26 @@ use axum::extract::ws::{WebSocket, Message};
 use futures::stream::StreamExt;
 use serde_json::json;
 use crate::server::approval::{ApprovalResponse, APPROVAL_MANAGER};
+use std::sync::Arc;
+use std::collections::HashMap;
+use chrono::{Utc, DateTime};
+
+/// WebSocket connection metadata
+#[derive(Debug, Clone)]
+struct WsConnectionMetadata {
+    id: String,
+    connected_at: DateTime<Utc>,
+    last_activity: DateTime<Utc>,
+    session_id: Option<String>,
+}
+
+#[allow(rustdoc::unused_doc_comments)]
+/// This tracks active WebSocket connections by connection ID
+/// Cleaned up on disconnect to prevent memory leaks
+lazy_static::lazy_static! {
+    static ref WS_CONNECTIONS: Arc<tokio::sync::RwLock<HashMap<String, WsConnectionMetadata>>> =
+        Arc::new(tokio::sync::RwLock::new(HashMap::new()));
+}
 
 /// WebSocket message types
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -15,11 +35,25 @@ pub struct WsMessage {
     pub data: serde_json::Value,
 }
 
-/// Handle a WebSocket connection.
+/// Handle a WebSocket connection with cleanup on disconnect.
 pub async fn handle_socket(mut socket: WebSocket) {
-    println!("[ws] new connection");
+    let conn_id = uuid::Uuid::new_v4().to_string();
+    println!("[ws] new connection: {}", conn_id);
+
+    // Register connection
+    let metadata = WsConnectionMetadata {
+        id: conn_id.clone(),
+        connected_at: Utc::now(),
+        last_activity: Utc::now(),
+        session_id: None,
+    };
+    {
+        let mut conns = WS_CONNECTIONS.write().await;
+        conns.insert(conn_id.clone(), metadata);
+    }
 
     const MAX_MESSAGE_SIZE: usize = 1024 * 1024; // 1MB limit
+    let mut session_id: Option<String> = None;
 
     while let Some(msg) = socket.next().await {
         match msg {
@@ -35,11 +69,16 @@ pub async fn handle_socket(mut socket: WebSocket) {
                     break;
                 }
 
-                println!("[ws] received: {}", text);
+                println!("[ws] [{}] received: {}", conn_id, text);
 
                 // Try to parse as JSON message
                 match serde_json::from_str::<WsMessage>(&text) {
                     Ok(ws_msg) => {
+                        // Track session ID
+                        if !ws_msg.session_id.is_empty() {
+                            session_id = Some(ws_msg.session_id.clone());
+                        }
+
                         // Validate message structure
                         if let Err(e) = validate_ws_message(&ws_msg) {
                             let error_response = json!({
@@ -54,7 +93,7 @@ pub async fn handle_socket(mut socket: WebSocket) {
                         handle_ws_message(&ws_msg, &mut socket).await;
                     }
                     Err(e) => {
-                        eprintln!("[ws] failed to parse message: {}", e);
+                        eprintln!("[ws] [{}] failed to parse message: {}", conn_id, e);
                         let error_response = json!({
                             "type": "error",
                             "error": "Invalid JSON message format"
@@ -64,38 +103,53 @@ pub async fn handle_socket(mut socket: WebSocket) {
                 }
             }
             Ok(Message::Binary(bin)) => {
-                println!("[ws] received binary data ({} bytes)", bin.len());
+                println!("[ws] [{}] received binary data ({} bytes)", conn_id, bin.len());
                 let error_response = json!({
                     "type": "error",
                     "error": "Binary messages not supported"
                 }).to_string();
                 if let Err(e) = socket.send(Message::Text(error_response.into())).await {
-                    eprintln!("[ws] error sending message: {e}");
+                    eprintln!("[ws] [{}] error sending message: {e}", conn_id);
                     break;
                 }
             }
             Ok(Message::Close(_)) => {
-                println!("[ws] connection closed");
+                println!("[ws] [{}] connection closed", conn_id);
                 break;
             }
             Ok(Message::Ping(p)) => {
-                println!("[ws] received ping");
+                println!("[ws] [{}] received ping", conn_id);
                 if let Err(e) = socket.send(Message::Pong(p)).await {
-                    eprintln!("[ws] error sending pong: {e}");
+                    eprintln!("[ws] [{}] error sending pong: {e}", conn_id);
                     break;
                 }
             }
             Ok(Message::Pong(_)) => {
-                println!("[ws] received pong");
+                println!("[ws] [{}] received pong", conn_id);
             }
             Err(e) => {
-                eprintln!("[ws] error: {e}");
+                eprintln!("[ws] [{}] error: {e}", conn_id);
                 break;
             }
         }
     }
 
-    println!("[ws] connection finished");
+    // Cleanup: remove connection from registry
+    {
+        let mut conns = WS_CONNECTIONS.write().await;
+        conns.remove(&conn_id);
+    }
+
+    if let Some(sid) = session_id {
+        println!("[ws] [{}] connection finished (session: {})", conn_id, sid);
+    } else {
+        println!("[ws] [{}] connection finished", conn_id);
+    }
+}
+
+/// Get active WebSocket connections count
+pub async fn get_active_connections() -> usize {
+    WS_CONNECTIONS.read().await.len()
 }
 
 /// Validate WebSocket message structure and required fields

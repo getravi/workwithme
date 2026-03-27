@@ -23,10 +23,11 @@ pub mod logging;
 pub mod db;
 pub mod queries;
 pub mod plugins;
+pub mod errors;
 
 use axum::{
     extract::{ws::WebSocketUpgrade, Path},
-    http::{StatusCode, HeaderMap},
+    http::StatusCode,
     response::IntoResponse,
     routing::{get, post, delete},
     Json, Router, middleware::Next,
@@ -35,10 +36,18 @@ use axum::{
 use serde::Deserialize;
 use serde_json::json;
 use tower_http::cors::CorsLayer;
-use tower::ServiceBuilder;
 use governor::{Quota, RateLimiter, state::{InMemoryState, NotKeyed}, clock::DefaultClock};
 use std::num::NonZeroU32;
 use std::sync::Arc;
+
+/// Create CORS configuration for frontend requests
+/// Allows requests from localhost and Tauri webview contexts.
+/// Uses permissive mode for development; Tauri webview runs same-origin anyway.
+fn create_cors_layer() -> CorsLayer {
+    // Permissive CORS for Tauri webview (which runs same-origin by default)
+    // In production, restrict to specific origins if needed
+    CorsLayer::permissive()
+}
 
 /// Create the main Axum router with all endpoints and middleware.
 pub async fn create_app() -> Result<Router, String> {
@@ -141,7 +150,7 @@ pub async fn create_app() -> Result<Router, String> {
         // Request body size limit (10MB max) to prevent memory exhaustion attacks
         .layer(axum::middleware::from_fn(request_size_limit_middleware))
         // CORS middleware to allow frontend requests
-        .layer(CorsLayer::permissive());
+        .layer(create_cors_layer());
 
     Ok(app)
 }

@@ -15,7 +15,7 @@ pub async fn execute_agent_message(
     });
 
     let mut iteration = 0;
-    let mut final_response;
+    let final_response;
 
     loop {
         iteration += 1;
