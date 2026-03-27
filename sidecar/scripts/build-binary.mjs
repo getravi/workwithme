@@ -95,6 +95,7 @@ if (PATCH_RE.test(bundleContent)) {
 
 const bundleSize = (readFileSync(BUNDLE_FILE).length / 1e6).toFixed(1);
 console.log(`[build] bundle.cjs written (${bundleSize} MB)`);
+console.log(`[build] bundle breakdown: JavaScript payload = ${bundleSize} MB`);
 
 // ── Step 3: Create SEA blob ──────────────────────────────────────────────────
 
@@ -170,7 +171,7 @@ async function buildTarget(target) {
   // Copy to src-tauri/binaries/
   const tauriDest = join(TAURI_BINARIES, binaryName);
   copyFileSync(binaryOut, tauriDest);
-  const sizeMB = (readFileSync(tauriDest).length / 1e6).toFixed(0);
+  const sizeMB = (readFileSync(tauriDest).length / 1e6).toFixed(1);
   console.log(`  [copy] → src-tauri/binaries/${binaryName} (${sizeMB} MB)`);
 }
 
