@@ -15,7 +15,7 @@ importers:
     dependencies:
       '@anthropic-ai/claude-agent-sdk':
         specifier: '*'
-        version: 0.2.80(zod@4.3.6)
+        version: 0.2.85(zod@4.3.6)
       '@anthropic-ai/sandbox-runtime':
         specifier: ^0.0.26
         version: 0.0.26
@@ -98,8 +98,8 @@ importers:
 
 packages:
 
-  '@anthropic-ai/claude-agent-sdk@0.2.80':
-    resolution: {integrity: sha512-9vMzf38ZeV8b70RPcaC/ZrJZKL6G56KTS8zXoBbBBRkPDLCgrGLC8sP2AfrR62eliSkw5u+sOcP9kKX+t54CHg==}
+  '@anthropic-ai/claude-agent-sdk@0.2.85':
+    resolution: {integrity: sha512-/ohKLtP1zy6aWXLW/9KTYBveJPEtAfdO96qiP1Cl5S7LgVq/qRDUl7AUw5YGrBaK6YWHEE/rfMQZGwP/i5zIvQ==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
       zod: ^4.0.0
@@ -318,8 +318,8 @@ packages:
     peerDependencies:
       '@csstools/css-tokenizer': ^4.0.0
 
-  '@csstools/css-syntax-patches-for-csstree@1.1.1':
-    resolution: {integrity: sha512-BvqN0AMWNAnLk9G8jnUT77D+mUbY/H2b3uDTvg2isJkHaOufUE2R3AOwxWo7VBQKT1lOdwdvorddo2B/lk64+w==}
+  '@csstools/css-syntax-patches-for-csstree@1.1.2':
+    resolution: {integrity: sha512-5GkLzz4prTIpoyeUiIu3iV6CSG3Plo7xRVOFPKI7FVEJ3mZ0A8SwK0XU3Gl7xAkiQ+mDyam+NNp875/C5y+jSA==}
     peerDependencies:
       css-tree: ^3.2.1
     peerDependenciesMeta:
@@ -2406,6 +2406,10 @@ packages:
     resolution: {integrity: sha512-3IWdCpjgxp15CbJnsi/Y9TCDE7HWVN19j1hmzVhoAkY/+CJx449tVxT5wZc1Gwg8J+P0LWvzlBzxYRnHJ+1i7Q==}
     engines: {node: '>=20.18.1'}
 
+  undici@7.24.6:
+    resolution: {integrity: sha512-Xi4agocCbRzt0yYMZGMA6ApD7gvtUFaxm4ZmeacWI4cZxaF6C+8I8QfofC20NAePiB/IcvZmzkJ7XPa471AEtA==}
+    engines: {node: '>=20.18.1'}
+
   unpipe@1.0.0:
     resolution: {integrity: sha512-pjy2bYhSsufwWlKwPc+l3cN7+wuJlK6uz0YdJEOlQDbl6jo/YlPi4mb8agUkVC8BF7V8NuzeyPNqRksA3hztKQ==}
     engines: {node: '>= 0.8'}
@@ -2585,7 +2589,7 @@ packages:
 
 snapshots:
 
-  '@anthropic-ai/claude-agent-sdk@0.2.80(zod@4.3.6)':
+  '@anthropic-ai/claude-agent-sdk@0.2.85(zod@4.3.6)':
     dependencies:
       zod: 4.3.6
     optionalDependencies:
@@ -3057,7 +3061,7 @@ snapshots:
       '@csstools/css-tokenizer': 4.0.0
     optional: true
 
-  '@csstools/css-syntax-patches-for-csstree@1.1.1(css-tree@3.2.1)':
+  '@csstools/css-syntax-patches-for-csstree@1.1.2(css-tree@3.2.1)':
     optionalDependencies:
       css-tree: 3.2.1
     optional: true
@@ -4608,7 +4612,7 @@ snapshots:
       '@asamuzakjp/css-color': 5.0.1
       '@asamuzakjp/dom-selector': 7.0.4
       '@bramus/specificity': 2.4.2
-      '@csstools/css-syntax-patches-for-csstree': 1.1.1(css-tree@3.2.1)
+      '@csstools/css-syntax-patches-for-csstree': 1.1.2(css-tree@3.2.1)
       '@exodus/bytes': 1.15.0(@noble/hashes@1.8.0)
       css-tree: 3.2.1
       data-urls: 7.0.0(@noble/hashes@1.8.0)
@@ -4620,7 +4624,7 @@ snapshots:
       saxes: 6.0.0
       symbol-tree: 3.2.4
       tough-cookie: 6.0.1
-      undici: 7.24.5
+      undici: 7.24.6
       w3c-xmlserializer: 5.0.0
       webidl-conversions: 8.0.1
       whatwg-mimetype: 5.0.0
@@ -5240,6 +5244,9 @@ snapshots:
   undici-types@7.18.2: {}
 
   undici@7.24.5: {}
+
+  undici@7.24.6:
+    optional: true
 
   unpipe@1.0.0: {}
 
