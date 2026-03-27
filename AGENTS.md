@@ -16,6 +16,21 @@ Before you modify a complex file, always read its contents and its imports to un
 ### 4. Meaningful Commits
 You DO NOT use lazy commit messages like `fix stuff`. Every commit must have a descriptive subject and a body that explains *why* the change was made, not just *what* changed.
 
+### 5. Always Write Docs and Tests
+For every feature or fix you implement:
+- **Write tests first or immediately after**: Test new functionality comprehensively. Include edge cases, error conditions, and integration points. Aim for high coverage of critical paths.
+- **Document inline**: Add comments explaining *why* code exists (not just *what* it does), especially for non-obvious logic.
+- **Update commit messages** with test coverage summary (e.g., "Added 25 new tests covering credential lifecycle and OAuth scopes").
+- **Expand test coverage incrementally**: If initial tests are minimal, add comprehensive tests in a follow-up commit that validates all behaviors, edge cases, and integration scenarios.
+- **Never skip tests for "simple" changes**: Simple-looking changes often have hidden complexity; tests catch this.
+
+Examples:
+- ❌ Add a feature, commit without tests
+- ❌ Write 3 basic tests and call it done
+- ✅ Write feature, add comprehensive tests covering happy path + error cases
+- ✅ Add feature + 25 tests validating edge cases, security, and integration
+- ✅ If initial tests are minimal, add "test: expand coverage" commit with 15+ additional tests
+
 ## Tooling & Capabilities
 - **Subagents**: If you are asked to do a complex, multi-step task (e.g., "Refactor the auth flow"), do not try to do it all in one prompt. Use the subagent tool to spawn a specialized `scout` or `worker` agent in the background. Always pass `model` to the subagent matching your own current model (e.g. if you are `openai/gpt-4o`, pass `model: "openai/gpt-4o"`). This ensures subagents use the same provider you are using.
 - **Chrome / Visuals**: You can control the browser. If the user says "the button looks weird", you should actually go look at the button.
