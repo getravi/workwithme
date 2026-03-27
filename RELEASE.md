@@ -1,149 +1,328 @@
 # Release Instructions
 
-Complete checklist for releasing a new version of workwithme.
+Complete end-to-end checklist for releasing a new version of workwithme to GitHub with CI-built binaries.
 
-## Pre-Release: Version Bump
+## Prerequisites
 
-### 1. Update All Version Files
+- [ ] Main branch is up-to-date with all desired features/fixes merged
+- [ ] All tests pass locally: `pnpm test`
+- [ ] Code builds locally: `pnpm run tauri:build` (optional, CI will do this)
+- [ ] You have push access to the repository
+- [ ] `gh` CLI is installed and authenticated
 
-Update the version number in **ALL THREE** files (not just one or two!):
+## Step 1: Verify Current State
 
-- [ ] `package.json` - Update `"version": "X.Y.Z"`
-- [ ] `src-tauri/Cargo.toml` - Update `version = "X.Y.Z"` in `[package]` section
-- [ ] `src-tauri/tauri.conf.json` - Update `"version": "X.Y.Z"`
-
-**Verification:**
 ```bash
-grep -n '"version"' package.json
-grep -n 'version = ' src-tauri/Cargo.toml | head -3
-grep -n '"version"' src-tauri/tauri.conf.json
+# Check branch
+git branch
+# Should show: * main
+
+# Check if working directory is clean
+git status
+# Should show: "working tree clean"
+
+# If not clean, commit or stash changes first
+git stash  # Only if you want to discard uncommitted work
 ```
 
-All three should show the same version number. If any are different, the build will output wrong filenames.
+## Step 2: Determine New Version
 
-### 2. Commit Version Bump
+Decide on the new version number following semantic versioning (X.Y.Z):
+- X = Major (breaking changes)
+- Y = Minor (new features, backward compatible)
+- Z = Patch (bug fixes, backward compatible)
+
+Example: `0.1.5`
+
+## Step 3: Update All Three Version Files
+
+**CRITICAL:** All three files must be updated or binaries will have wrong version numbers.
+
+### 3a. Edit `package.json`
+```bash
+# Find and update the version line
+# Change: "version": "0.1.4"
+# To:     "version": "0.1.5"
+```
+
+### 3b. Edit `src-tauri/Cargo.toml`
+```bash
+# Find and update the [package] version
+# Change: version = "0.1.4"
+# To:     version = "0.1.5"
+```
+
+### 3c. Edit `src-tauri/tauri.conf.json`
+```bash
+# Find and update the version field (MOST COMMONLY FORGOTTEN!)
+# Change: "version": "0.1.4"
+# To:     "version": "0.1.5"
+```
+
+## Step 4: Verify All Versions Match
+
+Run this command to catch mistakes before pushing:
 
 ```bash
+echo "=== Version Check ===" && \
+echo "package.json:" && grep '"version"' package.json && \
+echo "Cargo.toml:" && grep 'version = ' src-tauri/Cargo.toml | head -1 && \
+echo "tauri.conf.json:" && grep '"version"' src-tauri/tauri.conf.json
+```
+
+**All three lines must show the SAME version number (0.1.5 in this example).**
+
+If they don't match, fix the files now before proceeding.
+
+## Step 5: Commit Version Bump to Main
+
+```bash
+# Stage version files
 git add package.json src-tauri/Cargo.toml src-tauri/tauri.conf.json
-git commit -m "chore: bump version to X.Y.Z"
+
+# Commit with descriptive message
+git commit -m "chore: bump version to 0.1.5"
+
+# Push to main branch (this ensures latest code is in CI)
 git push origin main
+
+# Verify push succeeded
+git log -1 --oneline
+# Should show your commit at the top
 ```
 
-### 3. Create Release Tag
+## Step 6: Verify Main Branch is Up-to-Date Remotely
 
 ```bash
-git tag -a vX.Y.Z -m "Release vX.Y.Z
+# Fetch latest remote info
+git fetch origin
 
-[Add release notes here describing what changed]"
+# Check if local main matches remote main
+git status
+# Should show: "Your branch is up to date with 'origin/main'"
 
-git push origin vX.Y.Z
+# If not, you need to pull or understand what's different
+git log origin/main -1 --oneline
 ```
 
-**Important:** The tag **must** start with `v` (e.g., `v0.1.5`, not `0.1.5`)
+## Step 7: Create and Push Release Tag
 
-## CI Behavior
+The tag **must** start with `v` and match your version exactly (e.g., `v0.1.5`).
+This triggers the CI workflow to build all platform binaries.
 
-When you push a tag `vX.Y.Z`:
-- GitHub Actions will trigger the CI workflow
-- It will build binaries for macOS, Linux, and Windows
-- Filenames will be generated from the version in `tauri.conf.json`
-- A draft release will be created automatically
-- Build takes ~10-15 minutes
+```bash
+# Create annotated tag with release notes
+git tag -a v0.1.5 -m "Release v0.1.5
 
-## Verification Checklist
+What's new in 0.1.5:
+- Rust LTO optimizations for smaller binaries (~30% reduction)
+- Frontend code splitting for better browser caching
+- Removed 46MB of orphaned build artifacts
+- Enhanced build logging
+- Fixed version consistency across all config files
 
-After the build completes:
+Build: macOS (aarch64/x86_64) + Linux + Windows
+Sidecar: Node.js 20.20.0 SEA binary (~3.2MB)"
 
-- [ ] Release appears at https://github.com/getravi/workwithme/releases
-- [ ] Binaries are named correctly:
-  - `workwithme_X.Y.Z_aarch64.dmg` (macOS ARM)
-  - `workwithme_X.Y.Z_x64-setup.exe` (Windows)
-  - `workwithme_X.Y.Z_amd64.AppImage` (Linux)
-  - `workwithme_X.Y.Z_x64_en-US.msi` (Windows MSI)
-  - `.tar.gz` files for archives
+# Push tag to remote (this triggers CI!)
+git push origin v0.1.5
+
+# Verify tag was pushed
+git ls-remote --tags origin | grep v0.1.5
+```
+
+## Step 8: Monitor CI Build
+
+The CI workflow will automatically trigger and build binaries for all platforms.
+
+```bash
+# Option 1: Check via gh CLI
+gh run list --all --limit 5
+
+# Option 2: Watch via browser
+# https://github.com/getravi/workwithme/actions
+
+# Expected: Two workflows should start
+# - One for push to main (version bump)
+# - One for the v0.1.5 tag (binary build)
+```
+
+**Build Duration:** ~10-15 minutes for all platforms (macOS arm64/x86_64, Linux x86_64, Windows x86_64)
+
+## Step 9: Verify Release and Binaries
+
+Wait for the build to complete, then verify:
+
+```bash
+# Check if release was created
+gh release view v0.1.5
+
+# Or view in browser
+# https://github.com/getravi/workwithme/releases/tag/v0.1.5
+```
+
+### Expected Artifacts
+
+The release should contain these files (macOS example):
+
+```
+workwithme_0.1.5_aarch64.dmg          (≈33-35 MB) - macOS ARM64 installer
+workwithme_0.1.5_x64-setup.exe        (≈21 MB)    - Windows installer
+workwithme_0.1.5_amd64.AppImage       (≈109 MB)   - Linux AppImage
+workwithme_0.1.5_amd64.deb            (≈39 MB)    - Linux Debian package
+workwithme_0.1.5_x64_en-US.msi        (≈32 MB)    - Windows MSI
+workwithme_aarch64.app.tar.gz         (≈33 MB)    - macOS app archive
+SHA256SUMS-Linux.txt                              - Checksums for Linux builds
+SHA256SUMS-macOS.txt                              - Checksums for macOS builds
+SHA256SUMS-Windows.txt                            - Checksums for Windows builds
+```
+
+### Verification Checklist
+
+- [ ] All platform binaries are present
+- [ ] Filenames contain correct version (0.1.5)
 - [ ] SHA256SUMS files are present
-- [ ] All platforms succeeded in CI
+- [ ] File sizes look reasonable (not too small, indicating missing content)
+- [ ] Release shows correct tag and timestamp
+- [ ] Release is marked as "Latest"
+
+## Step 10: Download and Test (Optional but Recommended)
+
+```bash
+# Download DMG (macOS example)
+gh release download v0.1.5 -p "*.dmg"
+
+# Verify checksum
+sha256sum -c SHA256SUMS-macOS.txt
+
+# Test the binary
+# Install and run the app to verify it works
+```
+
+## Troubleshooting
+
+### Problem: Binaries Still Show Old Version (e.g., 0.1.4)
+
+**Cause:** One of the three version files wasn't updated.
+
+**Solution:**
+1. Check which file is wrong: `grep -E 'version|"version"' package.json src-tauri/Cargo.toml src-tauri/tauri.conf.json`
+2. Update the wrong file(s)
+3. Commit: `git commit -am "fix: update version in [filename]"`
+4. Push: `git push origin main`
+5. Delete old tag locally and remotely:
+   ```bash
+   git tag -d v0.1.5
+   git push origin :v0.1.5
+   ```
+6. Create correct tag and push again
+
+### Problem: CI Build Failed
+
+**Check the logs:**
+```bash
+gh run view <run-id> --log | tail -100
+```
+
+**Common failures:**
+- Type check failed: `pnpm test` locally to debug
+- Rust build failed: Check Cargo.toml for syntax errors
+- Node.js SEA build failed: Check sidecar dependencies
+
+### Problem: Release Not Created
+
+**Possible causes:**
+1. Tag doesn't start with `v` (must be `vX.Y.Z`)
+2. CI workflow is still running (wait 15 minutes)
+3. CI workflow failed (check logs above)
+
+**How to recover:**
+```bash
+# Delete the tag if it's wrong
+git tag -d vX.Y.Z
+git push origin :vX.Y.Z
+
+# Fix the issue
+# Then create correct tag and push
+```
 
 ## Common Mistakes to Avoid
 
 ❌ **Mistake 1: Only updating package.json**
-- The Tauri app gets its version from `tauri.conf.json`
-- Result: Binaries labeled with old version number
+- Tauri binaries get their version from `src-tauri/tauri.conf.json`
+- Result: Filenames show wrong version (0.1.4 when you wanted 0.1.5)
+- **Prevention:** Use the version check command in Step 4
 
-❌ **Mistake 2: Creating tag without version bump commit**
-- Always bump versions first, then tag the bump commit
-- Never tag a commit that doesn't include version updates
+❌ **Mistake 2: Tagging before pushing to main**
+- Tag should be on a commit that's already pushed to main
+- Result: CI may build stale code
+- **Prevention:** Always `git push origin main` before creating tag
 
-❌ **Mistake 3: Creating tag without `v` prefix**
-- Tag must be `vX.Y.Z` not `X.Y.Z`
+❌ **Mistake 3: Forgetting the `v` prefix on tag**
+- Tag must be `vX.Y.Z` (not `X.Y.Z`)
 - CI only triggers on `v*.*.*` pattern
+- **Prevention:** Always type `git tag -a vX.Y.Z`
 
-❌ **Mistake 4: Deleting and recreating tags**
-- If you make a mistake, delete locally and remotely first:
-  ```bash
-  git tag -d vX.Y.Z
-  git push origin :vX.Y.Z  # Delete from remote
-  ```
-- Then create the correct tag
+❌ **Mistake 4: Creating tag on wrong branch**
+- Make sure you're on main: `git branch`
+- Result: Release builds from feature branch, incomplete code
+- **Prevention:** Verify with `git branch` and `git log -1`
 
-## Example: Releasing v0.1.5
+## Complete Example: Releasing v0.1.5
 
 ```bash
-# 1. Update versions in all three files
+# 1. Verify state
+git branch        # Should show * main
+git status        # Should show clean working tree
+
+# 2. Update three files
 # Edit: package.json, src-tauri/Cargo.toml, src-tauri/tauri.conf.json
+# Change all three from 0.1.4 to 0.1.5
 
-# 2. Verify all three match
-grep -n '"version"' package.json
-grep -n 'version = ' src-tauri/Cargo.toml | head -3
-grep -n '"version"' src-tauri/tauri.conf.json
+# 3. Verify versions match
+echo "=== Version Check ===" && \
+echo "package.json:" && grep '"version"' package.json && \
+echo "Cargo.toml:" && grep 'version = ' src-tauri/Cargo.toml | head -1 && \
+echo "tauri.conf.json:" && grep '"version"' src-tauri/tauri.conf.json
 
-# 3. Commit
+# 4. Commit to main
 git add package.json src-tauri/Cargo.toml src-tauri/tauri.conf.json
 git commit -m "chore: bump version to 0.1.5"
 git push origin main
 
-# 4. Tag (with v prefix!)
+# 5. Create and push tag (TRIGGERS CI!)
 git tag -a v0.1.5 -m "Release v0.1.5
 
-- Rust LTO optimizations for smaller binaries
-- Frontend code splitting for better caching"
+- Build optimizations
+- Version consistency fixes"
 
 git push origin v0.1.5
 
-# 5. Wait 10-15 minutes and verify at:
-# https://github.com/getravi/workwithme/releases
+# 6. Monitor build
+gh run list --all --limit 3
+# Wait 10-15 minutes...
+
+# 7. Verify release
+gh release view v0.1.5
+# Check https://github.com/getravi/workwithme/releases
+
+# 8. Download and test (optional)
+gh release download v0.1.5 -p "*.dmg"
+sha256sum -c SHA256SUMS-macOS.txt
 ```
 
-## Quick Check Script
+## Quick Reference
 
-Run this before creating a tag to catch mistakes early:
+| Step | Command | Purpose |
+|------|---------|---------|
+| Check state | `git branch && git status` | Ensure on main, no uncommitted changes |
+| Verify versions | `grep -E 'version\|"version"' package.json src-tauri/Cargo.toml src-tauri/tauri.conf.json` | All three must match |
+| Commit | `git add ... && git commit -m "chore: bump version to X.Y.Z" && git push origin main` | Push version bump to main |
+| Tag | `git tag -a vX.Y.Z -m "..."` | Create tag (locally) |
+| Release | `git push origin vX.Y.Z` | Push tag to trigger CI build |
+| Monitor | `gh run list` | Watch CI progress |
+| Verify | `gh release view vX.Y.Z` | Check artifacts |
 
-```bash
-#!/bin/bash
-VERSION=$(grep '"version"' package.json | grep -o '[0-9.]*' | head -1)
-echo "Checking all version files for: $VERSION"
+---
 
-echo "package.json:"
-grep '"version"' package.json
-
-echo "Cargo.toml:"
-grep 'version = ' src-tauri/Cargo.toml | head -1
-
-echo "tauri.conf.json:"
-grep '"version"' src-tauri/tauri.conf.json
-
-# Check if all match
-PACKAGE_VER=$(grep '"version"' package.json | grep -o '[0-9.]*' | head -1)
-CARGO_VER=$(grep 'version = ' src-tauri/Cargo.toml | head -1 | grep -o '[0-9.]*' | head -1)
-TAURI_VER=$(grep '"version"' src-tauri/tauri.conf.json | grep -o '[0-9.]*' | head -1)
-
-if [ "$PACKAGE_VER" = "$CARGO_VER" ] && [ "$CARGO_VER" = "$TAURI_VER" ]; then
-  echo "✅ All versions match: $PACKAGE_VER"
-else
-  echo "❌ Version mismatch!"
-  echo "  package.json: $PACKAGE_VER"
-  echo "  Cargo.toml: $CARGO_VER"
-  echo "  tauri.conf.json: $TAURI_VER"
-  exit 1
-fi
-```
+**Total Time:** ~20-30 minutes (including 10-15 min for CI build)
