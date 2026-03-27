@@ -1,6 +1,5 @@
 use crate::server::agent::{AgentSession, Message};
-use crate::server::tools::{execute_tool, ToolUseBlock, ToolResult};
-use serde_json::json;
+use crate::server::tools::{execute_tool, ToolUseBlock};
 
 /// Execute an agent loop: send message to Claude, parse response, execute tools, repeat
 pub async fn execute_agent_message(
@@ -16,7 +15,7 @@ pub async fn execute_agent_message(
     });
 
     let mut iteration = 0;
-    let mut final_response = String::new();
+    let mut final_response;
 
     loop {
         iteration += 1;

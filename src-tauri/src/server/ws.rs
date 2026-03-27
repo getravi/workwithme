@@ -1,9 +1,10 @@
 use axum::extract::ws::{WebSocket, Message};
 use futures::stream::StreamExt;
 use serde_json::json;
+use crate::server::approval::{ApprovalResponse, APPROVAL_MANAGER};
 
 /// WebSocket message types
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct WsMessage {
     pub r#type: String,
     #[serde(default)]
@@ -18,14 +19,37 @@ pub struct WsMessage {
 pub async fn handle_socket(mut socket: WebSocket) {
     println!("[ws] new connection");
 
+    const MAX_MESSAGE_SIZE: usize = 1024 * 1024; // 1MB limit
+
     while let Some(msg) = socket.next().await {
         match msg {
             Ok(Message::Text(text)) => {
+                // Validate message size
+                if text.len() > MAX_MESSAGE_SIZE {
+                    eprintln!("[ws] message too large: {} bytes", text.len());
+                    let error_response = json!({
+                        "type": "error",
+                        "error": "Message exceeds maximum size (1MB)"
+                    }).to_string();
+                    let _ = socket.send(Message::Text(error_response.into())).await;
+                    break;
+                }
+
                 println!("[ws] received: {}", text);
 
                 // Try to parse as JSON message
                 match serde_json::from_str::<WsMessage>(&text) {
                     Ok(ws_msg) => {
+                        // Validate message structure
+                        if let Err(e) = validate_ws_message(&ws_msg) {
+                            let error_response = json!({
+                                "type": "error",
+                                "error": e
+                            }).to_string();
+                            let _ = socket.send(Message::Text(error_response.into())).await;
+                            continue;
+                        }
+
                         // Route message based on type
                         handle_ws_message(&ws_msg, &mut socket).await;
                     }
@@ -33,7 +57,7 @@ pub async fn handle_socket(mut socket: WebSocket) {
                         eprintln!("[ws] failed to parse message: {}", e);
                         let error_response = json!({
                             "type": "error",
-                            "error": "Invalid message format"
+                            "error": "Invalid JSON message format"
                         }).to_string();
                         let _ = socket.send(Message::Text(error_response.into())).await;
                     }
@@ -74,9 +98,61 @@ pub async fn handle_socket(mut socket: WebSocket) {
     println!("[ws] connection finished");
 }
 
+/// Validate WebSocket message structure and required fields
+fn validate_ws_message(msg: &WsMessage) -> Result<(), String> {
+    // Check that message type is not empty
+    if msg.r#type.is_empty() {
+        return Err("Message type cannot be empty".to_string());
+    }
+
+    // Validate message type format (alphanumeric, dash, colon)
+    if !msg.r#type.chars().all(|c| c.is_alphanumeric() || c == ':' || c == '-' || c == '_') {
+        return Err("Invalid message type format".to_string());
+    }
+
+    // Validate session_id format if present
+    if !msg.session_id.is_empty() && msg.session_id.len() > 36 {
+        return Err("Session ID too long".to_string());
+    }
+
+    // Validate content size
+    if msg.content.len() > 1024 * 1024 {
+        return Err("Message content too large".to_string());
+    }
+
+    // Validate based on message type
+    match msg.r#type.as_str() {
+        "approval:response" => {
+            if msg.data.is_null() {
+                return Err("approval:response requires data field".to_string());
+            }
+        }
+        _ => {}
+    }
+
+    Ok(())
+}
+
 /// Route WebSocket messages to appropriate handlers
 async fn handle_ws_message(msg: &WsMessage, socket: &mut WebSocket) {
     match msg.r#type.as_str() {
+        "approval:response" => {
+            // Handle approval response from frontend
+            if let Ok(approval_response) = serde_json::from_value::<ApprovalResponse>(msg.data.clone()) {
+                if let Some(manager) = APPROVAL_MANAGER.get() {
+                    let success = manager.respond(approval_response);
+                    let response = json!({
+                        "type": "approval:ack",
+                        "success": success
+                    }).to_string();
+                    let _ = socket.send(Message::Text(response.into())).await;
+                } else {
+                    eprintln!("[ws] approval manager not initialized");
+                }
+            } else {
+                eprintln!("[ws] failed to parse approval response");
+            }
+        }
         "agent:message" => {
             // Agent message - will be handled by Phase 3a integration
             let response = json!({
@@ -109,5 +185,149 @@ async fn handle_ws_message(msg: &WsMessage, socket: &mut WebSocket) {
             }).to_string();
             let _ = socket.send(Message::Text(response.into())).await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ws_message_structure() {
+        let msg = WsMessage {
+            r#type: "agent:message".to_string(),
+            session_id: "session-123".to_string(),
+            content: "Hello".to_string(),
+            data: json!({"key": "value"}),
+        };
+
+        assert_eq!(msg.r#type, "agent:message");
+        assert_eq!(msg.session_id, "session-123");
+        assert_eq!(msg.content, "Hello");
+    }
+
+    #[test]
+    fn test_ws_message_deserialization() {
+        let json_str = r#"{
+            "type": "approval:response",
+            "session_id": "sess-456",
+            "content": "response",
+            "data": {"approved": true}
+        }"#;
+
+        let msg: WsMessage = serde_json::from_str(json_str).unwrap();
+        assert_eq!(msg.r#type, "approval:response");
+    }
+
+    #[test]
+    fn test_ws_message_with_minimal_fields() {
+        let json_str = r#"{"type": "test"}"#;
+
+        let msg: WsMessage = serde_json::from_str(json_str).unwrap();
+        assert_eq!(msg.r#type, "test");
+        assert!(msg.session_id.is_empty());
+        assert!(msg.content.is_empty());
+    }
+
+    #[test]
+    fn test_ws_message_types() {
+        let message_types = vec![
+            "approval:response",
+            "agent:message",
+            "session:list",
+            "session:load",
+            "ping",
+        ];
+
+        for msg_type in message_types {
+            let msg = WsMessage {
+                r#type: msg_type.to_string(),
+                session_id: String::new(),
+                content: String::new(),
+                data: json!({}),
+            };
+
+            assert_eq!(msg.r#type, msg_type);
+        }
+    }
+
+    #[test]
+    fn test_ws_message_with_complex_data() {
+        let msg = WsMessage {
+            r#type: "agent:message".to_string(),
+            session_id: "sess-789".to_string(),
+            content: "test message".to_string(),
+            data: json!({
+                "nested": {
+                    "level1": {
+                        "level2": "value"
+                    }
+                },
+                "array": [1, 2, 3],
+                "boolean": true
+            }),
+        };
+
+        assert!(msg.data.get("nested").is_some());
+        assert!(msg.data.get("array").is_some());
+    }
+
+    #[test]
+    fn test_ws_message_serialization() {
+        let msg = WsMessage {
+            r#type: "test:message".to_string(),
+            session_id: "test-session".to_string(),
+            content: "test".to_string(),
+            data: json!({"test": true}),
+        };
+
+        let json = serde_json::to_string(&msg).unwrap();
+        let parsed: WsMessage = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.r#type, msg.r#type);
+        assert_eq!(parsed.session_id, msg.session_id);
+    }
+
+    #[test]
+    fn test_ws_error_message_format() {
+        let error_response = json!({
+            "type": "error",
+            "error": "Test error message"
+        });
+
+        assert_eq!(error_response["type"], "error");
+        assert!(error_response.get("error").is_some());
+    }
+
+    #[test]
+    fn test_approval_response_message() {
+        let msg = WsMessage {
+            r#type: "approval:response".to_string(),
+            session_id: String::new(),
+            content: String::new(),
+            data: json!({
+                "request_id": "req-123",
+                "approved": true,
+                "reason": "User approved"
+            }),
+        };
+
+        assert_eq!(msg.r#type, "approval:response");
+        assert!(msg.data.get("request_id").is_some());
+        assert!(msg.data.get("approved").is_some());
+    }
+
+    #[test]
+    fn test_agent_message_with_session() {
+        let msg = WsMessage {
+            r#type: "agent:message".to_string(),
+            session_id: "agent-sess-001".to_string(),
+            content: "Process this request".to_string(),
+            data: json!({"prompt": "What is 2+2?"}),
+        };
+
+        assert_eq!(msg.r#type, "agent:message");
+        assert!(!msg.session_id.is_empty());
+        assert!(!msg.content.is_empty());
     }
 }

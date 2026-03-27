@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
-use std::process::Command;
+use crate::server::sandbox::{Sandbox, SandboxProfile};
+use crate::server::approval::{create_write_file_approval_request, APPROVAL_MANAGER};
 
 /// Tool use block from Claude response
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -34,6 +35,42 @@ pub async fn execute_tool(tool: &ToolUseBlock) -> ToolResult {
     }
 }
 
+/// Validate bash command for safety
+fn validate_bash_command(cmd: &str) -> Result<(), String> {
+    // Whitelist of safe base commands
+    let allowed = vec![
+        "ls", "cat", "grep", "find", "ps", "wc", "head", "tail",
+        "echo", "pwd", "whoami", "date", "uptime", "uname",
+        "df", "du", "free", "top", "netstat", "ss", "curl", "wget"
+    ];
+
+    let base_cmd = cmd.split_whitespace().next()
+        .ok_or("Empty command not allowed".to_string())?;
+
+    if !allowed.contains(&base_cmd) {
+        return Err(format!(
+            "Command '{}' not allowed. Allowed commands: {}",
+            base_cmd,
+            allowed.join(", ")
+        ));
+    }
+
+    // Reject dangerous patterns
+    let dangerous_patterns = vec![";", "|", "&", "$", "`", "(", ")", "{", "}", ">>", ">", "<"];
+    for pattern in dangerous_patterns {
+        if cmd.contains(pattern) {
+            return Err(format!("Command contains restricted character: '{}'", pattern));
+        }
+    }
+
+    // Reject path traversal attempts
+    if cmd.contains("..") {
+        return Err("Path traversal (..) is not allowed".to_string());
+    }
+
+    Ok(())
+}
+
 /// Execute a bash command
 async fn execute_bash(tool: &ToolUseBlock) -> ToolResult {
     let command = match tool.input.get("command") {
@@ -56,13 +93,21 @@ async fn execute_bash(tool: &ToolUseBlock) -> ToolResult {
         }
     };
 
+    // Validate command safety before execution
+    if let Err(e) = validate_bash_command(command) {
+        return ToolResult {
+            tool_use_id: tool.id.clone(),
+            content: format!("Command validation failed: {}", e),
+            is_error: true,
+        };
+    }
+
     println!("[tools] executing bash: {}", command);
 
-    // Execute the command
-    let output = Command::new("sh")
-        .arg("-c")
-        .arg(command)
-        .output();
+    // Execute the command in a sandbox (read-only by default for security)
+    // Phase 3d will add user approval workflows to allow WriteHome profile
+    let sandbox = Sandbox::new(SandboxProfile::ReadOnly);
+    let output = sandbox.execute(command);
 
     match output {
         Ok(output) => {
@@ -223,6 +268,23 @@ async fn execute_write_file(tool: &ToolUseBlock) -> ToolResult {
 
     println!("[tools] writing file: {}", expanded_path.display());
 
+    // Log approval request (approval system available for Phase 3d integration)
+    // In MVP, write operations proceed immediately; full approval workflow in Phase 3d+
+    if let Some(_manager) = APPROVAL_MANAGER.get() {
+        let approval_request = create_write_file_approval_request(
+            expanded_path.to_string_lossy().as_ref(),
+            content,
+        );
+        println!(
+            "[tools] approval request logged for write_file: {}",
+            approval_request.id
+        );
+        // Note: In Phase 3d+, we would wait for approval here using:
+        // let rx = manager.request_approval(approval_request);
+        // let approved = rx.await.unwrap_or(false);
+        // if !approved { return error... }
+    }
+
     match fs::write(&expanded_path, content) {
         Ok(_) => ToolResult {
             tool_use_id: tool.id.clone(),
@@ -287,3 +349,123 @@ async fn execute_list_directory(tool: &ToolUseBlock) -> ToolResult {
         },
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_tool_use_block_structure() {
+        let tool = ToolUseBlock {
+            id: "tool-123".to_string(),
+            name: "bash".to_string(),
+            input: json!({"command": "ls"}),
+        };
+
+        assert_eq!(tool.id, "tool-123");
+        assert_eq!(tool.name, "bash");
+        assert!(tool.input.get("command").is_some());
+    }
+
+    #[test]
+    fn test_tool_result_success() {
+        let result = ToolResult {
+            tool_use_id: "tool-123".to_string(),
+            content: "Success".to_string(),
+            is_error: false,
+        };
+
+        assert!(!result.is_error);
+        assert_eq!(result.content, "Success");
+    }
+
+    #[test]
+    fn test_tool_result_error() {
+        let result = ToolResult {
+            tool_use_id: "tool-456".to_string(),
+            content: "Error occurred".to_string(),
+            is_error: true,
+        };
+
+        assert!(result.is_error);
+        assert!(result.content.contains("Error"));
+    }
+
+    #[test]
+    fn test_tool_use_block_serialization() {
+        let tool = ToolUseBlock {
+            id: "test-id".to_string(),
+            name: "test-tool".to_string(),
+            input: json!({"param": "value"}),
+        };
+
+        let json = serde_json::to_string(&tool).unwrap();
+        let parsed: ToolUseBlock = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.id, "test-id");
+        assert_eq!(parsed.name, "test-tool");
+    }
+
+    #[test]
+    fn test_tool_result_serialization() {
+        let result = ToolResult {
+            tool_use_id: "id-123".to_string(),
+            content: "Output text".to_string(),
+            is_error: false,
+        };
+
+        let json = serde_json::to_string(&result).unwrap();
+        let parsed: ToolResult = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.tool_use_id, "id-123");
+        assert_eq!(parsed.content, "Output text");
+        assert!(!parsed.is_error);
+    }
+
+    #[test]
+    fn test_various_tool_types() {
+        let tools = vec!["bash", "read_file", "write_file", "list_directory"];
+
+        for tool_name in tools {
+            let tool = ToolUseBlock {
+                id: format!("tool-{}", tool_name),
+                name: tool_name.to_string(),
+                input: json!({}),
+            };
+
+            assert_eq!(tool.name, tool_name);
+        }
+    }
+
+    #[test]
+    fn test_unknown_tool_name() {
+        let tool = ToolUseBlock {
+            id: "unknown-tool".to_string(),
+            name: "nonexistent_tool".to_string(),
+            input: json!({}),
+        };
+
+        assert_eq!(tool.name, "nonexistent_tool");
+    }
+
+    #[test]
+    fn test_tool_input_with_complex_json() {
+        let tool = ToolUseBlock {
+            id: "complex-tool".to_string(),
+            name: "bash".to_string(),
+            input: json!({
+                "command": "ls -la",
+                "working_dir": "/tmp",
+                "timeout": 30,
+                "env": {
+                    "PATH": "/usr/bin"
+                }
+            }),
+        };
+
+        assert!(tool.input.get("working_dir").is_some());
+        assert!(tool.input.get("timeout").is_some());
+    }
+}
+

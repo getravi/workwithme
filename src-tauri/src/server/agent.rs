@@ -147,3 +147,114 @@ pub async fn call_claude_api(
 
     Ok(text)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_create_session() {
+        let session = create_session();
+        assert!(!session.id.is_empty());
+        assert_eq!(session.messages.len(), 0);
+    }
+
+    #[test]
+    fn test_session_has_uuid_format() {
+        let session = create_session();
+        assert_eq!(session.id.len(), 36);
+        assert!(session.id.contains('-'));
+    }
+
+    #[test]
+    fn test_sessions_have_unique_ids() {
+        let session1 = create_session();
+        let session2 = create_session();
+        assert_ne!(session1.id, session2.id);
+    }
+
+    #[test]
+    fn test_session_timestamps() {
+        let session = create_session();
+        assert_eq!(session.created_at, session.updated_at);
+        // Should be valid RFC3339 format with ISO 8601 datetime
+        assert!(session.created_at.contains('T'));
+        // Should have some sort of timezone info (Z or offset like +XX:XX or -XX:XX)
+        assert!(session.created_at.len() > 10); // Minimum valid RFC3339 format
+    }
+
+    #[test]
+    fn test_message_structure() {
+        let msg = Message {
+            role: "user".to_string(),
+            content: "Hello".to_string(),
+        };
+        assert_eq!(msg.role, "user");
+        assert_eq!(msg.content, "Hello");
+    }
+
+    #[test]
+    fn test_default_model_is_claude() {
+        assert!(DEFAULT_MODEL.contains("claude"));
+    }
+
+    #[test]
+    fn test_default_max_tokens() {
+        assert!(DEFAULT_MAX_TOKENS > 0);
+        assert!(DEFAULT_MAX_TOKENS <= 8192);
+    }
+
+    #[test]
+    fn test_system_prompt() {
+        let prompt = get_system_prompt();
+        assert!(!prompt.is_empty());
+        assert!(prompt.contains("Claude"));
+        assert!(prompt.contains("Anthropic"));
+    }
+
+    #[test]
+    fn test_agent_session_serialization() {
+        let session = create_session();
+        let json = serde_json::to_string(&session).unwrap();
+        let parsed: AgentSession = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.id, session.id);
+        assert_eq!(parsed.created_at, session.created_at);
+        assert_eq!(parsed.messages.len(), session.messages.len());
+    }
+
+    #[test]
+    fn test_claude_message_structure() {
+        let msg = ClaudeMessage {
+            role: "assistant".to_string(),
+            content: "Response text".to_string(),
+        };
+
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("assistant"));
+        assert!(json.contains("Response text"));
+    }
+
+    #[test]
+    fn test_content_block_with_text() {
+        let block = ContentBlock {
+            r#type: "text".to_string(),
+            text: Some("Some text".to_string()),
+        };
+
+        assert_eq!(block.r#type, "text");
+        assert_eq!(block.text, Some("Some text".to_string()));
+    }
+
+    #[test]
+    fn test_content_block_without_text() {
+        let block = ContentBlock {
+            r#type: "tool_use".to_string(),
+            text: None,
+        };
+
+        assert_eq!(block.r#type, "tool_use");
+        assert!(block.text.is_none());
+    }
+}
+

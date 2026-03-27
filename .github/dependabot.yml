@@ -12,12 +12,6 @@ updates:
     schedule:
       interval: "weekly"
 
-  # Sidecar (sidecar/ pnpm workspace)
-  - package-ecosystem: "npm"
-    directory: "/sidecar"
-    schedule:
-      interval: "weekly"
-
   # Rust / Cargo
   - package-ecosystem: "cargo"
     directory: "/src-tauri"

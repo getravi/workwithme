@@ -9,17 +9,11 @@ lerna-debug.log*
 
 # Node
 node_modules
-dist
 dist-ssr
 npm-debug.log
 
-# Sidecar specific
-sidecar/node_modules
-sidecar/.node-cache/
-sidecar/.pkg-cache/
-
-# Compiled sidecar binaries (built by build:sidecar)
-src-tauri/binaries/
+# Frontend build artifacts (embedded in Rust binary via rust-embed)
+dist/
 
 # Claude Code superpowers skills cache
 .superpowers/

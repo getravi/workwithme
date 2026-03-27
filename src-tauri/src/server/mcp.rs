@@ -266,3 +266,111 @@ pub fn get_catalog() -> Vec<CatalogEntry> {
         // Add more as needed - keeping it focused on most common services for Phase 2
     ]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_mcp_config_path() {
+        let path = mcp_config_path();
+        assert!(path.to_string_lossy().contains(".pi/agent/mcp.json"));
+    }
+
+    #[test]
+    fn test_catalog_has_entries() {
+        let catalog = get_catalog();
+        assert!(!catalog.is_empty());
+    }
+
+    #[test]
+    fn test_catalog_entry_structure() {
+        let catalog = get_catalog();
+        for entry in catalog {
+            assert!(!entry.slug.is_empty());
+            assert!(!entry.name.is_empty());
+            assert!(!entry.description.is_empty());
+            assert!(!entry.category.is_empty());
+            assert!(!entry.url.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_catalog_has_productivity_entries() {
+        let catalog = get_catalog();
+        let has_productivity = catalog
+            .iter()
+            .any(|e| e.category == "Productivity");
+        assert!(has_productivity);
+    }
+
+    #[test]
+    fn test_catalog_has_google_entries() {
+        let catalog = get_catalog();
+        let has_google = catalog
+            .iter()
+            .any(|e| e.category == "Google");
+        assert!(has_google);
+    }
+
+    #[test]
+    fn test_catalog_has_multiple_categories() {
+        let catalog = get_catalog();
+        let categories: std::collections::HashSet<&String> = catalog
+            .iter()
+            .map(|e| &e.category)
+            .collect();
+        assert!(categories.len() > 1);
+    }
+
+    #[test]
+    fn test_catalog_slugs_are_unique() {
+        let catalog = get_catalog();
+        let slugs: Vec<&String> = catalog.iter().map(|e| &e.slug).collect();
+        let unique_slugs: std::collections::HashSet<_> = slugs.iter().collect();
+        assert_eq!(slugs.len(), unique_slugs.len());
+    }
+
+    #[test]
+    fn test_catalog_entry_serialization() {
+        let entry = CatalogEntry {
+            slug: "test".to_string(),
+            name: "Test MCP".to_string(),
+            description: "A test MCP entry".to_string(),
+            category: "Test".to_string(),
+            url: "https://test.example.com".to_string(),
+            docs_url: Some("https://test.example.com/docs".to_string()),
+            requires_token: true,
+            logo_svg: None,
+        };
+
+        let json = serde_json::to_string(&entry).unwrap();
+        let parsed: CatalogEntry = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.slug, "test");
+        assert_eq!(parsed.name, "Test MCP");
+        assert_eq!(parsed.requires_token, true);
+    }
+
+    #[test]
+    fn test_default_mcp_config_structure() {
+        let default_config = json!({
+            "mcpServers": {}
+        });
+
+        assert!(default_config["mcpServers"].is_object());
+    }
+
+    #[test]
+    fn test_all_entries_have_token_requirement_status() {
+        let catalog = get_catalog();
+
+        let requires_token_count = catalog
+            .iter()
+            .filter(|e| e.requires_token)
+            .count();
+
+        // All entries should have a requires_token value set
+        assert_eq!(requires_token_count, catalog.len());
+    }
+}

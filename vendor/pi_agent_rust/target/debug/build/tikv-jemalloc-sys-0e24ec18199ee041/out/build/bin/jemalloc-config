@@ -1,0 +1,83 @@
+#!/bin/sh
+
+usage() {
+	cat <<EOF
+Usage:
+  /Users/ravi/Documents/Dev/workwithme/vendor/pi_agent_rust/target/debug/build/tikv-jemalloc-sys-0e24ec18199ee041/out/bin/jemalloc-config <option>
+Options:
+  --help | -h  : Print usage.
+  --version    : Print jemalloc version.
+  --revision   : Print shared library revision number.
+  --config     : Print configure options used to build jemalloc.
+  --prefix     : Print installation directory prefix.
+  --bindir     : Print binary installation directory.
+  --datadir    : Print data installation directory.
+  --includedir : Print include installation directory.
+  --libdir     : Print library installation directory.
+  --mandir     : Print manual page installation directory.
+  --cc         : Print compiler used to build jemalloc.
+  --cflags     : Print compiler flags used to build jemalloc.
+  --cppflags   : Print preprocessor flags used to build jemalloc.
+  --cxxflags   : Print C++ compiler flags used to build jemalloc.
+  --ldflags    : Print library flags used to build jemalloc.
+  --libs       : Print libraries jemalloc was linked against.
+EOF
+}
+
+prefix="/Users/ravi/Documents/Dev/workwithme/vendor/pi_agent_rust/target/debug/build/tikv-jemalloc-sys-0e24ec18199ee041/out"
+exec_prefix="/Users/ravi/Documents/Dev/workwithme/vendor/pi_agent_rust/target/debug/build/tikv-jemalloc-sys-0e24ec18199ee041/out"
+
+case "$1" in
+--help | -h)
+	usage
+	exit 0
+	;;
+--version)
+	echo "5.3.0-1-ge13ca993e8ccb9ba9847cc330696e02839f328f7"
+	;;
+--revision)
+	echo "2"
+	;;
+--config)
+	echo "--with-version=5.3.0-1-ge13ca993e8ccb9ba9847cc330696e02839f328f7 --disable-cxx --enable-doc=no --enable-shared=no --with-jemalloc-prefix=_rjem_ --with-private-namespace=_rjem_ --disable-stats --host=aarch64-apple-darwin --build=aarch64-apple-darwin --prefix=/Users/ravi/Documents/Dev/workwithme/vendor/pi_agent_rust/target/debug/build/tikv-jemalloc-sys-0e24ec18199ee041/out build_alias=aarch64-apple-darwin host_alias=aarch64-apple-darwin CC=cc 'CFLAGS=-O0 -ffunction-sections -fdata-sections -fPIC -g -gdwarf-2 -fno-omit-frame-pointer --target=arm64-apple-macosx -mmacosx-version-min=26.2 -Wall' 'LDFLAGS=-O0 -ffunction-sections -fdata-sections -fPIC -g -gdwarf-2 -fno-omit-frame-pointer --target=arm64-apple-macosx -mmacosx-version-min=26.2 -Wall' 'CPPFLAGS=-O0 -ffunction-sections -fdata-sections -fPIC -g -gdwarf-2 -fno-omit-frame-pointer --target=arm64-apple-macosx -mmacosx-version-min=26.2 -Wall'"
+	;;
+--prefix)
+	echo "/Users/ravi/Documents/Dev/workwithme/vendor/pi_agent_rust/target/debug/build/tikv-jemalloc-sys-0e24ec18199ee041/out"
+	;;
+--bindir)
+	echo "/Users/ravi/Documents/Dev/workwithme/vendor/pi_agent_rust/target/debug/build/tikv-jemalloc-sys-0e24ec18199ee041/out/bin"
+	;;
+--datadir)
+	echo "/Users/ravi/Documents/Dev/workwithme/vendor/pi_agent_rust/target/debug/build/tikv-jemalloc-sys-0e24ec18199ee041/out/share"
+	;;
+--includedir)
+	echo "/Users/ravi/Documents/Dev/workwithme/vendor/pi_agent_rust/target/debug/build/tikv-jemalloc-sys-0e24ec18199ee041/out/include"
+	;;
+--libdir)
+	echo "/Users/ravi/Documents/Dev/workwithme/vendor/pi_agent_rust/target/debug/build/tikv-jemalloc-sys-0e24ec18199ee041/out/lib"
+	;;
+--mandir)
+	echo "/Users/ravi/Documents/Dev/workwithme/vendor/pi_agent_rust/target/debug/build/tikv-jemalloc-sys-0e24ec18199ee041/out/share/man"
+	;;
+--cc)
+	echo "cc"
+	;;
+--cflags)
+	echo "-std=gnu11 -Werror=unknown-warning-option -Wall -Wextra -Wshorten-64-to-32 -Wsign-compare -Wundef -Wno-format-zero-length -Wpointer-arith -Wno-missing-braces -Wno-missing-field-initializers -pipe -g3 -Wimplicit-fallthrough -O3 -funroll-loops -O0 -ffunction-sections -fdata-sections -fPIC -g -gdwarf-2 -fno-omit-frame-pointer --target=arm64-apple-macosx -mmacosx-version-min=26.2 -Wall"
+	;;
+--cppflags)
+	echo "-O0 -ffunction-sections -fdata-sections -fPIC -g -gdwarf-2 -fno-omit-frame-pointer --target=arm64-apple-macosx -mmacosx-version-min=26.2 -Wall -D_REENTRANT"
+	;;
+--cxxflags)
+	echo ""
+	;;
+--ldflags)
+	echo "-O0 -ffunction-sections -fdata-sections -fPIC -g -gdwarf-2 -fno-omit-frame-pointer --target=arm64-apple-macosx -mmacosx-version-min=26.2 -Wall "
+	;;
+--libs)
+	echo "-pthread"
+	;;
+*)
+	usage
+	exit 1
+esac

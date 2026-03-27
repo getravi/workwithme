@@ -1,16 +1,16 @@
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
 use uuid::Uuid;
 
 /// Get the sessions directory path (~/.pi/sessions)
-fn sessions_dir() -> PathBuf {
+pub fn sessions_dir() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "~".to_string());
     PathBuf::from(home).join(".pi/sessions")
 }
 
 /// Get the archive directory path (~/.pi/sessions/archive)
-fn archive_dir() -> PathBuf {
+pub fn archive_dir() -> PathBuf {
     sessions_dir().join("archive")
 }
 
@@ -99,4 +99,64 @@ pub fn archive_session(id: &str) -> Result<bool, String> {
     fs::rename(&source, &dest).map_err(|e| format!("Failed to archive session: {}", e))?;
 
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_sessions_dir_path() {
+        let path = sessions_dir();
+        assert!(path.to_string_lossy().contains(".pi/sessions"));
+    }
+
+    #[test]
+    fn test_archive_dir_path() {
+        let path = archive_dir();
+        assert!(path.to_string_lossy().contains(".pi/sessions/archive"));
+    }
+
+    #[test]
+    fn test_archive_is_subdir_of_sessions() {
+        let sessions = sessions_dir();
+        let archive = archive_dir();
+
+        let archive_str = archive.to_string_lossy();
+        let sessions_str = sessions.to_string_lossy();
+
+        assert!(archive_str.contains(&sessions_str.as_ref()));
+    }
+
+    #[test]
+    fn test_session_json_filename_format() {
+        let id = "test-session-id";
+        let filename = format!("{}.json", id);
+        assert_eq!(filename, "test-session-id.json");
+        assert!(filename.ends_with(".json"));
+    }
+
+    #[test]
+    fn test_session_data_with_various_json_types() {
+        // Test that session data can hold various JSON structures
+        let test_cases: Vec<serde_json::Value> = vec![
+            json!({"id": "test1", "name": "Session 1"}),
+            json!({"messages": [], "metadata": null}),
+            json!({"nested": {"deep": {"value": 42}}}),
+            json!({"array": [1, 2, 3, 4, 5]}),
+        ];
+
+        for data in test_cases {
+            assert!(data.is_object());
+        }
+    }
+
+    #[test]
+    fn test_uuid_v4_format() {
+        let id = Uuid::new_v4().to_string();
+        // UUID v4 has 36 characters (including hyphens)
+        assert_eq!(id.len(), 36);
+        assert!(id.contains('-'));
+    }
 }

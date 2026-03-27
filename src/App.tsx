@@ -177,7 +177,7 @@ function App() {
   }, [fetchSessions, fetchProject, fetchModels]);
 
   useEffect(() => {
-    // Connect to sidecar websocket
+    // Connect to backend websocket
     const connectWs = () => {
       // Clear any pending reconnect
       if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);

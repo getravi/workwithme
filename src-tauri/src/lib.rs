@@ -24,6 +24,27 @@ pub fn run() {
 /// Start the HTTP server on port 4242 unless it's already in use.
 /// Called from a background tokio task.
 async fn start_http_server() {
+    // Initialize approval manager
+    server::approval::init_approval_manager();
+
+    // Initialize database and run migrations
+    match server::db::get_pool().await {
+        Ok(pool) => {
+            // Run JSON migration on first startup
+            if let Err(e) = server::db::migrate_from_json(&pool).await {
+                eprintln!("[http-server] migration error: {}", e);
+            }
+        }
+        Err(e) => {
+            eprintln!("[http-server] database initialization failed: {}", e);
+        }
+    }
+
+    // Initialize plugin system
+    if let Err(e) = server::plugins::init_plugins().await {
+        eprintln!("[http-server] plugin initialization failed: {}", e);
+    }
+
     if is_port_bound(4242) {
         println!("[http-server] port 4242 already in use — skipping auto-start");
         return;
