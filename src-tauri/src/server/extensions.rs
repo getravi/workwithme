@@ -72,7 +72,6 @@ pub async fn generate_session_label_with_fallback(api_key: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     #[test]
     fn test_label_cleanup() {

@@ -222,9 +222,6 @@ mod tests {
 
     #[test]
     fn test_session_has_created_at_metadata() {
-        let data = json!({"name": "Test Session"});
-        let id = Uuid::new_v4().to_string();
-
         // Check that created_at is a valid RFC3339 timestamp
         let now = Utc::now();
         let future = now + Duration::minutes(1);

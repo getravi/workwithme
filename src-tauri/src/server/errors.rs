@@ -159,7 +159,7 @@ mod tests {
 
     #[test]
     fn test_success_response() {
-        let response = success_response(json!({"id": "123", "name": "Test"}));
+        let _response = success_response(json!({"id": "123", "name": "Test"}));
         // Response is wrapped in Json, so we'd need to serialize to test
         // This just verifies it compiles and creates a response
         assert!(true);

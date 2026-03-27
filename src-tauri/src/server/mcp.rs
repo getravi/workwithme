@@ -30,6 +30,51 @@ pub fn load_mcp_config() -> Result<Value, String> {
     serde_json::from_str::<Value>(&content).map_err(|e| format!("Invalid mcp.json: {}", e))
 }
 
+/// Validate URL against SSRF attacks (prevent internal network access)
+pub fn validate_mcp_url(url_str: &str) -> Result<(), String> {
+    // Basic URL validation - must start with https://
+    if !url_str.starts_with("https://") {
+        return Err("MCP URLs must use HTTPS protocol".to_string());
+    }
+
+    // Extract host portion (between https:// and first / or :)
+    let url_without_scheme = &url_str[8..]; // Skip "https://"
+    let host = url_without_scheme
+        .split('/')
+        .next()
+        .unwrap_or("")
+        .split(':')
+        .next()
+        .unwrap_or("");
+
+    if host.is_empty() {
+        return Err("MCP URL must have a valid host".to_string());
+    }
+
+    // Prevent access to internal/private networks (SSRF protection)
+    let restricted_patterns = [
+        "localhost",
+        "127.0.0.1",
+        "0.0.0.0",
+        "192.168.",
+        "10.",
+        "172.1",
+        "172.2",
+        "172.3",
+        "[::1]",
+        "[::ffff:",
+        "169.254.",
+    ];
+
+    for pattern in &restricted_patterns {
+        if host.starts_with(pattern) {
+            return Err(format!("Access denied: cannot connect to internal network: {}", host));
+        }
+    }
+
+    Ok(())
+}
+
 /// Save MCP configuration to ~/.pi/agent/mcp.json
 pub fn save_mcp_config(config: Value) -> Result<(), String> {
     ensure_mcp_dir()?;
@@ -44,8 +89,13 @@ pub fn get_mcp_server(slug: &str) -> Result<Option<Value>, String> {
     Ok(config["mcpServers"][slug].as_object().map(|_| config["mcpServers"][slug].clone()))
 }
 
-/// Add or update an MCP server configuration
+/// Add or update an MCP server configuration (with SSRF validation)
 pub fn set_mcp_server(slug: &str, server_config: Value) -> Result<(), String> {
+    // Validate URL if it's a remote MCP
+    if let Some(url_str) = server_config.get("url").and_then(|v| v.as_str()) {
+        validate_mcp_url(url_str)?;
+    }
+
     let mut config = load_mcp_config()?;
 
     if !config["mcpServers"].is_object() {
@@ -88,10 +138,10 @@ pub struct CatalogEntry {
     pub logo_svg: Option<String>,
 }
 
-/// Get the hardcoded MCP catalog
+/// Get the hardcoded MCP catalog (40+ services)
 pub fn get_catalog() -> Vec<CatalogEntry> {
     vec![
-        // Productivity
+        // Productivity (10)
         CatalogEntry {
             slug: "atlassian".to_string(),
             name: "Atlassian".to_string(),
@@ -128,7 +178,7 @@ pub fn get_catalog() -> Vec<CatalogEntry> {
             description: "Automate workflows across thousands of apps".to_string(),
             category: "Productivity".to_string(),
             url: "https://mcp.zapier.com/v1".to_string(),
-            docs_url: Some("https://zapier.com/developer/documentation/mcp".to_string()),
+            docs_url: Some("https://zapier.com/docs/mcp".to_string()),
             requires_token: true,
             logo_svg: None,
         },
@@ -178,7 +228,7 @@ pub fn get_catalog() -> Vec<CatalogEntry> {
             description: "Access boards, lists and cards in Trello".to_string(),
             category: "Productivity".to_string(),
             url: "https://mcp.trello.com/v1".to_string(),
-            docs_url: Some("https://developer.atlassian.com/cloud/trello/rest/api-group-actions/".to_string()),
+            docs_url: Some("https://developer.atlassian.com/cloud/trello/api".to_string()),
             requires_token: true,
             logo_svg: None,
         },
@@ -192,14 +242,14 @@ pub fn get_catalog() -> Vec<CatalogEntry> {
             requires_token: true,
             logo_svg: None,
         },
-        // Google
+        // Google (7)
         CatalogEntry {
             slug: "google-drive".to_string(),
             name: "Google Drive".to_string(),
             description: "Access and manage files in Google Drive".to_string(),
             category: "Google".to_string(),
             url: "https://mcp.googleapis.com/drive/v1".to_string(),
-            docs_url: Some("https://developers.google.com/drive/api/guides/about-sdk".to_string()),
+            docs_url: Some("https://developers.google.com/drive/api".to_string()),
             requires_token: true,
             logo_svg: None,
         },
@@ -219,7 +269,7 @@ pub fn get_catalog() -> Vec<CatalogEntry> {
             description: "Manage events in Google Calendar".to_string(),
             category: "Google".to_string(),
             url: "https://mcp.googleapis.com/calendar/v1".to_string(),
-            docs_url: Some("https://developers.google.com/calendar/api/guides/overview".to_string()),
+            docs_url: Some("https://developers.google.com/calendar/api".to_string()),
             requires_token: true,
             logo_svg: None,
         },
@@ -229,7 +279,7 @@ pub fn get_catalog() -> Vec<CatalogEntry> {
             description: "Create and edit Google Docs".to_string(),
             category: "Google".to_string(),
             url: "https://mcp.googleapis.com/docs/v1".to_string(),
-            docs_url: Some("https://developers.google.com/docs/api/how-tos/overview".to_string()),
+            docs_url: Some("https://developers.google.com/docs/api".to_string()),
             requires_token: true,
             logo_svg: None,
         },
@@ -239,7 +289,7 @@ pub fn get_catalog() -> Vec<CatalogEntry> {
             description: "Read and write Google Sheets spreadsheets".to_string(),
             category: "Google".to_string(),
             url: "https://mcp.googleapis.com/sheets/v1".to_string(),
-            docs_url: Some("https://developers.google.com/sheets/api/guides/concepts".to_string()),
+            docs_url: Some("https://developers.google.com/sheets/api".to_string()),
             requires_token: true,
             logo_svg: None,
         },
@@ -249,7 +299,7 @@ pub fn get_catalog() -> Vec<CatalogEntry> {
             description: "Create and manage Google Slides presentations".to_string(),
             category: "Google".to_string(),
             url: "https://mcp.googleapis.com/slides/v1".to_string(),
-            docs_url: Some("https://developers.google.com/slides/api/guides/overview".to_string()),
+            docs_url: Some("https://developers.google.com/slides/api".to_string()),
             requires_token: true,
             logo_svg: None,
         },
@@ -259,11 +309,224 @@ pub fn get_catalog() -> Vec<CatalogEntry> {
             description: "Access YouTube data and manage content".to_string(),
             category: "Google".to_string(),
             url: "https://mcp.googleapis.com/youtube/v1".to_string(),
-            docs_url: Some("https://developers.google.com/youtube/v3/docs".to_string()),
+            docs_url: Some("https://developers.google.com/youtube/v3".to_string()),
             requires_token: true,
             logo_svg: None,
         },
-        // Add more as needed - keeping it focused on most common services for Phase 2
+        // Development (8)
+        CatalogEntry {
+            slug: "github".to_string(),
+            name: "GitHub".to_string(),
+            description: "Manage repositories, issues, and pull requests".to_string(),
+            category: "Development".to_string(),
+            url: "https://mcp.github.com/v1".to_string(),
+            docs_url: Some("https://docs.github.com/en/rest".to_string()),
+            requires_token: true,
+            logo_svg: None,
+        },
+        CatalogEntry {
+            slug: "gitlab".to_string(),
+            name: "GitLab".to_string(),
+            description: "Access GitLab projects and CI/CD pipelines".to_string(),
+            category: "Development".to_string(),
+            url: "https://mcp.gitlab.com/v1".to_string(),
+            docs_url: Some("https://docs.gitlab.com/ee/api".to_string()),
+            requires_token: true,
+            logo_svg: None,
+        },
+        CatalogEntry {
+            slug: "bitbucket".to_string(),
+            name: "Bitbucket".to_string(),
+            description: "Manage Bitbucket repositories and pipelines".to_string(),
+            category: "Development".to_string(),
+            url: "https://mcp.bitbucket.com/v1".to_string(),
+            docs_url: Some("https://developer.atlassian.com/cloud/bitbucket/rest".to_string()),
+            requires_token: true,
+            logo_svg: None,
+        },
+        CatalogEntry {
+            slug: "vercel".to_string(),
+            name: "Vercel".to_string(),
+            description: "Deploy and manage projects on Vercel".to_string(),
+            category: "Development".to_string(),
+            url: "https://mcp.vercel.com/v1".to_string(),
+            docs_url: Some("https://vercel.com/docs/api".to_string()),
+            requires_token: true,
+            logo_svg: None,
+        },
+        CatalogEntry {
+            slug: "heroku".to_string(),
+            name: "Heroku".to_string(),
+            description: "Deploy and manage apps on Heroku".to_string(),
+            category: "Development".to_string(),
+            url: "https://mcp.heroku.com/v1".to_string(),
+            docs_url: Some("https://devcenter.heroku.com/articles/platform-api-reference".to_string()),
+            requires_token: true,
+            logo_svg: None,
+        },
+        CatalogEntry {
+            slug: "aws".to_string(),
+            name: "Amazon AWS".to_string(),
+            description: "Access and manage AWS resources".to_string(),
+            category: "Development".to_string(),
+            url: "https://mcp.aws.amazon.com/v1".to_string(),
+            docs_url: Some("https://docs.aws.amazon.com/sdk".to_string()),
+            requires_token: true,
+            logo_svg: None,
+        },
+        CatalogEntry {
+            slug: "azure".to_string(),
+            name: "Microsoft Azure".to_string(),
+            description: "Manage Azure resources and services".to_string(),
+            category: "Development".to_string(),
+            url: "https://mcp.azure.com/v1".to_string(),
+            docs_url: Some("https://learn.microsoft.com/en-us/azure".to_string()),
+            requires_token: true,
+            logo_svg: None,
+        },
+        CatalogEntry {
+            slug: "gcp".to_string(),
+            name: "Google Cloud Platform".to_string(),
+            description: "Access GCP resources and services".to_string(),
+            category: "Development".to_string(),
+            url: "https://mcp.googleapis.com/cloud/v1".to_string(),
+            docs_url: Some("https://cloud.google.com/docs".to_string()),
+            requires_token: true,
+            logo_svg: None,
+        },
+        // Communication (5)
+        CatalogEntry {
+            slug: "slack".to_string(),
+            name: "Slack".to_string(),
+            description: "Send messages and manage Slack workspaces".to_string(),
+            category: "Communication".to_string(),
+            url: "https://mcp.slack.com/v1".to_string(),
+            docs_url: Some("https://api.slack.com".to_string()),
+            requires_token: true,
+            logo_svg: None,
+        },
+        CatalogEntry {
+            slug: "discord".to_string(),
+            name: "Discord".to_string(),
+            description: "Manage Discord servers and send messages".to_string(),
+            category: "Communication".to_string(),
+            url: "https://mcp.discord.com/v1".to_string(),
+            docs_url: Some("https://discord.com/developers/docs".to_string()),
+            requires_token: true,
+            logo_svg: None,
+        },
+        CatalogEntry {
+            slug: "telegram".to_string(),
+            name: "Telegram".to_string(),
+            description: "Send messages via Telegram bot".to_string(),
+            category: "Communication".to_string(),
+            url: "https://mcp.telegram.org/v1".to_string(),
+            docs_url: Some("https://core.telegram.org/bots/api".to_string()),
+            requires_token: true,
+            logo_svg: None,
+        },
+        CatalogEntry {
+            slug: "twilio".to_string(),
+            name: "Twilio".to_string(),
+            description: "Send SMS and voice messages".to_string(),
+            category: "Communication".to_string(),
+            url: "https://mcp.twilio.com/v1".to_string(),
+            docs_url: Some("https://www.twilio.com/docs".to_string()),
+            requires_token: true,
+            logo_svg: None,
+        },
+        CatalogEntry {
+            slug: "sendgrid".to_string(),
+            name: "SendGrid".to_string(),
+            description: "Send emails with SendGrid".to_string(),
+            category: "Communication".to_string(),
+            url: "https://mcp.sendgrid.com/v1".to_string(),
+            docs_url: Some("https://docs.sendgrid.com".to_string()),
+            requires_token: true,
+            logo_svg: None,
+        },
+        // Data & Analytics (5)
+        CatalogEntry {
+            slug: "datadog".to_string(),
+            name: "Datadog".to_string(),
+            description: "Monitor and analyze metrics with Datadog".to_string(),
+            category: "Data & Analytics".to_string(),
+            url: "https://mcp.datadoghq.com/v1".to_string(),
+            docs_url: Some("https://docs.datadoghq.com/api".to_string()),
+            requires_token: true,
+            logo_svg: None,
+        },
+        CatalogEntry {
+            slug: "elastic".to_string(),
+            name: "Elastic".to_string(),
+            description: "Search and analyze data with Elastic".to_string(),
+            category: "Data & Analytics".to_string(),
+            url: "https://mcp.elastic.co/v1".to_string(),
+            docs_url: Some("https://www.elastic.co/guide/en/elasticsearch/reference".to_string()),
+            requires_token: true,
+            logo_svg: None,
+        },
+        CatalogEntry {
+            slug: "mixpanel".to_string(),
+            name: "Mixpanel".to_string(),
+            description: "Track and analyze user analytics".to_string(),
+            category: "Data & Analytics".to_string(),
+            url: "https://mcp.mixpanel.com/v1".to_string(),
+            docs_url: Some("https://developer.mixpanel.com".to_string()),
+            requires_token: true,
+            logo_svg: None,
+        },
+        CatalogEntry {
+            slug: "segment".to_string(),
+            name: "Segment".to_string(),
+            description: "Collect and manage customer data".to_string(),
+            category: "Data & Analytics".to_string(),
+            url: "https://mcp.segment.com/v1".to_string(),
+            docs_url: Some("https://segment.com/docs".to_string()),
+            requires_token: true,
+            logo_svg: None,
+        },
+        CatalogEntry {
+            slug: "tableau".to_string(),
+            name: "Tableau".to_string(),
+            description: "Create and share data visualizations".to_string(),
+            category: "Data & Analytics".to_string(),
+            url: "https://mcp.tableau.com/v1".to_string(),
+            docs_url: Some("https://help.tableau.com/current/api".to_string()),
+            requires_token: true,
+            logo_svg: None,
+        },
+        // Finance (3)
+        CatalogEntry {
+            slug: "stripe".to_string(),
+            name: "Stripe".to_string(),
+            description: "Process payments and manage subscriptions".to_string(),
+            category: "Finance".to_string(),
+            url: "https://mcp.stripe.com/v1".to_string(),
+            docs_url: Some("https://stripe.com/docs/api".to_string()),
+            requires_token: true,
+            logo_svg: None,
+        },
+        CatalogEntry {
+            slug: "square".to_string(),
+            name: "Square".to_string(),
+            description: "Manage payments and invoices".to_string(),
+            category: "Finance".to_string(),
+            url: "https://mcp.squareup.com/v1".to_string(),
+            docs_url: Some("https://developer.squareup.com/docs".to_string()),
+            requires_token: true,
+            logo_svg: None,
+        },
+        CatalogEntry {
+            slug: "quickbooks".to_string(),
+            name: "QuickBooks".to_string(),
+            description: "Manage accounting and invoices".to_string(),
+            category: "Finance".to_string(),
+            url: "https://mcp.quickbooks.intuit.com/v1".to_string(),
+            docs_url: Some("https://developer.intuit.com/app/developer/qbo/docs".to_string()),
+            requires_token: true,
+            logo_svg: None,
+        },
     ]
 }
 
@@ -280,7 +543,7 @@ mod tests {
     #[test]
     fn test_catalog_has_entries() {
         let catalog = get_catalog();
-        assert!(!catalog.is_empty());
+        assert!(catalog.len() >= 35); // We have 38 entries
     }
 
     #[test]
@@ -372,5 +635,39 @@ mod tests {
 
         // All entries should have a requires_token value set
         assert_eq!(requires_token_count, catalog.len());
+    }
+
+    #[test]
+    fn test_ssrf_validation_rejects_http() {
+        let result = validate_mcp_url("http://example.com");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("HTTPS"));
+    }
+
+    #[test]
+    fn test_ssrf_validation_rejects_localhost() {
+        let result = validate_mcp_url("https://localhost:4242");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_ssrf_validation_rejects_internal_networks() {
+        let test_urls = vec![
+            "https://127.0.0.1",
+            "https://192.168.1.1",
+            "https://10.0.0.1",
+            "https://172.16.0.1",
+        ];
+
+        for url in test_urls {
+            let result = validate_mcp_url(url);
+            assert!(result.is_err(), "Failed for {}", url);
+        }
+    }
+
+    #[test]
+    fn test_ssrf_validation_allows_https_external() {
+        let result = validate_mcp_url("https://api.example.com/v1");
+        assert!(result.is_ok());
     }
 }

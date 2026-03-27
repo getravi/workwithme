@@ -17,6 +17,7 @@ pub struct OAuthProvider {
 /// OAuth configuration for each provider
 fn get_provider_config(provider_id: &str) -> Option<OAuthProvider> {
     let configs = vec![
+        // Core providers
         OAuthProvider {
             id: "google".to_string(),
             name: "Google".to_string(),
@@ -35,13 +36,33 @@ fn get_provider_config(provider_id: &str) -> Option<OAuthProvider> {
             token_url: "https://github.com/login/oauth/access_token".to_string(),
             redirect_uri: "http://localhost:4242/api/auth/callback".to_string(),
         },
+        // Enterprise
         OAuthProvider {
-            id: "openai".to_string(),
-            name: "OpenAI".to_string(),
-            client_id: std::env::var("OPENAI_CLIENT_ID").unwrap_or_default(),
-            client_secret: std::env::var("OPENAI_CLIENT_SECRET").unwrap_or_default(),
-            auth_url: "https://auth.openai.com/authorize".to_string(),
-            token_url: "https://auth.openai.com/oauth/token".to_string(),
+            id: "microsoft".to_string(),
+            name: "Microsoft".to_string(),
+            client_id: std::env::var("MICROSOFT_CLIENT_ID").unwrap_or_default(),
+            client_secret: std::env::var("MICROSOFT_CLIENT_SECRET").unwrap_or_default(),
+            auth_url: "https://login.microsoftonline.com/common/oauth2/v2.0/authorize".to_string(),
+            token_url: "https://login.microsoftonline.com/common/oauth2/v2.0/token".to_string(),
+            redirect_uri: "http://localhost:4242/api/auth/callback".to_string(),
+        },
+        OAuthProvider {
+            id: "slack".to_string(),
+            name: "Slack".to_string(),
+            client_id: std::env::var("SLACK_CLIENT_ID").unwrap_or_default(),
+            client_secret: std::env::var("SLACK_CLIENT_SECRET").unwrap_or_default(),
+            auth_url: "https://slack.com/oauth/v2/authorize".to_string(),
+            token_url: "https://slack.com/api/oauth.v2.access".to_string(),
+            redirect_uri: "http://localhost:4242/api/auth/callback".to_string(),
+        },
+        // Other OAuth providers
+        OAuthProvider {
+            id: "stripe".to_string(),
+            name: "Stripe".to_string(),
+            client_id: std::env::var("STRIPE_CLIENT_ID").unwrap_or_default(),
+            client_secret: std::env::var("STRIPE_CLIENT_SECRET").unwrap_or_default(),
+            auth_url: "https://connect.stripe.com/oauth/authorize".to_string(),
+            token_url: "https://connect.stripe.com/oauth/token".to_string(),
             redirect_uri: "http://localhost:4242/api/auth/callback".to_string(),
         },
     ];
@@ -51,7 +72,7 @@ fn get_provider_config(provider_id: &str) -> Option<OAuthProvider> {
 
 /// Validate OAuth environment variables at startup
 pub fn validate_oauth_config() {
-    let providers = vec!["google", "github", "openai"];
+    let providers = vec!["google", "github", "microsoft", "slack", "stripe"];
     for provider in providers {
         let client_id_var = format!("{}_CLIENT_ID", provider.to_uppercase());
         let client_secret_var = format!("{}_CLIENT_SECRET", provider.to_uppercase());
@@ -75,18 +96,35 @@ pub fn get_oauth_providers() -> Vec<HashMap<String, String>> {
             let mut m = HashMap::new();
             m.insert("id".to_string(), "google".to_string());
             m.insert("name".to_string(), "Google".to_string());
+            m.insert("category".to_string(), "Core".to_string());
             m
         },
         {
             let mut m = HashMap::new();
             m.insert("id".to_string(), "github".to_string());
             m.insert("name".to_string(), "GitHub".to_string());
+            m.insert("category".to_string(), "Core".to_string());
             m
         },
         {
             let mut m = HashMap::new();
-            m.insert("id".to_string(), "openai".to_string());
-            m.insert("name".to_string(), "OpenAI".to_string());
+            m.insert("id".to_string(), "microsoft".to_string());
+            m.insert("name".to_string(), "Microsoft".to_string());
+            m.insert("category".to_string(), "Enterprise".to_string());
+            m
+        },
+        {
+            let mut m = HashMap::new();
+            m.insert("id".to_string(), "slack".to_string());
+            m.insert("name".to_string(), "Slack".to_string());
+            m.insert("category".to_string(), "Enterprise".to_string());
+            m
+        },
+        {
+            let mut m = HashMap::new();
+            m.insert("id".to_string(), "stripe".to_string());
+            m.insert("name".to_string(), "Stripe".to_string());
+            m.insert("category".to_string(), "Finance".to_string());
             m
         },
     ]
@@ -196,8 +234,10 @@ fn generate_state() -> String {
 fn get_provider_scopes(provider_id: &str) -> String {
     match provider_id {
         "google" => "openid profile email".to_string(),
-        "github" => "user:email read:user".to_string(),
-        "openai" => "profile email".to_string(),
+        "github" => "user:email read:user repo".to_string(),
+        "microsoft" => "openid profile email offline_access".to_string(),
+        "slack" => "admin".to_string(),
+        "stripe" => "read_write".to_string(),
         _ => String::new(),
     }
 }
@@ -287,7 +327,7 @@ pub fn store_credentials(creds: &OAuthCredentials) -> Result<(), String> {
     }
 
     // Validate provider is supported
-    let valid_providers = vec!["google", "github", "openai"];
+    let valid_providers = vec!["google", "github", "microsoft", "slack", "stripe"];
     if !valid_providers.contains(&creds.provider.as_str()) {
         return Err(format!(
             "Invalid provider '{}'. Supported: {}",
@@ -426,14 +466,20 @@ mod tests {
         let github = get_provider_config("github");
         assert!(github.is_some());
 
-        let openai = get_provider_config("openai");
-        assert!(openai.is_some());
+        let microsoft = get_provider_config("microsoft");
+        assert!(microsoft.is_some());
+
+        let slack = get_provider_config("slack");
+        assert!(slack.is_some());
+
+        let stripe = get_provider_config("stripe");
+        assert!(stripe.is_some());
     }
 
     #[test]
     fn test_provider_list() {
         let providers = get_oauth_providers();
-        assert_eq!(providers.len(), 3);
+        assert_eq!(providers.len(), 5);
 
         let provider_ids: Vec<_> = providers
             .iter()
@@ -442,7 +488,9 @@ mod tests {
 
         assert!(provider_ids.contains(&"google"));
         assert!(provider_ids.contains(&"github"));
-        assert!(provider_ids.contains(&"openai"));
+        assert!(provider_ids.contains(&"microsoft"));
+        assert!(provider_ids.contains(&"slack"));
+        assert!(provider_ids.contains(&"stripe"));
     }
 
     #[test]
