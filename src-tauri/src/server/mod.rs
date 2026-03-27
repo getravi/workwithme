@@ -5,6 +5,7 @@ pub mod audit;
 pub mod sessions;
 pub mod mcp;
 pub mod oauth;
+pub mod agent;
 
 use axum::{
     extract::{ws::WebSocketUpgrade, Path},
@@ -45,6 +46,8 @@ pub async fn create_app() -> Result<Router, String> {
         .route("/api/mcp/catalog", get(mcp_endpoints::get_catalog))
         // OAuth endpoints
         .route("/api/auth/oauth-providers", get(oauth_endpoints::list_providers))
+        // Agent endpoints
+        .route("/api/agent/session", post(agent_endpoints::create_session))
         // CORS middleware to allow frontend requests
         .layer(CorsLayer::permissive());
 
@@ -188,6 +191,46 @@ mod audit_endpoints {
                     "success": true
                 }))
             ),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "success": false,
+                    "error": e
+                }))
+            )
+        }
+    }
+}
+
+/// Agent API endpoints
+mod agent_endpoints {
+    use super::*;
+
+    #[derive(Deserialize)]
+    pub struct CreateSessionRequest {
+        #[serde(default)]
+        pub metadata: Option<serde_json::Value>,
+    }
+
+    /// Create a new agent session
+    pub async fn create_session(Json(req): Json<CreateSessionRequest>) -> (StatusCode, Json<serde_json::Value>) {
+        let mut session = agent::create_session();
+
+        if let Some(metadata) = req.metadata {
+            session.metadata = metadata;
+        }
+
+        // Persist session to disk
+        match sessions::create_session(serde_json::to_value(&session).unwrap()) {
+            Ok(_) => {
+                (
+                    StatusCode::CREATED,
+                    Json(json!({
+                        "success": true,
+                        "session": session
+                    }))
+                )
+            }
             Err(e) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({
