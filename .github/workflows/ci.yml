@@ -197,6 +197,23 @@ jobs:
           prerelease: false
           args: ${{ matrix.args }}
 
+      - name: Re-sign app bundle with external binary (macOS only)
+        if: startsWith(github.ref, 'refs/tags/v') && matrix.platform == 'macos-latest'
+        shell: bash
+        run: |
+          # Find the built app bundle
+          APP_BUNDLE=$(find src-tauri/target/release/bundle -name "*.app" -type d | head -1)
+          if [ -n "$APP_BUNDLE" ]; then
+            echo "Re-signing app bundle: $APP_BUNDLE"
+            # Ad-hoc sign the app bundle (required after adding external binaries)
+            codesign --sign - --force --deep "$APP_BUNDLE"
+            # Verify the signature
+            codesign -v "$APP_BUNDLE"
+            echo "App bundle re-signed successfully"
+          else
+            echo "Warning: No app bundle found to re-sign"
+          fi
+
       - name: Generate and upload SHA256 checksums (tag)
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
