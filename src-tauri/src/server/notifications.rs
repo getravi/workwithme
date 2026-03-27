@@ -4,6 +4,14 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
 use chrono::Local;
+use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
+
+lazy_static::lazy_static! {
+    /// Rate limiter for notifications (max 10 per minute per title)
+    static ref NOTIFICATION_RATE_LIMITER: Arc<Mutex<HashMap<String, Vec<i64>>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+}
 
 /// Notification entry
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -21,12 +29,49 @@ fn notifications_log_path() -> PathBuf {
     home.join(".pi/notifications.log")
 }
 
+/// Check if notification should be rate limited (max 10 per minute per title)
+fn should_rate_limit(title: &str) -> bool {
+    const MAX_NOTIFICATIONS_PER_MINUTE: usize = 10;
+    const MINUTE_IN_SECS: i64 = 60;
+
+    let now = chrono::Local::now().timestamp();
+    let mut limiter = match NOTIFICATION_RATE_LIMITER.lock() {
+        Ok(l) => l,
+        Err(poisoned) => {
+            eprintln!("[notifications] rate limiter mutex poisoned, recovering");
+            poisoned.into_inner()
+        }
+    };
+
+    let timestamps = limiter.entry(title.to_string()).or_insert_with(Vec::new);
+
+    // Remove timestamps older than 1 minute
+    timestamps.retain(|&ts| now - ts < MINUTE_IN_SECS);
+
+    // Check if we've exceeded the limit
+    if timestamps.len() >= MAX_NOTIFICATIONS_PER_MINUTE {
+        return true;
+    }
+
+    // Add current timestamp
+    timestamps.push(now);
+    false
+}
+
 /// Send a desktop notification and log it
 pub fn send_notification(
     title: &str,
     body: &str,
     level: &str,
 ) -> Result<String, String> {
+    // Check rate limit
+    if should_rate_limit(title) {
+        return Err(format!(
+            "Notification rate limit exceeded for '{}'. Max 10 per minute.",
+            title
+        ));
+    }
+
     let id = uuid::Uuid::new_v4().to_string();
     let timestamp = Local::now().to_rfc3339();
 

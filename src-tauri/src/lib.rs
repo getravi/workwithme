@@ -24,6 +24,9 @@ pub fn run() {
 /// Start the HTTP server on port 4242 unless it's already in use.
 /// Called from a background tokio task.
 async fn start_http_server() {
+    // Validate environment configuration
+    server::oauth::validate_oauth_config();
+
     // Initialize approval manager
     server::approval::init_approval_manager();
 

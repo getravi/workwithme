@@ -49,6 +49,25 @@ fn get_provider_config(provider_id: &str) -> Option<OAuthProvider> {
     configs.into_iter().find(|c| c.id == provider_id)
 }
 
+/// Validate OAuth environment variables at startup
+pub fn validate_oauth_config() {
+    let providers = vec!["google", "github", "openai"];
+    for provider in providers {
+        let client_id_var = format!("{}_CLIENT_ID", provider.to_uppercase());
+        let client_secret_var = format!("{}_CLIENT_SECRET", provider.to_uppercase());
+
+        let has_client_id = std::env::var(&client_id_var).is_ok();
+        let has_client_secret = std::env::var(&client_secret_var).is_ok();
+
+        if !has_client_id {
+            eprintln!("[oauth] WARNING: {} not configured, set {} environment variable", provider, client_id_var);
+        }
+        if !has_client_secret {
+            eprintln!("[oauth] WARNING: {} not configured, set {} environment variable", provider, client_secret_var);
+        }
+    }
+}
+
 /// Get list of available OAuth providers (basic info)
 pub fn get_oauth_providers() -> Vec<HashMap<String, String>> {
     vec![
@@ -84,6 +103,32 @@ pub struct OAuthCredentials {
     pub expires_at: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user_id: Option<String>,
+}
+
+impl OAuthCredentials {
+    /// Check if access token has expired
+    pub fn is_expired(&self) -> bool {
+        match self.expires_at {
+            Some(expires_at) => chrono::Local::now().timestamp() >= expires_at,
+            None => false, // No expiration set, consider valid
+        }
+    }
+
+    /// Check if token is expired or expiring soon (within 5 minutes)
+    pub fn is_expiring_soon(&self) -> bool {
+        match self.expires_at {
+            Some(expires_at) => {
+                let now = chrono::Local::now().timestamp();
+                now >= expires_at - 300 // 5 minute buffer
+            }
+            None => false,
+        }
+    }
+
+    /// Check if we can refresh this token
+    pub fn can_refresh(&self) -> bool {
+        self.refresh_token.is_some()
+    }
 }
 
 /// Auth state for tracking OAuth flows with expiration
