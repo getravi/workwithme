@@ -2,6 +2,48 @@
 
 Complete end-to-end checklist for releasing a new version of workwithme to GitHub with CI-built binaries.
 
+## Important Learnings from v0.1.5 Release
+
+### Critical Configuration Issues
+
+**⚠️ externalBin Path Must Include Platform Suffix**
+- ❌ Wrong: `"externalBin": ["binaries/sidecar"]`
+- ✅ Correct: `"externalBin": ["binaries/sidecar-$ARCH"]`
+- **Why:** Tauri needs to find platform-specific binaries (sidecar-aarch64-apple-darwin, sidecar-x86_64-apple-darwin, etc.)
+- **What happens if wrong:** Tauri bundles a fallback binary (100MB Rust binary instead of 3.2MB Node.js SEA)
+- **Impact:** DMG goes from 34MB to 105MB unexpectedly
+- **Prevention:** Review `src-tauri/tauri.conf.json` externalBin config before release
+
+### Binary Size Reality Check
+
+**DMG Composition (v0.1.5):**
+```
+workwithme.app/
+  ├── MacOS/
+  │   ├── sidecar         3.2 MB  (Node.js 20.20.0 SEA binary)
+  │   ├── workwithme      5.8 MB  (Rust binary with LTO)
+  │   └── ...
+  ├── Resources/          100 KB  (Frontend assets: dist/, icons, etc)
+  └── Info.plist
+
+Total uncompressed:       ~40 MB
+DMG compressed:           ~34 MB
+```
+
+**What Optimization Impact Actually Is:**
+- ✅ **Rust LTO:** Reduces Rust binary by ~10-20% (hard to see in compressed DMG)
+- ✅ **Frontend code splitting:** Helps browser caching at RUNTIME, NOT smaller download
+- ❌ **Build artifact cleanup:** Doesn't affect shipped binaries
+- ❌ **Version consistency:** Process improvement, no size impact
+
+**What Would Actually Reduce Size:**
+- Replace Node.js sidecar with pure Rust implementation (~3MB savings, but major rewrite)
+- Use lighter UI framework instead of React (~1-2MB savings, major rewrite)
+- Remove unnecessary Tauri plugins (minimal impact)
+
+**Current Size is Reasonable:**
+34MB DMG for a production Tauri app + React + Node.js sidecar is good. Don't optimize prematurely.
+
 ## Prerequisites
 
 - [ ] Main branch is up-to-date with all desired features/fixes merged
@@ -179,12 +221,29 @@ SHA256SUMS-Windows.txt                            - Checksums for Windows builds
 
 ### Verification Checklist
 
+**File Names & Versions:**
 - [ ] All platform binaries are present
-- [ ] Filenames contain correct version (0.1.5)
-- [ ] SHA256SUMS files are present
-- [ ] File sizes look reasonable (not too small, indicating missing content)
+- [ ] Filenames contain correct version (0.1.5, not 0.1.4)
+- [ ] SHA256SUMS files are present for each platform
+
+**Expected File Sizes** (v0.1.5 as reference):
+- [ ] `workwithme_0.1.5_aarch64.dmg`: ~34 MB (NOT 105MB+)
+- [ ] `workwithme_0.1.5_x64-setup.exe`: ~21 MB
+- [ ] `workwithme_0.1.5_amd64.AppImage`: ~109 MB
+- [ ] `workwithme_0.1.5_amd64.deb`: ~39 MB
+- [ ] `workwithme_0.1.5_x64_en-US.msi`: ~32 MB
+- [ ] `workwithme_aarch64.app.tar.gz`: ~34 MB
+
+**Size Sanity Checks:**
+- [ ] DMG is NOT 105MB (would mean wrong sidecar bundled)
+- [ ] All files are not suspiciously small (>10MB each)
+- [ ] Total size across all platforms makes sense
+
+**Release Metadata:**
 - [ ] Release shows correct tag and timestamp
 - [ ] Release is marked as "Latest"
+- [ ] Release body has comprehensive notes
+- [ ] All checksum files are present and readable
 
 ## Step 10: Download and Test (Optional but Recommended)
 
@@ -198,6 +257,33 @@ sha256sum -c SHA256SUMS-macOS.txt
 # Test the binary
 # Install and run the app to verify it works
 ```
+
+## Release Gotchas & Lessons Learned
+
+### Gotcha 1: DMG Size Doesn't Reflect Code Optimizations
+- Frontend code splitting improves BROWSER caching, not download size
+- Rust LTO reduces binary by ~10-20% but gets compressed in DMG
+- You won't see meaningful DMG size reduction without architectural changes
+- **Solution:** Focus optimizations on runtime perf and build efficiency, not DMG size
+
+### Gotcha 2: externalBin Configuration is Easy to Get Wrong
+- Tauri needs platform-specific binary names in src-tauri/binaries/
+- If externalBin path is wrong, Tauri silently bundles a fallback binary (huge!)
+- The DMG will be 3x larger than expected if this is misconfigured
+- **Solution:** Always verify externalBin uses `$ARCH` placeholder: `"binaries/sidecar-$ARCH"`
+- **Check:** After release, verify DMG size is ~34MB, not 105MB
+
+### Gotcha 3: Node.js SEA Binary vs Rust Binary
+- SEA binary: 3.2MB (what we want for sidecar)
+- Rust fallback binary: 100MB (what Tauri uses if externalBin is wrong)
+- They're both Mach-O executables, so you can't tell by file type
+- **Solution:** Check app bundle size: uncompressed ~40MB is correct, ~250MB is wrong
+
+### Gotcha 4: Version Mismatches Have Cascading Effects
+- Forgetting tauri.conf.json causes binaries to be labeled with old version
+- This prevents the release from being marked as "Latest"
+- Users downloading see old version number, causes confusion
+- **Solution:** Use the 3-file version check BEFORE creating tag
 
 ## Troubleshooting
 
@@ -217,6 +303,27 @@ sha256sum -c SHA256SUMS-macOS.txt
    ```
 6. Create correct tag and push again
 
+### Problem: DMG is Much Larger Than Expected (105MB instead of 34MB)
+
+**Cause:** externalBin configuration is wrong, Tauri bundled fallback binary
+
+**Diagnosis:**
+```bash
+# Check actual app bundle size
+hdiutil attach workwithme_X.Y.Z_aarch64.dmg -nobrowse
+du -sh /Volumes/workwithme/workwithme.app
+
+# Should be ~40MB uncompressed
+# If it's 250MB+, the wrong sidecar is bundled
+```
+
+**Solution:**
+1. Check `src-tauri/tauri.conf.json` externalBin config
+2. Must be: `"externalBin": ["binaries/sidecar-$ARCH"]`
+3. NOT: `"externalBin": ["binaries/sidecar"]` (missing $ARCH)
+4. Verify `src-tauri/binaries/sidecar-*` files exist and are 3.2MB each
+5. Fix the config, commit, delete old tag, create new tag
+
 ### Problem: CI Build Failed
 
 **Check the logs:**
@@ -228,6 +335,7 @@ gh run view <run-id> --log | tail -100
 - Type check failed: `pnpm test` locally to debug
 - Rust build failed: Check Cargo.toml for syntax errors
 - Node.js SEA build failed: Check sidecar dependencies
+- externalBin wrong: Check tauri.conf.json has `$ARCH` placeholder
 
 ### Problem: Release Not Created
 
