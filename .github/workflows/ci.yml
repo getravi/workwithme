@@ -205,12 +205,11 @@ jobs:
           APP_BUNDLE=$(find src-tauri/target/release/bundle -name "*.app" -type d | head -1)
           if [ -n "$APP_BUNDLE" ]; then
             echo "Re-signing app bundle: $APP_BUNDLE"
-            # Remove existing signature first to avoid conflicts
+            # Remove existing signature to avoid resource conflicts
             codesign --remove-signature "$APP_BUNDLE" 2>/dev/null || true
-            # Re-sign with ad-hoc signature (required after adding external binaries)
-            codesign --sign - --deep "$APP_BUNDLE"
-            # Verify the signature
-            codesign -v "$APP_BUNDLE" && echo "App bundle re-signed successfully" || echo "Warning: Signature verification failed but bundle may still work"
+            # Re-sign recursively with fresh ad-hoc signature (no resource requirements)
+            codesign --sign - --force --deep --preserve-metadata=identifier,entitlements "$APP_BUNDLE"
+            echo "App bundle re-signed with fresh signature"
           else
             echo "Warning: No app bundle found to re-sign"
           fi
