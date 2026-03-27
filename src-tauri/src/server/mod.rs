@@ -6,6 +6,8 @@ pub mod sessions;
 pub mod mcp;
 pub mod oauth;
 pub mod agent;
+pub mod tools;
+pub mod agent_executor;
 
 use axum::{
     extract::{ws::WebSocketUpgrade, Path},
