@@ -167,6 +167,20 @@ pub fn get_skill_content(source: &str, slug: &str) -> Option<String> {
     }
 }
 
+/// Validate skill name format before processing
+pub fn validate_skill_name(name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("Skill name cannot be empty".to_string());
+    }
+    if name.len() > 100 {
+        return Err("Skill name cannot exceed 100 characters".to_string());
+    }
+    if !name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == ' ') {
+        return Err("Skill name can only contain alphanumeric characters, spaces, hyphens, and underscores".to_string());
+    }
+    Ok(())
+}
+
 /// Sanitize skill name for use as filename
 pub fn sanitize_skill_name(name: &str) -> String {
     name.to_lowercase()
@@ -325,5 +339,31 @@ Content here"#;
         assert_eq!(skill.id, "test/test-skill");
         assert_eq!(skill.source, "test");
         assert!(skill.id.contains('/'));
+    }
+
+    #[test]
+    fn test_validate_skill_name_valid() {
+        assert!(validate_skill_name("Test Skill").is_ok());
+        assert!(validate_skill_name("test-skill").is_ok());
+        assert!(validate_skill_name("test_skill").is_ok());
+        assert!(validate_skill_name("Test Skill 123").is_ok());
+    }
+
+    #[test]
+    fn test_validate_skill_name_empty() {
+        assert!(validate_skill_name("").is_err());
+    }
+
+    #[test]
+    fn test_validate_skill_name_too_long() {
+        let long_name = "a".repeat(101);
+        assert!(validate_skill_name(&long_name).is_err());
+    }
+
+    #[test]
+    fn test_validate_skill_name_invalid_chars() {
+        assert!(validate_skill_name("test@skill").is_err());
+        assert!(validate_skill_name("test#skill").is_err());
+        assert!(validate_skill_name("test$skill").is_err());
     }
 }

@@ -26,7 +26,7 @@ pub mod plugins;
 
 use axum::{
     extract::{ws::WebSocketUpgrade, Path},
-    http::StatusCode,
+    http::{StatusCode, HeaderMap},
     response::IntoResponse,
     routing::{get, post, delete},
     Json, Router, middleware::Next,
@@ -131,6 +131,8 @@ pub async fn create_app() -> Result<Router, String> {
         .route("/api/plugins/:id/call", post(plugins_endpoints::call))
         // Static files (SPA fallback) - catch-all at the end
         .fallback(static_files_handler)
+        // Add security headers to all responses
+        .layer(axum::middleware::from_fn(security_headers_middleware))
         // Rate limiting middleware to prevent DoS attacks
         .layer(axum::middleware::from_fn_with_state(
             rate_limiter,
@@ -206,6 +208,36 @@ async fn request_size_limit_middleware(
     }
 
     Ok(next.run(request).await)
+}
+
+/// Add security headers to all responses to prevent common attacks
+async fn security_headers_middleware(
+    request: axum::http::Request<Body>,
+    next: Next,
+) -> axum::response::Response {
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+
+    // Prevent MIME type sniffing
+    headers.insert("X-Content-Type-Options", "nosniff".parse().unwrap());
+
+    // Enable XSS protection in older browsers
+    headers.insert("X-XSS-Protection", "1; mode=block".parse().unwrap());
+
+    // Prevent clickjacking
+    headers.insert("X-Frame-Options", "SAMEORIGIN".parse().unwrap());
+
+    // Enforce HTTPS (for production deployments)
+    headers.insert(
+        "Strict-Transport-Security",
+        "max-age=31536000; includeSubDomains".parse().unwrap(),
+    );
+
+    // Prevent information disclosure
+    headers.insert("X-Powered-By", "".parse().unwrap());
+    headers.remove("Server");
+
+    response
 }
 
 /// Skills API endpoints
