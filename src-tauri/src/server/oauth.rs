@@ -281,6 +281,21 @@ pub fn store_credentials(creds: &OAuthCredentials) -> Result<(), String> {
         return Err("user_id cannot be empty".to_string());
     }
 
+    // Validate access token is not empty
+    if creds.access_token.is_empty() {
+        return Err("access_token cannot be empty".to_string());
+    }
+
+    // Validate provider is supported
+    let valid_providers = vec!["google", "github", "openai"];
+    if !valid_providers.contains(&creds.provider.as_str()) {
+        return Err(format!(
+            "Invalid provider '{}'. Supported: {}",
+            creds.provider,
+            valid_providers.join(", ")
+        ));
+    }
+
     let key = format!("oauth_token_{}_{}", creds.provider, user_id);
     let json = serde_json::to_string(creds)
         .map_err(|e| format!("Failed to serialize credentials: {}", e))?;

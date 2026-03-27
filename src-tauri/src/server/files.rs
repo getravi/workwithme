@@ -16,10 +16,12 @@ pub struct FileEntry {
 
 /// List directory contents
 pub fn list_directory(path: &str) -> Result<Vec<FileEntry>, String> {
+    println!("[files] listing directory: {}", path);
     let expanded_path = expand_path(path)?;
 
     // Security: restrict to home directory
     check_home_directory(&expanded_path)?;
+    println!("[files] directory access allowed for: {}", expanded_path.display());
 
     let entries = fs::read_dir(&expanded_path)
         .map_err(|e| format!("Failed to read directory: {}", e))?;
@@ -82,8 +84,10 @@ pub fn list_directory(path: &str) -> Result<Vec<FileEntry>, String> {
 
 /// Search for files matching a glob pattern
 pub fn search_files(path: &str, pattern: &str) -> Result<Vec<FileEntry>, String> {
+    println!("[files] searching for pattern '{}' in {}", pattern, path);
     let expanded_path = expand_path(path)?;
     check_home_directory(&expanded_path)?;
+    println!("[files] search allowed in: {}", expanded_path.display());
 
     let mut results = Vec::new();
     let max_depth = 5; // Limit recursion depth for performance
