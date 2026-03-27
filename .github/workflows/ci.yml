@@ -150,6 +150,33 @@ jobs:
           fi
         working-directory: sidecar
 
+      - name: Rename platform-specific sidecar to generic name
+        shell: bash
+        run: |
+          cd ../src-tauri/binaries
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            # On macOS runners, we need to pick one architecture for single-platform build
+            # The macos-latest runner is arm64, so use the arm64 binary
+            if [ -f "sidecar-aarch64-apple-darwin" ]; then
+              cp sidecar-aarch64-apple-darwin sidecar
+              chmod +x sidecar
+              echo "Renamed sidecar-aarch64-apple-darwin → sidecar"
+            fi
+          elif [ "${{ runner.os }}" = "Linux" ]; then
+            if [ -f "sidecar-x86_64-unknown-linux-gnu" ]; then
+              cp sidecar-x86_64-unknown-linux-gnu sidecar
+              chmod +x sidecar
+              echo "Renamed sidecar-x86_64-unknown-linux-gnu → sidecar"
+            fi
+          elif [ "${{ runner.os }}" = "Windows" ]; then
+            if [ -f "sidecar-x86_64-pc-windows-msvc.exe" ]; then
+              cp sidecar-x86_64-pc-windows-msvc.exe sidecar.exe
+              echo "Renamed sidecar-x86_64-pc-windows-msvc.exe → sidecar.exe"
+            fi
+          fi
+          ls -lh
+        working-directory: sidecar
+
       - name: Build Tauri app (non-tag)
         if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5  # v0
