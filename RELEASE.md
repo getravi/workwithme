@@ -16,19 +16,21 @@ Complete end-to-end checklist for releasing a new version of workwithme to GitHu
 
 ### Binary Size Reality Check
 
-**DMG Composition (v0.1.5):**
+**DMG Composition (v0.1.6 - CORRECTED):**
 ```
 workwithme.app/
   ├── MacOS/
-  │   ├── sidecar         3.2 MB  (Node.js 20.20.0 SEA binary)
-  │   ├── workwithme      5.8 MB  (Rust binary with LTO)
+  │   ├── sidecar         100 MB  (Node.js 20.20.0 SEA binary - includes full Node.js runtime)
+  │   ├── workwithme      9.4 MB  (Rust binary with LTO)
   │   └── ...
   ├── Resources/          100 KB  (Frontend assets: dist/, icons, etc)
   └── Info.plist
 
-Total uncompressed:       ~40 MB
+Total uncompressed:       ~109 MB
 DMG compressed:           ~34 MB
 ```
+
+**Note:** The sidecar is 100MB because Node.js SEA binaries inherently include the entire Node.js runtime (~85-90MB). The prior estimate of 3.2MB was incorrect. Compression in the DMG reduces the visible size to ~34MB, which is acceptable for a production app with this stack.
 
 **What Optimization Impact Actually Is:**
 - ✅ **Rust LTO:** Reduces Rust binary by ~10-20% (hard to see in compressed DMG)
@@ -279,7 +281,22 @@ sha256sum -c SHA256SUMS-macOS.txt
 - They're both Mach-O executables, so you can't tell by file type
 - **Solution:** Check app bundle size: uncompressed ~40MB is correct, ~250MB is wrong
 
-### Gotcha 4: Version Mismatches Have Cascading Effects
+### Gotcha 4: externalBin Must Match Actual Binary Names
+
+**FIXED in v0.1.6** - Previous versions (v0.1.4, v0.1.5) were corrupted due to this issue.
+
+- The sidecar build script outputs: `sidecar-aarch64-apple-darwin`, `sidecar-x86_64-apple-darwin`, etc.
+- externalBin config was pointing to: `binaries/sidecar` (no platform suffix)
+- Result: Tauri couldn't find the binary and failed to bundle it properly, causing app corruption
+- Solution: CI workflow now renames the platform-specific binary to the generic name Tauri expects
+  ```bash
+  # On macOS: sidecar-aarch64-apple-darwin → sidecar
+  # On Linux: sidecar-x86_64-unknown-linux-gnu → sidecar
+  # On Windows: sidecar-x86_64-pc-windows-msvc.exe → sidecar.exe
+  ```
+- Result: App launches successfully without "damaged" error
+
+### Gotcha 5: Version Mismatches Have Cascading Effects
 - Forgetting tauri.conf.json causes binaries to be labeled with old version
 - This prevents the release from being marked as "Latest"
 - Users downloading see old version number, causes confusion
