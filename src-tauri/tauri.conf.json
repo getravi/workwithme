@@ -37,7 +37,7 @@
       "icons/icon.ico"
     ],
     "externalBin": [
-      "binaries/sidecar"
+      "binaries/sidecar-$ARCH"
     ]
   }
 }
