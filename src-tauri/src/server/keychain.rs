@@ -12,9 +12,15 @@ pub fn get(slug: &str) -> Result<Option<String>, String> {
         Ok(entry) => match entry.get_password() {
             Ok(password) => Ok(Some(password)),
             Err(keyring::Error::NoEntry) => Ok(None),
-            Err(e) => Err(format!("keychain get failed: {}", e)),
+            Err(e) => Err(format!(
+                "Failed to retrieve '{}' from system keychain: {}. Ensure the keychain is unlocked and accessible.",
+                slug, e
+            )),
         },
-        Err(e) => Err(format!("keychain entry creation failed: {}", e)),
+        Err(e) => Err(format!(
+            "Failed to access system keychain for '{}': {}. The keychain service may be unavailable.",
+            slug, e
+        )),
     }
 }
 
@@ -22,8 +28,14 @@ pub fn get(slug: &str) -> Result<Option<String>, String> {
 pub fn set(slug: &str, token: &str) -> Result<(), String> {
     let account = format_account(slug);
     match keyring::Entry::new(SERVICE, &account) {
-        Ok(entry) => entry.set_password(token).map_err(|e| format!("keychain set failed: {}", e)),
-        Err(e) => Err(format!("keychain entry creation failed: {}", e)),
+        Ok(entry) => entry.set_password(token).map_err(|e| format!(
+            "Failed to store '{}' in system keychain: {}. Ensure the keychain is unlocked.",
+            slug, e
+        )),
+        Err(e) => Err(format!(
+            "Failed to access system keychain for storage: {}. The keychain service may be unavailable.",
+            e
+        )),
     }
 }
 
@@ -34,9 +46,15 @@ pub fn delete(slug: &str) -> Result<bool, String> {
         Ok(entry) => match entry.delete_credential() {
             Ok(_) => Ok(true),
             Err(keyring::Error::NoEntry) => Ok(false),
-            Err(e) => Err(format!("keychain delete failed: {}", e)),
+            Err(e) => Err(format!(
+                "Failed to delete '{}' from system keychain: {}",
+                slug, e
+            )),
         },
-        Err(e) => Err(format!("keychain entry creation failed: {}", e)),
+        Err(e) => Err(format!(
+            "Failed to access system keychain for deletion: {}. The keychain service may be unavailable.",
+            e
+        )),
     }
 }
 

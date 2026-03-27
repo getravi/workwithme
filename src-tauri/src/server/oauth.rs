@@ -105,10 +105,18 @@ impl AuthState {
 /// Generate OAuth authorization URL
 pub fn generate_authorization_url(provider_id: &str) -> Result<(String, String), String> {
     let config = get_provider_config(provider_id)
-        .ok_or("Provider not found".to_string())?;
+        .ok_or(format!(
+            "OAuth provider '{}' not found. Supported providers: google, github, openai",
+            provider_id
+        ))?;
 
     if config.client_id.is_empty() || config.client_secret.is_empty() {
-        return Err(format!("OAuth credentials not configured for {}", provider_id));
+        return Err(format!(
+            "OAuth credentials not configured for '{}'. Please set{}_CLIENT_ID and {}_CLIENT_SECRET environment variables.",
+            provider_id,
+            provider_id.to_uppercase(),
+            provider_id.to_uppercase()
+        ));
     }
 
     let state = generate_state();
@@ -168,7 +176,10 @@ pub async fn exchange_code_for_token(
     _state: &str,
 ) -> Result<OAuthCredentials, String> {
     let config = get_provider_config(provider_id)
-        .ok_or("Provider not found".to_string())?;
+        .ok_or(format!(
+            "OAuth provider '{}' configuration not found during token exchange",
+            provider_id
+        ))?;
 
     let client = reqwest::Client::new();
 
@@ -184,10 +195,18 @@ pub async fn exchange_code_for_token(
         .form(&params)
         .send()
         .await
-        .map_err(|e| format!("Token request failed: {}", e))?
+        .map_err(|e| format!(
+            "Failed to exchange authorization code with {} ({}). Check your internet connection and credentials.",
+            provider_id,
+            e
+        ))?
         .json()
         .await
-        .map_err(|e| format!("Failed to parse token response: {}", e))?;
+        .map_err(|e| format!(
+            "Failed to parse token response from {}. The OAuth provider returned an unexpected response format: {}",
+            provider_id,
+            e
+        ))?;
 
     let expires_at = token_result.expires_in.map(|secs| {
         chrono::Local::now().timestamp() + secs

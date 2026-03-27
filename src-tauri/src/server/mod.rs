@@ -30,10 +30,12 @@ use axum::{
     response::IntoResponse,
     routing::{get, post, delete},
     Json, Router, middleware::Next,
+    body::Body,
 };
 use serde::Deserialize;
 use serde_json::json;
 use tower_http::cors::CorsLayer;
+use tower::ServiceBuilder;
 use governor::{Quota, RateLimiter, state::{InMemoryState, NotKeyed}, clock::DefaultClock};
 use std::num::NonZeroU32;
 use std::sync::Arc;
@@ -134,6 +136,8 @@ pub async fn create_app() -> Result<Router, String> {
             rate_limiter,
             rate_limit_middleware,
         ))
+        // Request body size limit (10MB max) to prevent memory exhaustion attacks
+        .layer(axum::middleware::from_fn(request_size_limit_middleware))
         // CORS middleware to allow frontend requests
         .layer(CorsLayer::permissive());
 
@@ -173,6 +177,32 @@ async fn rate_limit_middleware(
             StatusCode::TOO_MANY_REQUESTS,
             "Rate limit exceeded. Maximum 2 requests per second allowed.",
         ).into());
+    }
+
+    Ok(next.run(request).await)
+}
+
+/// Request size limit middleware to prevent memory exhaustion attacks.
+/// Rejects requests with Content-Length > 10MB.
+async fn request_size_limit_middleware(
+    request: axum::http::Request<Body>,
+    next: Next,
+) -> axum::response::Result<axum::response::Response> {
+    const MAX_BODY_SIZE: u64 = 10 * 1024 * 1024; // 10MB
+
+    // Check Content-Length header
+    if let Some(content_length) = request
+        .headers()
+        .get(axum::http::header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<u64>().ok())
+    {
+        if content_length > MAX_BODY_SIZE {
+            return Err((
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "Request body exceeds maximum size (10MB).",
+            ).into());
+        }
     }
 
     Ok(next.run(request).await)
