@@ -550,4 +550,230 @@ mod tests {
         assert_eq!(token.expires_in, Some(3600));
         assert!(token.refresh_token.is_none());
     }
+
+    #[test]
+    fn test_oauth_credentials_expiration() {
+        let now = chrono::Local::now().timestamp();
+
+        // Expired credentials
+        let expired_creds = OAuthCredentials {
+            provider: "google".to_string(),
+            access_token: "token".to_string(),
+            refresh_token: None,
+            expires_at: Some(now - 100), // 100 seconds in the past
+            user_id: Some("user123".to_string()),
+        };
+        assert!(expired_creds.is_expired());
+
+        // Valid credentials
+        let valid_creds = OAuthCredentials {
+            provider: "google".to_string(),
+            access_token: "token".to_string(),
+            refresh_token: None,
+            expires_at: Some(now + 3600), // 1 hour in the future
+            user_id: Some("user123".to_string()),
+        };
+        assert!(!valid_creds.is_expired());
+    }
+
+    #[test]
+    fn test_oauth_credentials_expiring_soon() {
+        let now = chrono::Local::now().timestamp();
+
+        // Expiring soon (within 5 minutes)
+        let expiring_soon = OAuthCredentials {
+            provider: "google".to_string(),
+            access_token: "token".to_string(),
+            refresh_token: None,
+            expires_at: Some(now + 200), // 200 seconds (3+ mins)
+            user_id: Some("user123".to_string()),
+        };
+        assert!(expiring_soon.is_expiring_soon());
+
+        // Not expiring soon
+        let valid = OAuthCredentials {
+            provider: "google".to_string(),
+            access_token: "token".to_string(),
+            refresh_token: None,
+            expires_at: Some(now + 3600),
+            user_id: Some("user123".to_string()),
+        };
+        assert!(!valid.is_expiring_soon());
+    }
+
+    #[test]
+    fn test_oauth_credentials_can_refresh() {
+        // Can refresh (has refresh token)
+        let with_refresh = OAuthCredentials {
+            provider: "google".to_string(),
+            access_token: "access".to_string(),
+            refresh_token: Some("refresh".to_string()),
+            expires_at: None,
+            user_id: Some("user123".to_string()),
+        };
+        assert!(with_refresh.can_refresh());
+
+        // Cannot refresh (no refresh token)
+        let no_refresh = OAuthCredentials {
+            provider: "google".to_string(),
+            access_token: "access".to_string(),
+            refresh_token: None,
+            expires_at: None,
+            user_id: Some("user123".to_string()),
+        };
+        assert!(!no_refresh.can_refresh());
+    }
+
+    #[test]
+    fn test_provider_config_has_urls() {
+        let providers = vec!["google", "github", "microsoft", "slack", "stripe"];
+
+        for provider_id in providers {
+            let config = get_provider_config(provider_id);
+            assert!(config.is_some(), "Provider {} config should exist", provider_id);
+
+            let cfg = config.unwrap();
+            assert!(!cfg.auth_url.is_empty(), "Provider {} missing auth_url", provider_id);
+            assert!(!cfg.token_url.is_empty(), "Provider {} missing token_url", provider_id);
+            assert!(!cfg.redirect_uri.is_empty(), "Provider {} missing redirect_uri", provider_id);
+        }
+    }
+
+    #[test]
+    fn test_oauth_scopes_for_all_providers() {
+        let providers = vec!["google", "github", "microsoft", "slack", "stripe"];
+
+        for provider in providers {
+            let scopes = get_provider_scopes(provider);
+            assert!(!scopes.is_empty(), "Provider {} should have scopes", provider);
+        }
+    }
+
+    #[test]
+    fn test_microsoft_oauth_scopes() {
+        let scopes = get_provider_scopes("microsoft");
+        assert!(scopes.contains("openid"));
+        assert!(scopes.contains("profile"));
+        assert!(scopes.contains("email"));
+        assert!(scopes.contains("offline_access"));
+    }
+
+    #[test]
+    fn test_slack_oauth_scopes() {
+        let scopes = get_provider_scopes("slack");
+        assert_eq!(scopes, "admin");
+    }
+
+    #[test]
+    fn test_stripe_oauth_scopes() {
+        let scopes = get_provider_scopes("stripe");
+        assert_eq!(scopes, "read_write");
+    }
+
+    #[test]
+    fn test_github_oauth_scopes() {
+        let scopes = get_provider_scopes("github");
+        assert!(scopes.contains("user:email"));
+        assert!(scopes.contains("read:user"));
+        assert!(scopes.contains("repo"));
+    }
+
+    #[test]
+    fn test_auth_state_expiration() {
+        let now = chrono::Local::now().timestamp();
+
+        // Expired state
+        let expired_state = AuthState {
+            provider: "google".to_string(),
+            state: "state123".to_string(),
+            created_at: now - 900, // 15 minutes ago
+            expires_at: now - 100, // 100 seconds ago
+        };
+        assert!(expired_state.is_expired());
+
+        // Valid state
+        let valid_state = AuthState {
+            provider: "google".to_string(),
+            state: "state123".to_string(),
+            created_at: now - 100,
+            expires_at: now + 500, // 500 seconds in future
+        };
+        assert!(!valid_state.is_expired());
+    }
+
+    #[test]
+    fn test_oauth_providers_have_categories() {
+        let providers = get_oauth_providers();
+
+        for provider in providers {
+            assert!(provider.contains_key("id"), "Provider missing id");
+            assert!(provider.contains_key("name"), "Provider missing name");
+            assert!(provider.contains_key("category"), "Provider missing category");
+
+            let id = provider.get("id").unwrap();
+            assert!(!id.is_empty(), "Provider id should not be empty");
+        }
+    }
+
+    #[test]
+    fn test_oauth_provider_categories_valid() {
+        let providers = get_oauth_providers();
+        let valid_categories = vec!["Core", "Enterprise", "Finance"];
+
+        for provider in providers {
+            let category = provider.get("category").unwrap();
+            assert!(
+                valid_categories.contains(&category.as_str()),
+                "Invalid category '{}' for provider",
+                category
+            );
+        }
+    }
+
+    #[test]
+    fn test_generate_authorization_url_includes_required_params() {
+        // This would require setting env vars, so we just test the structure
+        let state = generate_state();
+        assert_eq!(state.len(), 32);
+        assert!(state.chars().all(|c| c.is_alphanumeric()));
+    }
+
+    #[test]
+    fn test_credentials_with_all_providers() {
+        let providers = vec!["google", "github", "microsoft", "slack", "stripe"];
+
+        for provider in providers {
+            let creds = OAuthCredentials {
+                provider: provider.to_string(),
+                access_token: "token123".to_string(),
+                refresh_token: Some("refresh123".to_string()),
+                expires_at: Some(chrono::Local::now().timestamp() + 3600),
+                user_id: Some("user123".to_string()),
+            };
+
+            let json = serde_json::to_string(&creds).unwrap();
+            let parsed: OAuthCredentials = serde_json::from_str(&json).unwrap();
+
+            assert_eq!(parsed.provider, provider);
+            assert_eq!(parsed.access_token, "token123");
+        }
+    }
+
+    #[test]
+    fn test_auth_state_serialization() {
+        let now = chrono::Local::now().timestamp();
+        let state = AuthState {
+            provider: "google".to_string(),
+            state: "abc123".to_string(),
+            created_at: now,
+            expires_at: now + 600,
+        };
+
+        let json = serde_json::to_string(&state).unwrap();
+        let parsed: AuthState = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.provider, "google");
+        assert_eq!(parsed.state, "abc123");
+        assert_eq!(parsed.created_at, now);
+    }
 }

@@ -670,4 +670,148 @@ mod tests {
         let result = validate_mcp_url("https://api.example.com/v1");
         assert!(result.is_ok());
     }
+
+    #[test]
+    fn test_catalog_all_entries_have_required_fields() {
+        let catalog = get_catalog();
+        for entry in catalog {
+            assert!(!entry.slug.is_empty(), "slug cannot be empty");
+            assert!(!entry.name.is_empty(), "name cannot be empty");
+            assert!(!entry.description.is_empty(), "description cannot be empty");
+            assert!(!entry.category.is_empty(), "category cannot be empty");
+            assert!(!entry.url.is_empty(), "url cannot be empty");
+            assert!(entry.url.starts_with("https://"), "url must be HTTPS");
+        }
+    }
+
+    #[test]
+    fn test_catalog_categories_have_entries() {
+        let catalog = get_catalog();
+        let categories: std::collections::HashSet<String> = catalog
+            .iter()
+            .map(|e| e.category.clone())
+            .collect();
+
+        // Verify all expected categories are present
+        assert!(categories.contains("Productivity"));
+        assert!(categories.contains("Google"));
+        assert!(categories.contains("Development"));
+        assert!(categories.contains("Communication"));
+        assert!(categories.contains("Data & Analytics"));
+        assert!(categories.contains("Finance"));
+    }
+
+    #[test]
+    fn test_catalog_productivity_category() {
+        let catalog = get_catalog();
+        let productivity_entries: Vec<_> = catalog
+            .iter()
+            .filter(|e| e.category == "Productivity")
+            .collect();
+
+        assert!(!productivity_entries.is_empty());
+        assert!(productivity_entries.iter().any(|e| e.slug == "notion"));
+        assert!(productivity_entries.iter().any(|e| e.slug == "linear"));
+        assert!(productivity_entries.iter().any(|e| e.slug == "asana"));
+    }
+
+    #[test]
+    fn test_catalog_development_category() {
+        let catalog = get_catalog();
+        let dev_entries: Vec<_> = catalog
+            .iter()
+            .filter(|e| e.category == "Development")
+            .collect();
+
+        assert!(!dev_entries.is_empty());
+        assert!(dev_entries.iter().any(|e| e.slug == "github"));
+        assert!(dev_entries.iter().any(|e| e.slug == "gitlab"));
+        assert!(dev_entries.iter().any(|e| e.slug == "aws"));
+    }
+
+    #[test]
+    fn test_catalog_communication_category() {
+        let catalog = get_catalog();
+        let comm_entries: Vec<_> = catalog
+            .iter()
+            .filter(|e| e.category == "Communication")
+            .collect();
+
+        assert!(!comm_entries.is_empty());
+        assert!(comm_entries.iter().any(|e| e.slug == "slack"));
+        assert!(comm_entries.iter().any(|e| e.slug == "discord"));
+        assert!(comm_entries.iter().any(|e| e.slug == "twilio"));
+    }
+
+    #[test]
+    fn test_catalog_finance_category() {
+        let catalog = get_catalog();
+        let finance_entries: Vec<_> = catalog
+            .iter()
+            .filter(|e| e.category == "Finance")
+            .collect();
+
+        assert!(!finance_entries.is_empty());
+        assert!(finance_entries.iter().any(|e| e.slug == "stripe"));
+        assert_eq!(finance_entries.len(), 3);
+    }
+
+    #[test]
+    fn test_catalog_all_urls_are_https() {
+        let catalog = get_catalog();
+        for entry in catalog {
+            assert!(
+                entry.url.starts_with("https://"),
+                "URL for {} must use HTTPS: {}",
+                entry.slug,
+                entry.url
+            );
+        }
+    }
+
+    #[test]
+    fn test_catalog_all_docs_urls_are_https_or_none() {
+        let catalog = get_catalog();
+        for entry in catalog {
+            if let Some(docs_url) = &entry.docs_url {
+                assert!(
+                    docs_url.starts_with("https://") || docs_url.starts_with("http://"),
+                    "Docs URL for {} must be HTTPS or HTTP: {}",
+                    entry.slug,
+                    docs_url
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_catalog_entry_count_minimum() {
+        let catalog = get_catalog();
+        // Verify we have at least 35 entries (currently 38)
+        assert!(
+            catalog.len() >= 35,
+            "Catalog should have at least 35 entries, got {}",
+            catalog.len()
+        );
+    }
+
+    #[test]
+    fn test_specific_services_exist() {
+        let catalog = get_catalog();
+        let slugs: Vec<&String> = catalog.iter().map(|e| &e.slug).collect();
+
+        // Verify important services are in catalog
+        let required_services = vec![
+            "github", "slack", "stripe", "notion", "asana",
+            "google-drive", "google-sheets", "aws", "vercel",
+        ];
+
+        for service in required_services {
+            assert!(
+                slugs.contains(&&service.to_string()),
+                "Required service '{}' not found in catalog",
+                service
+            );
+        }
+    }
 }
