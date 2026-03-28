@@ -94,6 +94,10 @@ function App() {
   const [sandboxStatus, setSandboxStatus] = useState<SandboxStatus | null>(null);
   const [sandboxBannerDismissed, setSandboxBannerDismissed] = useState(false);
 
+  // Sandbox approval modal state
+  const [approvalRequest, setApprovalRequest] = useState<any | null>(null);
+  const [isApprovingLoading, setIsApprovingLoading] = useState(false);
+
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<number | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -316,6 +320,15 @@ function App() {
              setError(data.message);
              setIsProcessing(false);
           }
+          else if (data.type === WS_EVENTS.SANDBOX_APPROVAL_REQUEST) {
+             // Show approval modal with request details
+             setApprovalRequest({
+               id: data.id,
+               operation_type: data.operation_type,
+               description: data.description,
+               details: data.details,
+             });
+          }
 
         } catch(e) {
           console.error("Error parsing websocket message", e);
@@ -511,6 +524,23 @@ function App() {
     } catch (err) {
       console.error("Failed to stop agent", err);
       setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handleApprovalResponse = (approved: boolean) => {
+    if (!approvalRequest) return;
+
+    setIsApprovingLoading(true);
+    try {
+      wsSend({
+        type: WS_EVENTS.SANDBOX_APPROVAL_RESPONSE,
+        id: approvalRequest.id,
+        approved: approved,
+        sessionId: currentSessionId
+      });
+      setApprovalRequest(null);
+    } finally {
+      setIsApprovingLoading(false);
     }
   };
 
@@ -1097,6 +1127,90 @@ function App() {
         }}
         isConnected={isConnected}
       />
+
+      {/* Sandbox Approval Modal */}
+      {approvalRequest && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-[#1f2937] rounded-lg shadow-xl max-w-lg w-[90%] border border-[#374151]">
+            <div className="p-6">
+              <div className="mb-4">
+                <h2 className="text-lg font-semibold text-white mb-2">
+                  {approvalRequest.operation_type === 'sandbox_escape' ? '⚠️ Sandbox Escape Request' : '🔒 Approval Required'}
+                </h2>
+                <p className="text-gray-300">{approvalRequest.description}</p>
+              </div>
+
+              {approvalRequest.details && (
+                <div className="mb-6 p-4 bg-[#111827] rounded border border-[#374151] overflow-auto max-h-48">
+                  <div className="font-mono text-sm text-gray-400">
+                    {approvalRequest.operation_type === 'write_file' && (
+                      <>
+                        <div className="mb-3">
+                          <span className="text-gray-500">Path:</span>{' '}
+                          <span className="text-blue-300">{approvalRequest.details.path}</span>
+                        </div>
+                        <div>
+                          <span className="text-gray-500 block mb-1">Content Preview:</span>
+                          <div className="text-gray-400 whitespace-pre-wrap break-words">
+                            {approvalRequest.details.content_preview}
+                          </div>
+                        </div>
+                      </>
+                    )}
+                    {approvalRequest.operation_type === 'bash_write' && (
+                      <>
+                        <span className="text-gray-500">Command:</span>{' '}
+                        <span className="text-yellow-300">{approvalRequest.details.command}</span>
+                      </>
+                    )}
+                    {approvalRequest.operation_type === 'sandbox_escape' && (
+                      <>
+                        <div className="mb-3">
+                          <span className="text-gray-500">Operation:</span>{' '}
+                          <span className="text-orange-300">{approvalRequest.details.operation}</span>
+                        </div>
+                        <div className="mb-3">
+                          <span className="text-gray-500">Reason:</span>{' '}
+                          <span className="text-orange-300">{approvalRequest.details.reason}</span>
+                        </div>
+                        {approvalRequest.details.context && (
+                          <div>
+                            <span className="text-gray-500 block mb-1">Context:</span>
+                            <div className="text-gray-400">
+                              {JSON.stringify(approvalRequest.details.context, null, 2)}
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              <div className="text-sm text-gray-400 mb-6 p-3 bg-[#0f1419] rounded border border-[#374151]/50">
+                ⏱️ This request will auto-deny in 30 seconds for security
+              </div>
+
+              <div className="flex gap-3">
+                <button
+                  onClick={() => handleApprovalResponse(false)}
+                  disabled={isApprovingLoading}
+                  className="flex-1 px-4 py-2 rounded-lg bg-[#374151] hover:bg-[#4b5563] text-gray-300 font-medium transition-colors disabled:opacity-50"
+                >
+                  {isApprovingLoading ? "..." : "Deny"}
+                </button>
+                <button
+                  onClick={() => handleApprovalResponse(true)}
+                  disabled={isApprovingLoading}
+                  className="flex-1 px-4 py-2 rounded-lg bg-[#c5f016] hover:bg-[#d4ff24] text-black font-medium transition-colors disabled:opacity-50"
+                >
+                  {isApprovingLoading ? "..." : "Approve"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );
