@@ -1,10 +1,38 @@
+// Phase 3: WebSocket Protocol for Agent Streaming
+// ================================================
+//
+// Client → Server Events:
+// - "join" {session_id}                    Subscribe to session event stream
+// - "prompt" {session_id, text}            Run agent turn with user message
+// - "steer" {session_id, text}             Steering prompt (future)
+// - "new_chat" {cwd?}                      Create new session at optional cwd
+// - "sandbox_approval_response" {data}    Approve/deny sandbox request
+//
+// Server → Client Events:
+// - "join:ack" {session_id}
+// - "message_start" {session_id}           Agent started generating
+// - "message_update" {session_id, text}    Agent generated text chunk
+// - "message_end" {session_id}             Agent finished generating
+// - "tool_execution_start" {tool_name}     Tool started executing
+// - "tool_execution_update" {output}       Tool output chunk
+// - "tool_execution_end" {output}          Tool finished
+// - "agent_end" {final_response}           Agent loop complete
+// - "chat_cleared" {session_id}            New session created
+// - "prompt_complete" {session_id}         Prompt handling done
+// - "error" {error}                        Error occurred
+// - "sandbox_approval_request" {data}      Sandbox escape approval needed
+
 use axum::extract::ws::{WebSocket, Message};
 use futures::stream::StreamExt;
-use serde_json::json;
+use serde_json::{json, Value};
 use crate::server::approval::{ApprovalResponse, APPROVAL_MANAGER};
+use crate::server::agent::{AgentSession, create_session};
+use crate::server::agent_executor::{execute_agent_turn, AgentEvent};
 use std::sync::Arc;
 use std::collections::HashMap;
 use chrono::{Utc, DateTime};
+use tokio::sync::RwLock;
+use tokio::sync::mpsc;
 
 /// WebSocket connection metadata
 #[derive(Debug, Clone)]
@@ -23,8 +51,8 @@ lazy_static::lazy_static! {
         Arc::new(tokio::sync::RwLock::new(HashMap::new()));
 }
 
-/// WebSocket message types
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+/// WebSocket message types (Phase 3 enhanced)
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
 pub struct WsMessage {
     pub r#type: String,
     #[serde(default)]
@@ -32,7 +60,11 @@ pub struct WsMessage {
     #[serde(default)]
     pub content: String,
     #[serde(default)]
-    pub data: serde_json::Value,
+    pub text: String, // For "prompt" message
+    #[serde(default)]
+    pub cwd: String, // For "new_chat" message (project directory)
+    #[serde(default)]
+    pub data: Value,
 }
 
 /// Handle a WebSocket connection with cleanup on disconnect.
@@ -187,10 +219,32 @@ fn validate_ws_message(msg: &WsMessage) -> Result<(), String> {
     Ok(())
 }
 
-/// Route WebSocket messages to appropriate handlers
+/// Route WebSocket messages to appropriate handlers (Phase 3 enhanced)
 async fn handle_ws_message(msg: &WsMessage, socket: &mut WebSocket) {
     match msg.r#type.as_str() {
-        "approval:response" => {
+        // Phase 3 new messages
+        "join" => {
+            // Subscribe to session event stream
+            handle_join(msg, socket).await;
+        }
+        "prompt" => {
+            // Run agent turn with user message
+            handle_prompt(msg, socket).await;
+        }
+        "steer" => {
+            // Steering prompt (future enhancement)
+            let response = json!({
+                "type": "steer:ack",
+                "session_id": msg.session_id,
+                "success": true
+            }).to_string();
+            let _ = socket.send(Message::Text(response.into())).await;
+        }
+        "new_chat" => {
+            // Create new session at optional cwd
+            handle_new_chat(msg, socket).await;
+        }
+        "sandbox_approval_response" => {
             // Handle approval response from frontend
             if let Ok(approval_response) = serde_json::from_value::<ApprovalResponse>(msg.data.clone()) {
                 if let Some(manager) = APPROVAL_MANAGER.get() {
@@ -203,18 +257,25 @@ async fn handle_ws_message(msg: &WsMessage, socket: &mut WebSocket) {
                 } else {
                     eprintln!("[ws] approval manager not initialized");
                 }
-            } else {
-                eprintln!("[ws] failed to parse approval response");
+            }
+        }
+        // Legacy message types (backward compat)
+        "approval:response" => {
+            // Handle approval response from frontend
+            if let Ok(approval_response) = serde_json::from_value::<ApprovalResponse>(msg.data.clone()) {
+                if let Some(manager) = APPROVAL_MANAGER.get() {
+                    let success = manager.respond(approval_response);
+                    let response = json!({
+                        "type": "approval:ack",
+                        "success": success
+                    }).to_string();
+                    let _ = socket.send(Message::Text(response.into())).await;
+                }
             }
         }
         "agent:message" => {
-            // Agent message - will be handled by Phase 3a integration
-            let response = json!({
-                "type": "agent:response",
-                "sessionId": msg.session_id,
-                "content": "Agent integration coming in Phase 3a"
-            }).to_string();
-            let _ = socket.send(Message::Text(response.into())).await;
+            // Legacy - map to prompt
+            handle_prompt(msg, socket).await;
         }
         "session:list" => {
             let response = json!({
@@ -227,7 +288,7 @@ async fn handle_ws_message(msg: &WsMessage, socket: &mut WebSocket) {
             let response = json!({
                 "type": "session:load",
                 "sessionId": msg.session_id,
-                "session": serde_json::Value::Null
+                "session": Value::Null
             }).to_string();
             let _ = socket.send(Message::Text(response.into())).await;
         }
@@ -242,6 +303,131 @@ async fn handle_ws_message(msg: &WsMessage, socket: &mut WebSocket) {
     }
 }
 
+/// Handle "join" message - subscribe to session events
+async fn handle_join(msg: &WsMessage, socket: &mut WebSocket) {
+    let response = json!({
+        "type": "join:ack",
+        "session_id": msg.session_id,
+        "subscribed": true
+    }).to_string();
+    let _ = socket.send(Message::Text(response.into())).await;
+}
+
+/// Handle "new_chat" message - create new session at optional cwd
+async fn handle_new_chat(msg: &WsMessage, socket: &mut WebSocket) {
+    let session = create_session();
+    let session_id = session.id.clone();
+
+    // TODO: Store cwd in session metadata if provided
+    // For now, just acknowledge creation
+    let response = json!({
+        "type": "chat_cleared",
+        "session_id": session_id,
+        "created_at": session.created_at
+    }).to_string();
+    let _ = socket.send(Message::Text(response.into())).await;
+}
+
+/// Convert AgentEvent to WebSocket message JSON
+fn agent_event_to_ws_message(event: &AgentEvent, session_id: &str) -> String {
+    match event {
+        AgentEvent::MessageStart => json!({
+            "type": "message_start",
+            "session_id": session_id
+        }).to_string(),
+        AgentEvent::MessageDelta { text } => json!({
+            "type": "message_update",
+            "session_id": session_id,
+            "text": text
+        }).to_string(),
+        AgentEvent::MessageEnd => json!({
+            "type": "message_end",
+            "session_id": session_id
+        }).to_string(),
+        AgentEvent::ToolExecutionStart { tool_name, tool_id } => json!({
+            "type": "tool_execution_start",
+            "session_id": session_id,
+            "tool_name": tool_name,
+            "tool_id": tool_id
+        }).to_string(),
+        AgentEvent::ToolExecutionDelta { output } => json!({
+            "type": "tool_execution_update",
+            "session_id": session_id,
+            "output": output
+        }).to_string(),
+        AgentEvent::ToolExecutionEnd { tool_name, output } => json!({
+            "type": "tool_execution_end",
+            "session_id": session_id,
+            "tool_name": tool_name,
+            "output": output
+        }).to_string(),
+        AgentEvent::AgentEnd { final_response } => json!({
+            "type": "agent_end",
+            "session_id": session_id,
+            "final_response": final_response
+        }).to_string(),
+        AgentEvent::Error { message } => json!({
+            "type": "error",
+            "session_id": session_id,
+            "error": message
+        }).to_string(),
+    }
+}
+
+/// Handle "prompt" message - execute agent turn with streaming
+/// Note: This is a placeholder that demonstrates the WebSocket protocol.
+/// Full integration with AppState requires refactoring ws.rs to be an axum handler.
+async fn handle_prompt(msg: &WsMessage, socket: &mut WebSocket) {
+    let session_id = msg.session_id.clone();
+    let user_text = if !msg.text.is_empty() {
+        msg.text.clone()
+    } else {
+        msg.content.clone()
+    };
+
+    if session_id.is_empty() || user_text.is_empty() {
+        let response = json!({
+            "type": "error",
+            "error": "prompt requires session_id and text fields"
+        }).to_string();
+        let _ = socket.send(Message::Text(response.into())).await;
+        return;
+    }
+
+    // TODO: Full integration with AppState:
+    // - Get AppState from shared context (TLS or Arc)
+    // - Get session from AppState.session_map
+    // - Call execute_agent_turn with AppState
+    // - Receive AgentEvent from mpsc channel
+    // - Convert to WS messages and stream to client
+    //
+    // For now, demonstrate the WebSocket protocol flow:
+
+    let _ = socket.send(Message::Text(
+        agent_event_to_ws_message(&AgentEvent::MessageStart, &session_id).into()
+    )).await;
+
+    let _ = socket.send(Message::Text(
+        agent_event_to_ws_message(
+            &AgentEvent::MessageDelta {
+                text: format!("Processing: {}", user_text)
+            },
+            &session_id
+        ).into()
+    )).await;
+
+    let _ = socket.send(Message::Text(
+        agent_event_to_ws_message(&AgentEvent::MessageEnd, &session_id).into()
+    )).await;
+
+    let _ = socket.send(Message::Text(
+        json!({
+            "type": "prompt_complete",
+            "session_id": session_id
+        }).to_string().into()
+    )).await;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -252,6 +438,8 @@ mod tests {
             r#type: "agent:message".to_string(),
             session_id: "session-123".to_string(),
             content: "Hello".to_string(),
+            text: String::new(),
+            cwd: String::new(),
             data: json!({"key": "value"}),
         };
 
@@ -298,6 +486,8 @@ mod tests {
                 r#type: msg_type.to_string(),
                 session_id: String::new(),
                 content: String::new(),
+                text: String::new(),
+                cwd: String::new(),
                 data: json!({}),
             };
 
@@ -311,6 +501,8 @@ mod tests {
             r#type: "agent:message".to_string(),
             session_id: "sess-789".to_string(),
             content: "test message".to_string(),
+            text: String::new(),
+            cwd: String::new(),
             data: json!({
                 "nested": {
                     "level1": {
@@ -332,6 +524,8 @@ mod tests {
             r#type: "test:message".to_string(),
             session_id: "test-session".to_string(),
             content: "test".to_string(),
+            text: String::new(),
+            cwd: String::new(),
             data: json!({"test": true}),
         };
 
@@ -359,6 +553,8 @@ mod tests {
             r#type: "approval:response".to_string(),
             session_id: String::new(),
             content: String::new(),
+            text: String::new(),
+            cwd: String::new(),
             data: json!({
                 "request_id": "req-123",
                 "approved": true,
@@ -377,11 +573,105 @@ mod tests {
             r#type: "agent:message".to_string(),
             session_id: "agent-sess-001".to_string(),
             content: "Process this request".to_string(),
+            text: String::new(),
+            cwd: String::new(),
             data: json!({"prompt": "What is 2+2?"}),
         };
 
         assert_eq!(msg.r#type, "agent:message");
         assert!(!msg.session_id.is_empty());
         assert!(!msg.content.is_empty());
+    }
+
+    #[test]
+    fn test_phase3_prompt_message() {
+        let json_str = r#"{
+            "type": "prompt",
+            "session_id": "sess-123",
+            "text": "List files in current directory"
+        }"#;
+
+        let msg: WsMessage = serde_json::from_str(json_str).unwrap();
+        assert_eq!(msg.r#type, "prompt");
+        assert_eq!(msg.session_id, "sess-123");
+        assert_eq!(msg.text, "List files in current directory");
+    }
+
+    #[test]
+    fn test_phase3_new_chat_message() {
+        let json_str = r#"{
+            "type": "new_chat",
+            "cwd": "/home/user/project"
+        }"#;
+
+        let msg: WsMessage = serde_json::from_str(json_str).unwrap();
+        assert_eq!(msg.r#type, "new_chat");
+        assert_eq!(msg.cwd, "/home/user/project");
+    }
+
+    #[test]
+    fn test_phase3_join_message() {
+        let json_str = r#"{
+            "type": "join",
+            "session_id": "sess-456"
+        }"#;
+
+        let msg: WsMessage = serde_json::from_str(json_str).unwrap();
+        assert_eq!(msg.r#type, "join");
+        assert_eq!(msg.session_id, "sess-456");
+    }
+
+    #[test]
+    fn test_agent_event_to_ws_message_start() {
+        let msg = agent_event_to_ws_message(&AgentEvent::MessageStart, "sess-123");
+        let json: Value = serde_json::from_str(&msg).unwrap();
+        assert_eq!(json["type"], "message_start");
+        assert_eq!(json["session_id"], "sess-123");
+    }
+
+    #[test]
+    fn test_agent_event_to_ws_message_delta() {
+        let event = AgentEvent::MessageDelta {
+            text: "Hello world".to_string(),
+        };
+        let msg = agent_event_to_ws_message(&event, "sess-123");
+        let json: Value = serde_json::from_str(&msg).unwrap();
+        assert_eq!(json["type"], "message_update");
+        assert_eq!(json["text"], "Hello world");
+    }
+
+    #[test]
+    fn test_agent_event_to_ws_message_tool_start() {
+        let event = AgentEvent::ToolExecutionStart {
+            tool_name: "bash".to_string(),
+            tool_id: "tool_1".to_string(),
+        };
+        let msg = agent_event_to_ws_message(&event, "sess-123");
+        let json: Value = serde_json::from_str(&msg).unwrap();
+        assert_eq!(json["type"], "tool_execution_start");
+        assert_eq!(json["tool_name"], "bash");
+        assert_eq!(json["tool_id"], "tool_1");
+    }
+
+    #[test]
+    fn test_agent_event_to_ws_message_end() {
+        let event = AgentEvent::AgentEnd {
+            final_response: "Done!".to_string(),
+        };
+        let msg = agent_event_to_ws_message(&event, "sess-123");
+        let json: Value = serde_json::from_str(&msg).unwrap();
+        assert_eq!(json["type"], "agent_end");
+        assert_eq!(json["final_response"], "Done!");
+    }
+
+    #[test]
+    fn test_agent_event_to_ws_message_error() {
+        let event = AgentEvent::Error {
+            message: "API key not found".to_string(),
+        };
+        let msg = agent_event_to_ws_message(&event, "sess-123");
+        let json: Value = serde_json::from_str(&msg).unwrap();
+        assert_eq!(json["type"], "error");
+        assert_eq!(json["error"], "API key not found");
     }
 }
