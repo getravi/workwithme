@@ -1,8 +1,17 @@
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;
 use crate::server::sandbox::{Sandbox, SandboxProfile};
 use crate::server::approval::{create_write_file_approval_request, APPROVAL_MANAGER};
+
+/// Tool definition with JSON schema
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolDefinition {
+    pub name: String,
+    pub description: String,
+    pub input_schema: Value,
+}
 
 /// Tool use block from Claude response
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,6 +42,72 @@ pub async fn execute_tool(tool: &ToolUseBlock) -> ToolResult {
             is_error: true,
         },
     }
+}
+
+/// Get all available tool definitions with JSON schemas
+pub fn tool_definitions() -> Vec<ToolDefinition> {
+    vec![
+        ToolDefinition {
+            name: "bash".to_string(),
+            description: "Execute a bash command on the system".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "The bash command to execute (limited to safe commands)"
+                    }
+                },
+                "required": ["command"]
+            }),
+        },
+        ToolDefinition {
+            name: "read_file".to_string(),
+            description: "Read the contents of a file".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "The path to the file to read"
+                    }
+                },
+                "required": ["path"]
+            }),
+        },
+        ToolDefinition {
+            name: "write_file".to_string(),
+            description: "Write contents to a file".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "The path to the file to write"
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "The content to write to the file"
+                    }
+                },
+                "required": ["path", "content"]
+            }),
+        },
+        ToolDefinition {
+            name: "list_directory".to_string(),
+            description: "List contents of a directory".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "The path to the directory to list"
+                    }
+                },
+                "required": ["path"]
+            }),
+        },
+    ]
 }
 
 /// Validate bash command for safety
@@ -466,6 +541,61 @@ mod tests {
 
         assert!(tool.input.get("working_dir").is_some());
         assert!(tool.input.get("timeout").is_some());
+    }
+
+    #[test]
+    fn test_tool_definitions_exists() {
+        let defs = tool_definitions();
+        assert!(!defs.is_empty());
+        assert_eq!(defs.len(), 4);
+    }
+
+    #[test]
+    fn test_tool_definitions_have_schemas() {
+        let defs = tool_definitions();
+        for def in defs {
+            assert!(!def.name.is_empty());
+            assert!(!def.description.is_empty());
+            // Schema should be a JSON object
+            assert!(def.input_schema.is_object());
+            // Should have 'type' and 'properties'
+            assert_eq!(def.input_schema["type"], "object");
+            assert!(def.input_schema["properties"].is_object());
+        }
+    }
+
+    #[test]
+    fn test_bash_tool_definition() {
+        let defs = tool_definitions();
+        let bash_def = defs.iter().find(|d| d.name == "bash").unwrap();
+        assert_eq!(bash_def.name, "bash");
+        assert!(bash_def.description.contains("bash"));
+        assert!(bash_def.input_schema["properties"]["command"].is_object());
+    }
+
+    #[test]
+    fn test_read_file_tool_definition() {
+        let defs = tool_definitions();
+        let def = defs.iter().find(|d| d.name == "read_file").unwrap();
+        assert_eq!(def.name, "read_file");
+        assert!(def.input_schema["properties"]["path"].is_object());
+    }
+
+    #[test]
+    fn test_write_file_tool_definition() {
+        let defs = tool_definitions();
+        let def = defs.iter().find(|d| d.name == "write_file").unwrap();
+        assert_eq!(def.name, "write_file");
+        assert!(def.input_schema["properties"]["path"].is_object());
+        assert!(def.input_schema["properties"]["content"].is_object());
+    }
+
+    #[test]
+    fn test_list_directory_tool_definition() {
+        let defs = tool_definitions();
+        let def = defs.iter().find(|d| d.name == "list_directory").unwrap();
+        assert_eq!(def.name, "list_directory");
+        assert!(def.input_schema["properties"]["path"].is_object());
     }
 }
 

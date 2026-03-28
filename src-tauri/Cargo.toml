@@ -79,6 +79,9 @@ toml = "0.8"
 # Rate limiting and DoS protection
 governor = "0.6"
 
+# Phase 3 dependencies
+async-trait = "0.1"
+
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 

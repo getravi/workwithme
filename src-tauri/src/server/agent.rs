@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 use uuid::Uuid;
 
 /// Agent session state
@@ -11,14 +11,74 @@ pub struct AgentSession {
     #[serde(default)]
     pub messages: Vec<Message>,
     #[serde(default)]
-    pub metadata: serde_json::Value,
+    pub metadata: Value,
+}
+
+/// Content block in message (multi-part)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum MessageContentBlock {
+    #[serde(rename = "text")]
+    Text { text: String },
+    #[serde(rename = "tool_use")]
+    ToolUse { id: String, name: String, input: Value },
+    #[serde(rename = "tool_result")]
+    ToolResult {
+        tool_use_id: String,
+        content: String,
+        is_error: bool,
+    },
 }
 
 /// Message in conversation history
+/// Supports both legacy string format and new multi-part content blocks
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     pub role: String, // "user" or "assistant"
-    pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_blocks: Option<Vec<MessageContentBlock>>,
+}
+
+impl Message {
+    /// Create message from text (legacy format)
+    pub fn text(role: &str, text: &str) -> Self {
+        Message {
+            role: role.to_string(),
+            content: Some(text.to_string()),
+            content_blocks: None,
+        }
+    }
+
+    /// Create message with content blocks
+    pub fn with_blocks(role: &str, blocks: Vec<MessageContentBlock>) -> Self {
+        Message {
+            role: role.to_string(),
+            content: None,
+            content_blocks: Some(blocks),
+        }
+    }
+
+    /// Get text representation of message
+    pub fn as_text(&self) -> String {
+        if let Some(ref text) = self.content {
+            return text.clone();
+        }
+
+        if let Some(ref blocks) = self.content_blocks {
+            return blocks
+                .iter()
+                .filter_map(|block| match block {
+                    MessageContentBlock::Text { text } => Some(text.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+        }
+
+        String::new()
+    }
 }
 
 /// Create a new agent session
@@ -88,7 +148,7 @@ pub async fn call_claude_api(
         .iter()
         .map(|m| ClaudeMessage {
             role: m.role.clone(),
-            content: m.content.clone(),
+            content: m.as_text(),
         })
         .collect::<Vec<_>>();
 
@@ -184,13 +244,59 @@ mod tests {
     }
 
     #[test]
-    fn test_message_structure() {
-        let msg = Message {
-            role: "user".to_string(),
-            content: "Hello".to_string(),
-        };
+    fn test_message_text_helper() {
+        let msg = Message::text("user", "Hello");
         assert_eq!(msg.role, "user");
-        assert_eq!(msg.content, "Hello");
+        assert_eq!(msg.content, Some("Hello".to_string()));
+        assert!(msg.content_blocks.is_none());
+    }
+
+    #[test]
+    fn test_message_with_blocks() {
+        let blocks = vec![MessageContentBlock::Text {
+            text: "Hello".to_string(),
+        }];
+        let msg = Message::with_blocks("assistant", blocks);
+        assert_eq!(msg.role, "assistant");
+        assert!(msg.content.is_none());
+        assert!(msg.content_blocks.is_some());
+    }
+
+    #[test]
+    fn test_message_as_text_from_string() {
+        let msg = Message::text("user", "Hello, world!");
+        assert_eq!(msg.as_text(), "Hello, world!");
+    }
+
+    #[test]
+    fn test_message_as_text_from_blocks() {
+        let blocks = vec![
+            MessageContentBlock::Text {
+                text: "Part 1".to_string(),
+            },
+            MessageContentBlock::Text {
+                text: "Part 2".to_string(),
+            },
+        ];
+        let msg = Message::with_blocks("assistant", blocks);
+        assert_eq!(msg.as_text(), "Part 1\nPart 2");
+    }
+
+    #[test]
+    fn test_message_as_text_mixed_blocks() {
+        let blocks = vec![
+            MessageContentBlock::Text {
+                text: "Text content".to_string(),
+            },
+            MessageContentBlock::ToolUse {
+                id: "tool_1".to_string(),
+                name: "bash".to_string(),
+                input: serde_json::json!({}),
+            },
+        ];
+        let msg = Message::with_blocks("assistant", blocks);
+        // Should only extract text content
+        assert_eq!(msg.as_text(), "Text content");
     }
 
     #[test]

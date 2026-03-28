@@ -24,6 +24,7 @@ pub mod db;
 pub mod queries;
 pub mod plugins;
 pub mod errors;
+pub mod providers;
 
 use axum::{
     extract::{ws::WebSocketUpgrade, Path},
@@ -39,6 +40,115 @@ use tower_http::cors::CorsLayer;
 use governor::{Quota, RateLimiter, state::{InMemoryState, NotKeyed}, clock::DefaultClock};
 use std::num::NonZeroU32;
 use std::sync::Arc;
+use std::collections::HashMap;
+use tokio::sync::RwLock;
+
+/// Model registry for managing available models
+pub struct ModelRegistry {
+    /// Cache of models from models.rs
+    models: Vec<models::Model>,
+}
+
+impl ModelRegistry {
+    /// Create new model registry
+    pub fn new() -> Result<Self, String> {
+        let models = models::list_models()?;
+        Ok(ModelRegistry { models })
+    }
+
+    /// Get all available models
+    pub fn list(&self) -> Vec<models::Model> {
+        self.models.clone()
+    }
+
+    /// Find a model by ID
+    pub fn find(&self, id: &str) -> Option<models::Model> {
+        self.models.iter().find(|m| m.id == id).cloned()
+    }
+
+    /// Get API key for a specific model/provider
+    pub fn get_api_key_for_model(&self, model_id: &str, auth_storage: &AuthStorage) -> Option<String> {
+        self.find(model_id)
+            .and_then(|model| auth_storage.get_key(&model.provider.to_lowercase()))
+    }
+}
+
+/// Authentication storage for API keys
+pub struct AuthStorage;
+
+impl AuthStorage {
+    /// Get API key for a provider, checking keychain first then env vars
+    pub fn get_key(&self, provider: &str) -> Option<String> {
+        let provider_lower = provider.to_lowercase();
+
+        // Try keychain first
+        if let Ok(Some(key)) = keychain::get(&format!("{}-api-key", provider_lower)) {
+            return Some(key);
+        }
+
+        // Fall back to environment variables
+        let env_var = match provider_lower.as_str() {
+            "anthropic" => std::env::var("ANTHROPIC_API_KEY").ok(),
+            "openai" => std::env::var("OPENAI_API_KEY").ok(),
+            "google" => std::env::var("GOOGLE_API_KEY").ok(),
+            "cohere" => std::env::var("COHERE_API_KEY").ok(),
+            _ => None,
+        };
+
+        env_var
+    }
+
+    /// Store API key for a provider
+    pub fn set_key(&self, provider: &str, key: &str) -> Result<(), String> {
+        let provider_lower = provider.to_lowercase();
+        keychain::set(&format!("{}-api-key", provider_lower), key)
+    }
+
+    /// Delete API key for a provider
+    pub fn delete_key(&self, provider: &str) -> Result<bool, String> {
+        let provider_lower = provider.to_lowercase();
+        keychain::delete(&format!("{}-api-key", provider_lower))
+    }
+
+    /// Get list of configured providers (those with keys stored)
+    pub fn get_configured_providers(&self) -> Result<Vec<String>, String> {
+        let providers = vec!["anthropic", "openai", "google", "cohere"];
+        let mut configured = Vec::new();
+
+        for provider in providers {
+            if self.get_key(provider).is_some() {
+                configured.push(provider.to_string());
+            }
+        }
+
+        Ok(configured)
+    }
+}
+
+/// Application state container
+pub struct AppState {
+    /// Model registry
+    pub model_registry: Arc<ModelRegistry>,
+    /// Authentication storage
+    pub auth_storage: Arc<AuthStorage>,
+    /// Session map: session_id -> AgentSession
+    pub session_map: Arc<RwLock<HashMap<String, Arc<RwLock<agent::AgentSession>>>>>,
+}
+
+impl AppState {
+    /// Create new app state
+    pub fn new() -> Result<Self, String> {
+        let model_registry = Arc::new(ModelRegistry::new()?);
+        let auth_storage = Arc::new(AuthStorage);
+        let session_map = Arc::new(RwLock::new(HashMap::new()));
+
+        Ok(AppState {
+            model_registry,
+            auth_storage,
+            session_map,
+        })
+    }
+}
 
 /// Create CORS configuration for frontend requests
 /// Allows requests from localhost and Tauri webview contexts.
@@ -51,6 +161,9 @@ fn create_cors_layer() -> CorsLayer {
 
 /// Create the main Axum router with all endpoints and middleware.
 pub async fn create_app() -> Result<Router, String> {
+    // Initialize application state
+    let app_state = Arc::new(AppState::new()?);
+
     // Configure rate limiter: 2 requests per second with burst of 10
     // This prevents DoS attacks while allowing normal usage
     let quota = Quota::per_second(NonZeroU32::new(2).unwrap())
@@ -88,6 +201,14 @@ pub async fn create_app() -> Result<Router, String> {
         .route("/api/auth/callback", get(oauth_endpoints::callback))
         .route("/api/auth/status", get(oauth_endpoints::status))
         .route("/api/auth/logout", post(oauth_endpoints::logout))
+        // Auth/model endpoints for Phase 3
+        .route("/api/auth/key", post(auth_endpoints::set_key))
+        .route("/api/auth", get(auth_endpoints::get_configured))
+        .route("/api/model", post(agent_endpoints::set_model))
+        .route("/api/stop", post(agent_endpoints::stop_agent))
+        .route("/api/project", get(agent_endpoints::get_project))
+        .route("/api/project", post(agent_endpoints::set_project))
+        .route("/api/sandbox/status", get(agent_endpoints::sandbox_status))
         // Agent endpoints
         .route("/api/agent/session", post(agent_endpoints::create_session))
         // Settings endpoints
@@ -150,7 +271,9 @@ pub async fn create_app() -> Result<Router, String> {
         // Request body size limit (10MB max) to prevent memory exhaustion attacks
         .layer(axum::middleware::from_fn(request_size_limit_middleware))
         // CORS middleware to allow frontend requests
-        .layer(create_cors_layer());
+        .layer(create_cors_layer())
+        // Inject application state
+        .with_state(app_state);
 
     Ok(app)
 }
@@ -442,6 +565,130 @@ mod agent_endpoints {
                 }))
             )
         }
+    }
+
+    #[derive(Deserialize)]
+    pub struct SetModelRequest {
+        pub provider: String,
+        pub model_id: String,
+        #[serde(default)]
+        pub session_id: Option<String>,
+    }
+
+    /// Set the model for the session or globally
+    pub async fn set_model(Json(req): Json<SetModelRequest>) -> (StatusCode, Json<serde_json::Value>) {
+        // TODO: Implement session-scoped model selection
+        // For now, just return success
+        (
+            StatusCode::OK,
+            Json(json!({
+                "success": true,
+                "message": format!("Set model to {} for provider {}", req.model_id, req.provider)
+            }))
+        )
+    }
+
+    /// Stop an active agent run
+    pub async fn stop_agent(Json(req): Json<serde_json::Value>) -> (StatusCode, Json<serde_json::Value>) {
+        // TODO: Implement cancellation token firing
+        (
+            StatusCode::OK,
+            Json(json!({
+                "success": true,
+                "message": "Agent stopped"
+            }))
+        )
+    }
+
+    /// Get current project directory
+    pub async fn get_project() -> Json<serde_json::Value> {
+        // TODO: Return the session's working directory
+        Json(json!({
+            "cwd": std::env::current_dir()
+                .ok()
+                .and_then(|p| p.to_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| "/".to_string())
+        }))
+    }
+
+    #[derive(Deserialize)]
+    pub struct SetProjectRequest {
+        pub cwd: String,
+    }
+
+    /// Set project directory for new session
+    pub async fn set_project(Json(req): Json<SetProjectRequest>) -> (StatusCode, Json<serde_json::Value>) {
+        // TODO: Create new session at the specified directory
+        (
+            StatusCode::CREATED,
+            Json(json!({
+                "success": true,
+                "cwd": req.cwd
+            }))
+        )
+    }
+
+    /// Get sandbox support status
+    pub async fn sandbox_status() -> Json<serde_json::Value> {
+        Json(json!({
+            "supported": true,
+            "features": ["tool_execution", "approval_flow", "tool_schemas"]
+        }))
+    }
+}
+
+/// Auth API endpoints (Phase 3)
+mod auth_endpoints {
+    use super::*;
+
+    #[derive(Deserialize)]
+    pub struct SetKeyRequest {
+        pub provider: String,
+        pub key: String,
+    }
+
+    /// Store API key for a provider
+    pub async fn set_key(Json(req): Json<SetKeyRequest>) -> (StatusCode, Json<serde_json::Value>) {
+        match keychain::set(&format!("{}-api-key", req.provider.to_lowercase()), &req.key) {
+            Ok(_) => (
+                StatusCode::OK,
+                Json(json!({
+                    "success": true,
+                    "message": format!("API key stored for {}", req.provider)
+                }))
+            ),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "success": false,
+                    "error": e
+                }))
+            )
+        }
+    }
+
+    /// Get configured providers (those with keys stored)
+    pub async fn get_configured() -> Json<serde_json::Value> {
+        let providers = vec!["anthropic", "openai", "google", "cohere"];
+        let mut configured = Vec::new();
+
+        for provider in providers {
+            if keychain::get(&format!("{}-api-key", provider)).ok().flatten().is_some() {
+                configured.push(json!({
+                    "provider": provider,
+                    "configured": true
+                }));
+            } else {
+                configured.push(json!({
+                    "provider": provider,
+                    "configured": false
+                }));
+            }
+        }
+
+        Json(json!({
+            "providers": configured
+        }))
     }
 }
 
