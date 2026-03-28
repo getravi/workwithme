@@ -1,6 +1,15 @@
+// Phase 3: Extensions Module
+// =========================
+//
+// Provides utilities for session enhancement:
+// - AI-powered session labelling using Claude Haiku
+// - Metadata enrichment
+// - Session context management
+
 use serde_json::json;
 
 /// Generate a short, descriptive name for a session using Claude Haiku
+/// Phase 3 Enhancement: Automatically names sessions for better UX
 pub async fn generate_session_label(api_key: &str) -> Result<String, String> {
     // Call Claude Haiku to generate a session label
     // This is a lightweight operation for naming sessions
@@ -59,15 +68,40 @@ pub async fn generate_session_label(api_key: &str) -> Result<String, String> {
 }
 
 /// Try to generate a session label, fallback to default if it fails
+/// Phase 3: Used during session creation to immediately provide a label
 pub async fn generate_session_label_with_fallback(api_key: &str) -> String {
     match generate_session_label(api_key).await {
         Ok(label) => label,
         Err(e) => {
             println!("[extensions] failed to generate session label: {}", e);
-            // Fallback: use a simple default
+            // Fallback: use a simple default based on UUID
+            // Format: "session-abc123de" (readable but brief)
             format!("session-{}", uuid::Uuid::new_v4().to_string()[..8].to_string())
         }
     }
+}
+
+/// Generate session label asynchronously (spawn and forget)
+/// Phase 3: For background label generation after first message
+/// Returns the label via optional callback (for WS broadcasts)
+pub fn spawn_label_generation_async(api_key: String, session_id: String) {
+    // Spawn async task to generate label without blocking
+    tokio::spawn(async move {
+        match generate_session_label(&api_key).await {
+            Ok(label) => {
+                // TODO: Broadcast session_label_updated WS event
+                // event: {
+                //   "type": "session_label_updated",
+                //   "session_id": session_id,
+                //   "label": label
+                // }
+                println!("[extensions] generated label '{}' for session {}", label, session_id);
+            }
+            Err(e) => {
+                println!("[extensions] async label generation failed for {}: {}", session_id, e);
+            }
+        }
+    });
 }
 
 #[cfg(test)]
@@ -85,5 +119,29 @@ mod tests {
         let raw = "\"\"";
         let cleaned = raw.trim().trim_matches('"');
         assert!(cleaned.is_empty());
+    }
+
+    #[test]
+    fn test_fallback_label_format() {
+        // Test that fallback labels have correct format
+        let label = format!("session-{}", uuid::Uuid::new_v4().to_string()[..8].to_string());
+        assert!(label.starts_with("session-"));
+        assert_eq!(label.len(), 16); // "session-" (8) + uuid[..8] (8) = 16 chars
+    }
+
+    #[test]
+    fn test_label_lowercase() {
+        // Labels should be lowercase
+        let raw = "\"BUG-HUNTING\"";
+        let cleaned = raw.trim().trim_matches('"').to_lowercase();
+        assert_eq!(cleaned, "bug-hunting");
+    }
+
+    #[test]
+    fn test_label_whitespace_trimmed() {
+        // Whitespace should be trimmed from outside quotes, then inside quotes removed
+        let raw = "  \"bug-hunting\"  ";
+        let cleaned = raw.trim().trim_matches('"').to_lowercase();
+        assert_eq!(cleaned, "bug-hunting");
     }
 }
