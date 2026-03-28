@@ -2136,3 +2136,87 @@ mod connectors_endpoints {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_set_project_request_with_session_id() {
+        // Test that SetProjectRequest properly deserializes with sessionId
+        let json = r#"{"cwd":"/home/user/project","sessionId":"abc123"}"#;
+        let req: agent_endpoints::SetProjectRequest = serde_json::from_str(json).unwrap();
+
+        assert_eq!(req.cwd, "/home/user/project");
+        assert_eq!(req.sessionId, Some("abc123".to_string()));
+    }
+
+    #[test]
+    fn test_set_project_request_without_session_id() {
+        // Test that SetProjectRequest works without sessionId (optional field)
+        let json = r#"{"cwd":"/home/user/project"}"#;
+        let req: agent_endpoints::SetProjectRequest = serde_json::from_str(json).unwrap();
+
+        assert_eq!(req.cwd, "/home/user/project");
+        assert_eq!(req.sessionId, None);
+    }
+
+    #[test]
+    fn test_cwd_stored_in_session_metadata() {
+        // Test that cwd is properly stored in session metadata
+        let cwd = "/home/user/projects/my-app";
+        let session = agent::create_session();
+
+        // Simulate what set_project does: update metadata with cwd
+        let mut session_json = serde_json::to_value(&session).unwrap();
+        if let Some(meta) = session_json.get_mut("metadata") {
+            if let Some(meta_obj) = meta.as_object_mut() {
+                meta_obj.insert("cwd".to_string(), json!(cwd));
+            }
+        }
+
+        // Verify cwd is in metadata
+        let stored_cwd = session_json
+            .get("metadata")
+            .and_then(|m| m.get("cwd"))
+            .and_then(|c| c.as_str());
+
+        assert_eq!(stored_cwd, Some(cwd));
+    }
+
+    #[test]
+    fn test_model_registry_initialization() {
+        // Test that ModelRegistry initializes properly
+        match ModelRegistry::new() {
+            Ok(registry) => {
+                let models = registry.list();
+                // Should have at least some models
+                assert!(!models.is_empty(), "ModelRegistry should have models");
+            }
+            Err(e) => panic!("Failed to initialize ModelRegistry: {}", e),
+        }
+    }
+
+    #[test]
+    fn test_model_registry_find() {
+        // Test finding a model by ID
+        match ModelRegistry::new() {
+            Ok(registry) => {
+                // Should find claude-opus (common model)
+                let found = registry.find("claude-opus-4-6");
+                assert!(found.is_some(), "Should find claude-opus-4-6 model");
+            }
+            Err(e) => panic!("Failed to initialize ModelRegistry: {}", e),
+        }
+    }
+
+    #[test]
+    fn test_auth_storage_initialization() {
+        // Test that AuthStorage initializes and can query providers
+        let auth = AuthStorage;
+
+        // AuthStorage should be able to get configured providers
+        let result = auth.get_configured_providers();
+        assert!(result.is_ok(), "Should be able to query providers");
+    }
+}

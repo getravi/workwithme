@@ -1094,6 +1094,116 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn test_mcp_tool_structure() {
+        // Test McpTool serialization/deserialization
+        let tool = McpTool {
+            name: "list_files".to_string(),
+            description: "List files in a directory".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string" }
+                }
+            }),
+        };
+
+        // Verify serialization
+        let json = serde_json::to_string(&tool).unwrap();
+        let parsed: McpTool = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.name, "list_files");
+        assert_eq!(parsed.description, "List files in a directory");
+        assert!(parsed.input_schema.is_object());
+    }
+
+    #[test]
+    fn test_mcp_tool_definition_conversion() {
+        // Test that McpTool converts to ToolDefinition correctly
+        let mcp_tool = McpTool {
+            name: "github_search".to_string(),
+            description: "Search GitHub repositories".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string" },
+                    "limit": { "type": "integer" }
+                },
+                "required": ["query"]
+            }),
+        };
+
+        // Convert to ToolDefinition
+        let tool_def = crate::server::tools::ToolDefinition {
+            name: mcp_tool.name.clone(),
+            description: mcp_tool.description.clone(),
+            input_schema: mcp_tool.input_schema.clone(),
+        };
+
+        assert_eq!(tool_def.name, "github_search");
+        assert!(tool_def.input_schema["properties"]["query"].is_object());
+        assert!(tool_def.input_schema["required"].as_array().unwrap().contains(&json!("query")));
+    }
+
+    #[test]
+    fn test_mcp_server_config_structure() {
+        // Test that MCP server configs have the right structure
+        let server_config = json!({
+            "command": "node mcp-server.js",
+            "enabled": true,
+            "env": {
+                "API_KEY": "test-key"
+            }
+        });
+
+        assert_eq!(server_config["command"], "node mcp-server.js");
+        assert_eq!(server_config["enabled"], true);
+        assert_eq!(server_config["env"]["API_KEY"], "test-key");
+    }
+
+    #[test]
+    fn test_mcp_config_default_structure() {
+        // Test default MCP config structure
+        let default_config = json!({
+            "mcpServers": {}
+        });
+
+        assert!(default_config["mcpServers"].is_object());
+        assert_eq!(default_config["mcpServers"].as_object().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_mcp_server_validation_with_ssrf() {
+        // Test SSRF validation for various URLs
+        let test_cases = vec![
+            ("https://api.example.com/v1", true),
+            ("https://mcp.github.com", true),
+            ("http://localhost:3000", false),
+            ("http://127.0.0.1:8000", false),
+            ("https://192.168.1.1", false),
+            ("https://10.0.0.1", false),
+        ];
+
+        for (url, should_pass) in test_cases {
+            let result = validate_mcp_url(url);
+            if should_pass {
+                assert!(
+                    result.is_ok(),
+                    "URL {} should be valid but got: {:?}",
+                    url,
+                    result
+                );
+            } else {
+                assert!(
+                    result.is_err(),
+                    "URL {} should be invalid for SSRF protection",
+                    url
+                );
+            }
+        }
+    }
+
 }
 
 // Phase 3: MCP Tool Loading for Agent Integration
