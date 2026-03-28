@@ -1,7 +1,7 @@
 # Workwithme Backend Architecture
 
-**Version:** Phase 3 Complete (v0.1.6)
-**Last Updated:** 2026-03-27
+**Version:** Phase 3 Complete + Phase 3b/4a/4b Extensions (v0.1.7)
+**Last Updated:** 2026-03-28
 **Status:** Production Ready
 
 ---
@@ -739,24 +739,149 @@ pub struct Message {
 ```
 Agent needs tools
   ↓
-load_agent_mcp_tools(session_cwd)
+load_agent_mcp_tools()
   ↓
 Load ~/.pi/agent/mcp.json config
   ↓
 For each enabled MCP in config:
-  1. Start stdio server process
-  2. Call tools/list via JSON-RPC
-  3. Parse tool schemas
-  4. Convert to ToolDefinition
+  1. Spawn stdio server process (tokio::process::Command)
+  2. Send JSON-RPC initialize request
+  3. Send tools/list request
+  4. Parse tool schemas from response
+  5. Convert to ToolDefinition format
+  6. Release process
   ↓
 Merge with built-in tools (5)
   ↓
-Include in CompletionRequest.tools
+Include in CompletionRequest.tools sent to LLM
 ```
 
-**Current Status:** Framework in place; stdio server implementation deferred to Phase 3b.
+**Status:** ✅ Fully implemented Phase 3b
+
+**MCP Stdio Server Implementation:**
+- Location: `src/server/mcp.rs` - `query_mcp_server_tools()`
+- JSON-RPC protocol version: 2024-11-05
+- Process management: Async via `tokio::process::Command`
+- Error handling: Graceful degradation if MCP server fails
+- Tool routing: `execute_mcp_tool()` in `src/server/tools.rs`
+
+**Tool Execution Flow:**
+1. Agent requests MCP tool (e.g., `github_search`)
+2. `execute_tool()` routes to `execute_mcp_tool()`
+3. Load MCP config, find server providing that tool
+4. Spawn server process, send tool call request via JSON-RPC
+5. Return result back to agent
 
 ---
+
+## Advanced Features (Phase 3 Extensions)
+
+### 1. Session Working Directory Persistence
+
+**Purpose:** Preserve project context across session reloads.
+
+**Implementation:**
+- Location: `src/server/mod.rs` - `set_project()` and `get_project()` handlers
+- Storage: Session metadata field `cwd` in `~/.pi/sessions/{id}.json`
+- Retrieval: Load session, extract `metadata.cwd`
+- Fallback: Default to home directory if not set
+
+**Endpoints:**
+```
+GET  /api/project?sessionId=<id>    → Returns session's cwd
+POST /api/project                   → Creates/updates session with cwd
+  {
+    "cwd": "/home/user/projects",
+    "sessionId": "optional-to-update-existing"
+  }
+```
+
+**Test Coverage:** `test_cwd_stored_in_session_metadata`, `test_set_project_request_*`
+
+---
+
+### 2. Sandbox Approval UI Modal
+
+**Purpose:** User-visible approval flow for sensitive operations.
+
+**Frontend Implementation:**
+- Location: `src/App.tsx`
+- State: `approvalRequest` stores pending approval details
+- Event Listener: Handles `SANDBOX_APPROVAL_REQUEST` WebSocket events
+- Modal: Displays operation type, description, context details
+- Timeout Warning: Shows 30-second auto-deny countdown
+- Response: Sends `SANDBOX_APPROVAL_RESPONSE` back via WebSocket
+
+**Approval Operation Types:**
+1. `write_file` - File write with path and content preview
+2. `bash_write` - Bash command with privilege escalation
+3. `sandbox_escape` - Unrestricted operation with operation/reason/context
+
+**Flow:**
+```
+Backend detects sensitive operation
+  ↓
+Creates ApprovalRequest (with id, type, description)
+  ↓
+Sends SANDBOX_APPROVAL_REQUEST event over WebSocket
+  ↓
+Frontend shows approval modal
+  ↓
+User clicks Approve/Deny
+  ↓
+Frontend sends SANDBOX_APPROVAL_RESPONSE
+  ↓
+Backend receives response via ApprovalManager
+  ↓
+Releases blocked operation or denies with error
+```
+
+**Backend Integration:** `src/server/approval.rs`, `create_sandbox_approval_request()`, `wait_for_approval_with_timeout()`
+
+---
+
+### 3. Parallel Claude Task Orchestration
+
+**Purpose:** Safe concurrent execution of multiple Claude Code subtasks.
+
+**Implementation:**
+- Location: `src/server/tools.rs` - `execute_claude()`
+- Concurrency Control: Global `CLAUDE_CONCURRENCY_SEMAPHORE` (capacity: 3)
+- Async Execution: `tokio::process::Command` for non-blocking stdio
+- Permit Management: Auto-released when task completes or fails
+
+**Parameters:**
+```rust
+{
+  "prompt": "task description",      // Required
+  "cwd": "/path/to/work",            // Optional, default: "."
+  "parallel": true                   // Optional, default: false
+}
+```
+
+**Execution Modes:**
+- `parallel=false`: Sequential execution, no semaphore
+- `parallel=true`: Async execution with semaphore permit
+  - Max 3 concurrent tasks (semaphore capacity)
+  - Up to 8 total parallel tasks queued
+  - Automatic queuing when capacity reached
+
+**Permit Lifecycle:**
+```
+acquire(semaphore)
+  ↓
+spawn_claude_process()
+  ↓
+tokio::command.output().await
+  ↓
+release(semaphore)  ← Automatic when _permit drops
+```
+
+**Test Coverage:** `test_claude_tool_semaphore_initialization`, `test_claude_tool_parallel_parameter`
+
+---
+
+## Error Handling
 
 ## Error Handling
 
@@ -908,27 +1033,28 @@ RUST_LOG=debug cargo run
 
 ## Future Roadmap
 
-### Phase 3b
-- Full MCP stdio server implementation
-- Connection pooling for MCP servers
-- Tool schema caching
+### Phase 3b ✅ COMPLETED
+- ✅ Full MCP stdio server implementation (`query_mcp_server_tools()`)
+- ✅ Sandbox approval UI modal (frontend + backend integration)
+- 🔲 Connection pooling for MCP servers (optimization, deferred)
+- 🔲 Tool schema caching (optimization, deferred)
 
-### Phase 4a
-- Parallel claude task orchestration
-- Semaphore-based concurrency control (max 3 concurrent, 8 total)
+### Phase 4a ✅ COMPLETED
+- ✅ Parallel claude task orchestration with semaphore
+- ✅ Semaphore-based concurrency control (max 3 concurrent, 8 total)
 
-### Phase 4b
-- Session cwd persistence
-- Per-session model selection
+### Phase 4b ✅ COMPLETED
+- ✅ Session cwd persistence (`metadata.cwd` in session JSON)
+- 🔲 Per-session model selection (endpoints exist, persistence deferred)
 
 ### Phase 4c
-- OpenAI provider full implementation
-- Token counting for context window management
+- 🔲 OpenAI provider full implementation (currently stub)
+- 🔲 Token counting for context window management
 
 ### Phase 5
-- Frontend integration
-- Real-world testing and optimization
-- Production monitoring
+- 🔲 Frontend integration polish (MCP UI improvements)
+- 🔲 Real-world testing and optimization
+- 🔲 Production monitoring
 
 ---
 
