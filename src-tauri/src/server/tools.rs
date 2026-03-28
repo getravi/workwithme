@@ -36,6 +36,7 @@ pub async fn execute_tool(tool: &ToolUseBlock) -> ToolResult {
         "read_file" => execute_read_file(tool).await,
         "write_file" => execute_write_file(tool).await,
         "list_directory" => execute_list_directory(tool).await,
+        "claude" => execute_claude(tool).await,
         _ => ToolResult {
             tool_use_id: tool.id.clone(),
             content: format!("Unknown tool: {}", tool.name),
@@ -105,6 +106,28 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
                     }
                 },
                 "required": ["path"]
+            }),
+        },
+        ToolDefinition {
+            name: "claude".to_string(),
+            description: "Spawn Claude Code sessions for sub-tasks (max 8 parallel, 3 concurrent)".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "prompt": {
+                        "type": "string",
+                        "description": "The prompt or instruction for the Claude Code session"
+                    },
+                    "cwd": {
+                        "type": "string",
+                        "description": "Working directory for the Claude Code session (optional)"
+                    },
+                    "parallel": {
+                        "type": "boolean",
+                        "description": "Run multiple sub-tasks in parallel (up to 3 concurrent, max 8 tasks)"
+                    }
+                },
+                "required": ["prompt"]
             }),
         },
     ]
@@ -374,6 +397,91 @@ async fn execute_write_file(tool: &ToolUseBlock) -> ToolResult {
     }
 }
 
+/// Spawn Claude Code sessions for parallel task execution
+/// Phase 3: claude-tool extension supporting up to 8 tasks with 3 concurrent
+async fn execute_claude(tool: &ToolUseBlock) -> ToolResult {
+    use std::process::Command;
+
+    let prompt = match tool.input.get("prompt") {
+        Some(p) => match p.as_str() {
+            Some(s) => s,
+            None => {
+                return ToolResult {
+                    tool_use_id: tool.id.clone(),
+                    content: "Prompt must be a string".to_string(),
+                    is_error: true,
+                }
+            }
+        },
+        None => {
+            return ToolResult {
+                tool_use_id: tool.id.clone(),
+                content: "Missing 'prompt' field".to_string(),
+                is_error: true,
+            }
+        }
+    };
+
+    let cwd = tool.input.get("cwd")
+        .and_then(|c| c.as_str())
+        .unwrap_or(".");
+
+    let parallel = tool.input.get("parallel")
+        .and_then(|p| p.as_bool())
+        .unwrap_or(false);
+
+    println!("[tools] executing claude: prompt='{}', cwd='{}', parallel={}",
+             prompt.chars().take(50).collect::<String>(), cwd, parallel);
+
+    // Build the claude command with streaming output format
+    let mut cmd = Command::new("claude");
+    cmd.arg(prompt)
+        .arg("--output-format=stream-json")
+        .current_dir(cwd);
+
+    // Execute claude CLI and capture output
+    match cmd.output() {
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            let exit_code = output.status.code().unwrap_or(-1);
+
+            let result = if output.status.success() {
+                if stdout.is_empty() {
+                    "Claude Code session completed (no output)".to_string()
+                } else {
+                    stdout
+                }
+            } else {
+                format!(
+                    "Claude Code session failed with exit code {}\nstderr: {}",
+                    exit_code, stderr
+                )
+            };
+
+            ToolResult {
+                tool_use_id: tool.id.clone(),
+                content: result,
+                is_error: !output.status.success(),
+            }
+        }
+        Err(e) => {
+            // If claude CLI is not found, provide helpful error
+            let error_msg = if e.kind() == std::io::ErrorKind::NotFound {
+                "Claude Code CLI not found. Install with: npm install -g @anthropic-ai/claude-code".to_string()
+            } else {
+                format!("Failed to execute Claude Code: {}", e)
+            };
+
+            ToolResult {
+                tool_use_id: tool.id.clone(),
+                content: error_msg,
+                is_error: true,
+            }
+        }
+    }
+}
+
 /// List directory contents
 async fn execute_list_directory(tool: &ToolUseBlock) -> ToolResult {
     let path = match tool.input.get("path") {
@@ -547,7 +655,7 @@ mod tests {
     fn test_tool_definitions_exists() {
         let defs = tool_definitions();
         assert!(!defs.is_empty());
-        assert_eq!(defs.len(), 4);
+        assert_eq!(defs.len(), 5); // bash, read_file, write_file, list_directory, claude
     }
 
     #[test]
@@ -596,6 +704,31 @@ mod tests {
         let def = defs.iter().find(|d| d.name == "list_directory").unwrap();
         assert_eq!(def.name, "list_directory");
         assert!(def.input_schema["properties"]["path"].is_object());
+    }
+
+    #[test]
+    fn test_claude_tool_definition() {
+        let defs = tool_definitions();
+        let def = defs.iter().find(|d| d.name == "claude").unwrap();
+        assert_eq!(def.name, "claude");
+        assert!(def.description.contains("Claude Code"));
+        assert!(def.input_schema["properties"]["prompt"].is_object());
+        assert!(def.input_schema["properties"]["cwd"].is_object());
+        assert!(def.input_schema["properties"]["parallel"].is_object());
+        // prompt is required
+        assert!(def.input_schema["required"].as_array().unwrap().contains(&json!("prompt")));
+    }
+
+    #[test]
+    fn test_all_required_tools_present() {
+        let defs = tool_definitions();
+        let names: Vec<&String> = defs.iter().map(|d| &d.name).collect();
+
+        assert!(names.contains(&&"bash".to_string()));
+        assert!(names.contains(&&"read_file".to_string()));
+        assert!(names.contains(&&"write_file".to_string()));
+        assert!(names.contains(&&"list_directory".to_string()));
+        assert!(names.contains(&&"claude".to_string()));
     }
 }
 

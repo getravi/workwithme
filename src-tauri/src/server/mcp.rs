@@ -138,7 +138,7 @@ pub struct CatalogEntry {
     pub logo_svg: Option<String>,
 }
 
-/// Get the hardcoded MCP catalog (40+ services)
+/// Get the hardcoded MCP catalog (50+ services)
 pub fn get_catalog() -> Vec<CatalogEntry> {
     vec![
         // Productivity (10)
@@ -445,6 +445,36 @@ pub fn get_catalog() -> Vec<CatalogEntry> {
             requires_token: true,
             logo_svg: None,
         },
+        CatalogEntry {
+            slug: "zoom".to_string(),
+            name: "Zoom".to_string(),
+            description: "Schedule meetings and manage Zoom integrations".to_string(),
+            category: "Communication".to_string(),
+            url: "https://mcp.zoom.us/v1".to_string(),
+            docs_url: Some("https://developers.zoom.us/docs".to_string()),
+            requires_token: true,
+            logo_svg: None,
+        },
+        CatalogEntry {
+            slug: "intercom".to_string(),
+            name: "Intercom".to_string(),
+            description: "Manage customer conversations and support".to_string(),
+            category: "Communication".to_string(),
+            url: "https://mcp.intercom.com/v1".to_string(),
+            docs_url: Some("https://developers.intercom.com/docs".to_string()),
+            requires_token: true,
+            logo_svg: None,
+        },
+        CatalogEntry {
+            slug: "zendesk".to_string(),
+            name: "Zendesk".to_string(),
+            description: "Manage support tickets and customer service".to_string(),
+            category: "Communication".to_string(),
+            url: "https://mcp.zendesk.com/v1".to_string(),
+            docs_url: Some("https://developer.zendesk.com/api".to_string()),
+            requires_token: true,
+            logo_svg: None,
+        },
         // Data & Analytics (5)
         CatalogEntry {
             slug: "datadog".to_string(),
@@ -527,6 +557,101 @@ pub fn get_catalog() -> Vec<CatalogEntry> {
             requires_token: true,
             logo_svg: None,
         },
+        // Design (2)
+        CatalogEntry {
+            slug: "figma".to_string(),
+            name: "Figma".to_string(),
+            description: "Access and manage Figma designs and files".to_string(),
+            category: "Design".to_string(),
+            url: "https://mcp.figma.com/v1".to_string(),
+            docs_url: Some("https://www.figma.com/developers/api".to_string()),
+            requires_token: true,
+            logo_svg: None,
+        },
+        CatalogEntry {
+            slug: "adobe-creative-cloud".to_string(),
+            name: "Adobe Creative Cloud".to_string(),
+            description: "Access Adobe Creative Cloud applications".to_string(),
+            category: "Design".to_string(),
+            url: "https://mcp.adobe.com/v1".to_string(),
+            docs_url: Some("https://developer.adobe.com/console".to_string()),
+            requires_token: true,
+            logo_svg: None,
+        },
+        // CRM (2)
+        CatalogEntry {
+            slug: "salesforce".to_string(),
+            name: "Salesforce".to_string(),
+            description: "Manage Salesforce CRM data and contacts".to_string(),
+            category: "CRM".to_string(),
+            url: "https://mcp.salesforce.com/v1".to_string(),
+            docs_url: Some("https://developer.salesforce.com/docs".to_string()),
+            requires_token: true,
+            logo_svg: None,
+        },
+        CatalogEntry {
+            slug: "hubspot".to_string(),
+            name: "HubSpot".to_string(),
+            description: "Manage HubSpot CRM, marketing, and sales".to_string(),
+            category: "CRM".to_string(),
+            url: "https://mcp.hubapi.com/v1".to_string(),
+            docs_url: Some("https://developers.hubspot.com/docs".to_string()),
+            requires_token: true,
+            logo_svg: None,
+        },
+        // Backend & Databases (3)
+        CatalogEntry {
+            slug: "supabase".to_string(),
+            name: "Supabase".to_string(),
+            description: "Access Supabase PostgreSQL databases and storage".to_string(),
+            category: "Backend".to_string(),
+            url: "https://mcp.supabase.com/v1".to_string(),
+            docs_url: Some("https://supabase.com/docs".to_string()),
+            requires_token: true,
+            logo_svg: None,
+        },
+        CatalogEntry {
+            slug: "firebase".to_string(),
+            name: "Firebase".to_string(),
+            description: "Access Firebase database and services".to_string(),
+            category: "Backend".to_string(),
+            url: "https://mcp.firebase.com/v1".to_string(),
+            docs_url: Some("https://firebase.google.com/docs".to_string()),
+            requires_token: true,
+            logo_svg: None,
+        },
+        CatalogEntry {
+            slug: "mongodb".to_string(),
+            name: "MongoDB".to_string(),
+            description: "Query and manage MongoDB databases".to_string(),
+            category: "Backend".to_string(),
+            url: "https://mcp.mongodb.com/v1".to_string(),
+            docs_url: Some("https://www.mongodb.com/docs".to_string()),
+            requires_token: true,
+            logo_svg: None,
+        },
+        // Marketing (1)
+        CatalogEntry {
+            slug: "mailchimp".to_string(),
+            name: "Mailchimp".to_string(),
+            description: "Manage email campaigns and marketing lists".to_string(),
+            category: "Marketing".to_string(),
+            url: "https://mcp.mailchimp.com/v1".to_string(),
+            docs_url: Some("https://mailchimp.com/developer".to_string()),
+            requires_token: true,
+            logo_svg: None,
+        },
+        // Streaming (1)
+        CatalogEntry {
+            slug: "twitch".to_string(),
+            name: "Twitch".to_string(),
+            description: "Access Twitch channels and stream data".to_string(),
+            category: "Streaming".to_string(),
+            url: "https://mcp.twitch.tv/v1".to_string(),
+            docs_url: Some("https://dev.twitch.tv/docs".to_string()),
+            requires_token: true,
+            logo_svg: None,
+        },
     ]
 }
 
@@ -543,7 +668,7 @@ mod tests {
     #[test]
     fn test_catalog_has_entries() {
         let catalog = get_catalog();
-        assert!(catalog.len() >= 35); // We have 38 entries
+        assert!(catalog.len() >= 50); // We have 50+ entries
     }
 
     #[test]
@@ -699,6 +824,11 @@ mod tests {
         assert!(categories.contains("Communication"));
         assert!(categories.contains("Data & Analytics"));
         assert!(categories.contains("Finance"));
+        assert!(categories.contains("Design"));
+        assert!(categories.contains("CRM"));
+        assert!(categories.contains("Backend"));
+        assert!(categories.contains("Marketing"));
+        assert!(categories.contains("Streaming"));
     }
 
     #[test]
@@ -787,10 +917,10 @@ mod tests {
     #[test]
     fn test_catalog_entry_count_minimum() {
         let catalog = get_catalog();
-        // Verify we have at least 35 entries (currently 38)
+        // Verify we have at least 50 entries (currently 50)
         assert!(
-            catalog.len() >= 35,
-            "Catalog should have at least 35 entries, got {}",
+            catalog.len() >= 50,
+            "Catalog should have at least 50 entries, got {}",
             catalog.len()
         );
     }
