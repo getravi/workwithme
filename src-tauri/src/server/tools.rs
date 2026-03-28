@@ -4,6 +4,14 @@ use std::fs;
 use std::path::Path;
 use crate::server::sandbox::{Sandbox, SandboxProfile};
 use crate::server::approval::{create_write_file_approval_request, APPROVAL_MANAGER};
+use lazy_static::lazy_static;
+use tokio::sync::Semaphore;
+use std::sync::Arc;
+
+// Global semaphore for limiting concurrent claude task execution to 3 tasks
+lazy_static! {
+    static ref CLAUDE_CONCURRENCY_SEMAPHORE: Arc<Semaphore> = Arc::new(Semaphore::new(3));
+}
 
 /// Tool definition with JSON schema
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -398,9 +406,8 @@ async fn execute_write_file(tool: &ToolUseBlock) -> ToolResult {
 
 /// Spawn Claude Code sessions for parallel task execution
 /// Phase 3: claude-tool extension supporting up to 8 tasks with 3 concurrent
+/// When parallel=true, acquires a semaphore permit to limit concurrency to 3 tasks
 async fn execute_claude(tool: &ToolUseBlock) -> ToolResult {
-    use std::process::Command;
-
     let prompt = match tool.input.get("prompt") {
         Some(p) => match p.as_str() {
             Some(s) => s,
@@ -432,14 +439,30 @@ async fn execute_claude(tool: &ToolUseBlock) -> ToolResult {
     println!("[tools] executing claude: prompt='{}', cwd='{}', parallel={}",
              prompt.chars().take(50).collect::<String>(), cwd, parallel);
 
-    // Build the claude command with streaming output format
-    let mut cmd = Command::new("claude");
+    // If parallel mode, acquire semaphore permit to limit concurrency to 3 tasks
+    let _permit = if parallel {
+        match CLAUDE_CONCURRENCY_SEMAPHORE.acquire().await {
+            Ok(p) => Some(p),
+            Err(_) => {
+                return ToolResult {
+                    tool_use_id: tool.id.clone(),
+                    content: "Failed to acquire concurrency permit".to_string(),
+                    is_error: true,
+                }
+            }
+        }
+    } else {
+        None
+    };
+
+    // Build the claude command with streaming output format (using tokio async version)
+    let mut cmd = tokio::process::Command::new("claude");
     cmd.arg(prompt)
         .arg("--output-format=stream-json")
         .current_dir(cwd);
 
-    // Execute claude CLI and capture output
-    match cmd.output() {
+    // Execute claude CLI asynchronously and capture output
+    match cmd.output().await {
         Ok(output) => {
             let stdout = String::from_utf8_lossy(&output.stdout).to_string();
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -458,6 +481,7 @@ async fn execute_claude(tool: &ToolUseBlock) -> ToolResult {
                 )
             };
 
+            // Semaphore permit is automatically released when _permit goes out of scope
             ToolResult {
                 tool_use_id: tool.id.clone(),
                 content: result,
@@ -465,6 +489,7 @@ async fn execute_claude(tool: &ToolUseBlock) -> ToolResult {
             }
         }
         Err(e) => {
+            // Semaphore permit is automatically released when _permit goes out of scope
             // If claude CLI is not found, provide helpful error
             let error_msg = if e.kind() == std::io::ErrorKind::NotFound {
                 "Claude Code CLI not found. Install with: npm install -g @anthropic-ai/claude-code".to_string()
