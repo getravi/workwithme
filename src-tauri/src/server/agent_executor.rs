@@ -114,8 +114,8 @@ pub async fn execute_agent_turn(
         // Create provider instance
         let provider = AnthropicProvider::new(api_key);
 
-        // Build completion request
-        let tools = tool_definitions()
+        // Build completion request - include built-in tools + MCP tools
+        let mut tools: Vec<crate::server::providers::ToolDefinition> = tool_definitions()
             .into_iter()
             .map(|t| {
                 crate::server::providers::ToolDefinition {
@@ -125,6 +125,16 @@ pub async fn execute_agent_turn(
                 }
             })
             .collect();
+
+        // Load and append MCP tools from configuration
+        let mcp_tools = crate::server::mcp::load_agent_mcp_tools().await;
+        for mcp_tool in mcp_tools {
+            tools.push(crate::server::providers::ToolDefinition {
+                name: mcp_tool.name,
+                description: mcp_tool.description,
+                input_schema: mcp_tool.input_schema,
+            });
+        }
 
         let completion_req = CompletionRequest {
             model: model_id.clone(),

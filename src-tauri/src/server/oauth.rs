@@ -65,6 +65,15 @@ fn get_provider_config(provider_id: &str) -> Option<OAuthProvider> {
             token_url: "https://connect.stripe.com/oauth/token".to_string(),
             redirect_uri: "http://localhost:4242/api/auth/callback".to_string(),
         },
+        OAuthProvider {
+            id: "openai".to_string(),
+            name: "OpenAI".to_string(),
+            client_id: std::env::var("OPENAI_CLIENT_ID").unwrap_or_default(),
+            client_secret: std::env::var("OPENAI_CLIENT_SECRET").unwrap_or_default(),
+            auth_url: "https://platform.openai.com/oauth/authorize".to_string(),
+            token_url: "https://api.openai.com/oauth/token".to_string(),
+            redirect_uri: "http://localhost:4242/api/auth/callback".to_string(),
+        },
     ];
 
     configs.into_iter().find(|c| c.id == provider_id)

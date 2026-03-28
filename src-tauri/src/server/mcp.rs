@@ -1,4 +1,5 @@
 use serde_json::{json, Value};
+use serde::{Serialize, Deserialize};
 use std::fs;
 use std::path::PathBuf;
 
@@ -655,6 +656,155 @@ pub fn get_catalog() -> Vec<CatalogEntry> {
     ]
 }
 
+/// MCP Tool definition (from tools_list response)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpTool {
+    pub name: String,
+    pub description: String,
+    pub input_schema: Value,
+}
+
+use std::process::{Command, Stdio};
+use std::io::{BufRead, BufReader, Write};
+
+/// Spawn an MCP stdio server and query its tools
+async fn query_mcp_server_tools(server_config: &Value) -> Result<Vec<McpTool>, String> {
+    // Get the command to run - could be a direct binary or a node/python script
+    let command_str = server_config
+        .get("command")
+        .and_then(|v| v.as_str())
+        .ok_or("MCP server config missing 'command' field".to_string())?;
+
+    // Parse command and args
+    let parts: Vec<&str> = command_str.split_whitespace().collect();
+    if parts.is_empty() {
+        return Err("Empty command in MCP server config".to_string());
+    }
+
+    // Spawn the stdio server process
+    let mut child = Command::new(parts[0])
+        .args(&parts[1..])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to spawn MCP server: {}", e))?;
+
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or("Failed to get stdin handle".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or("Failed to get stdout handle".to_string())?;
+
+    let reader = BufReader::new(stdout);
+    let mut lines = reader.lines();
+
+    // Send JSON-RPC initialize request
+    let init_request = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {
+                "tools": {}
+            },
+            "clientInfo": {
+                "name": "workwithme",
+                "version": "0.1.6"
+            }
+        }
+    });
+
+    stdin
+        .write_all(format!("{}\n", init_request.to_string()).as_bytes())
+        .map_err(|e| format!("Failed to write initialize request: {}", e))?;
+
+    // Read initialize response
+    let _init_response = lines
+        .next()
+        .ok_or("No response from MCP server")?
+        .map_err(|e| format!("Failed to read response: {}", e))?;
+
+    // Send tools_list request
+    let tools_request = json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/list",
+        "params": {}
+    });
+
+    stdin
+        .write_all(format!("{}\n", tools_request.to_string()).as_bytes())
+        .map_err(|e| format!("Failed to write tools_list request: {}", e))?;
+
+    // Read tools response
+    let response_str = lines
+        .next()
+        .ok_or("No tools response from MCP server")?
+        .map_err(|e| format!("Failed to read tools response: {}", e))?;
+
+    let response: Value = serde_json::from_str(&response_str)
+        .map_err(|e| format!("Failed to parse tools response: {}", e))?;
+
+    // Extract tools from result
+    let tools = response
+        .get("result")
+        .and_then(|r| r.get("tools"))
+        .and_then(|t| t.as_array())
+        .ok_or("Invalid tools response format".to_string())?;
+
+    let mut mcp_tools = Vec::new();
+    for tool_value in tools {
+        if let Ok(tool) = serde_json::from_value::<McpTool>(tool_value.clone()) {
+            mcp_tools.push(tool);
+        }
+    }
+
+    // Kill the process
+    let _ = child.kill();
+
+    Ok(mcp_tools)
+}
+
+/// Load all enabled MCP tools from configuration
+pub async fn load_agent_mcp_tools() -> Vec<crate::server::tools::ToolDefinition> {
+    let config = match load_mcp_config() {
+        Ok(cfg) => cfg,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut tools = Vec::new();
+
+    if let Some(servers) = config.get("mcpServers").and_then(|s| s.as_object()) {
+        for (slug, server_config) in servers {
+            // Check if server is enabled
+            if let Some(false) = server_config.get("enabled").and_then(|e| e.as_bool()) {
+                continue;
+            }
+
+            match query_mcp_server_tools(server_config).await {
+                Ok(mcp_tools) => {
+                    for mcp_tool in mcp_tools {
+                        tools.push(crate::server::tools::ToolDefinition {
+                            name: mcp_tool.name,
+                            description: mcp_tool.description,
+                            input_schema: mcp_tool.input_schema,
+                        });
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Failed to load tools from MCP server '{}': {}", slug, e);
+                }
+            }
+        }
+    }
+
+    tools
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -947,61 +1097,3 @@ mod tests {
 }
 
 // Phase 3: MCP Tool Loading for Agent Integration
-// =================================================
-// Load MCP-defined tools and merge with built-in tools
-
-use crate::server::tools::ToolDefinition;
-
-/// Load MCP tools from configured servers for a session
-/// Phase 3: Integrates MCP catalog with agent tool registry
-///
-/// Returns a vector of ToolDefinition that can be merged into agent requests
-/// Currently a placeholder - full implementation would:
-/// 1. Load mcp.json config
-/// 2. Start stdio servers for each configured MCP
-/// 3. Query tool list from each MCP
-/// 4. Convert MCP tool schemas to our ToolDefinition format
-pub fn load_agent_mcp_tools(_session_cwd: &str) -> Vec<ToolDefinition> {
-    // TODO: Phase 3 implementation:
-    // 1. Load config: load_mcp_config()
-    // 2. For each enabled MCP in config:
-    //    - Start stdio server process
-    //    - Call tools/list via JSON-RPC
-    //    - Parse tool schemas
-    //    - Convert to ToolDefinition
-    // 3. Return merged tool list
-
-    // For now, return empty - built-in tools are sufficient
-    // This placeholder allows agent to run without MCP integration
-    // Full integration deferred to Phase 3b
-    vec![]
-}
-
-#[cfg(test)]
-mod mcp_agent_tests {
-    use super::*;
-
-    #[test]
-    fn test_load_agent_mcp_tools_placeholder() {
-        // Currently returns empty (no external MCPs configured)
-        let tools = load_agent_mcp_tools("/home/user/project");
-        assert!(tools.is_empty() || tools.len() > 0); // Placeholder - accept any result
-    }
-
-    #[test]
-    fn test_mcp_tool_definition_structure() {
-        // Demonstrates expected MCP tool schema structure
-        // (Schema matches tools.rs ToolDefinition)
-        let expected_schema = serde_json::json!({
-            "type": "object",
-            "properties": {
-                "name": {"type": "string"},
-                "description": {"type": "string"},
-            },
-            "required": ["name"]
-        });
-
-        assert!(expected_schema.get("type").is_some());
-        assert!(expected_schema.get("properties").is_some());
-    }
-}

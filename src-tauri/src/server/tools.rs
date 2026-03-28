@@ -37,11 +37,10 @@ pub async fn execute_tool(tool: &ToolUseBlock) -> ToolResult {
         "write_file" => execute_write_file(tool).await,
         "list_directory" => execute_list_directory(tool).await,
         "claude" => execute_claude(tool).await,
-        _ => ToolResult {
-            tool_use_id: tool.id.clone(),
-            content: format!("Unknown tool: {}", tool.name),
-            is_error: true,
-        },
+        _ => {
+            // Try to execute as an MCP tool
+            execute_mcp_tool(tool).await
+        }
     }
 }
 
@@ -530,6 +529,180 @@ async fn execute_list_directory(tool: &ToolUseBlock) -> ToolResult {
             content: format!("Failed to list directory: {}", e),
             is_error: true,
         },
+    }
+}
+
+/// Execute a tool via MCP (Model Context Protocol)
+/// Loads the MCP config, finds the server that provides this tool, and executes it
+async fn execute_mcp_tool(tool: &ToolUseBlock) -> ToolResult {
+    use std::process::{Command, Stdio};
+    use std::io::{BufRead, BufReader, Write};
+
+    let tool_name = tool.name.clone();
+    let tool_input = tool.input.clone();
+
+    // Load MCP config to find which server provides this tool
+    let config = match crate::server::mcp::load_mcp_config() {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            return ToolResult {
+                tool_use_id: tool.id.clone(),
+                content: format!("Failed to load MCP config: {}", e),
+                is_error: true,
+            }
+        }
+    };
+
+    // Find the MCP server that provides this tool
+    let servers = match config.get("mcpServers").and_then(|s| s.as_object()) {
+        Some(s) => s,
+        None => {
+            return ToolResult {
+                tool_use_id: tool.id.clone(),
+                content: "No MCP servers configured".to_string(),
+                is_error: true,
+            }
+        }
+    };
+
+    for (server_slug, server_config) in servers {
+        // Skip disabled servers
+        if let Some(false) = server_config.get("enabled").and_then(|e| e.as_bool()) {
+            continue;
+        }
+
+        // Get the command to run
+        let command_str = match server_config.get("command").and_then(|v| v.as_str()) {
+            Some(cmd) => cmd,
+            None => continue,
+        };
+
+        // Spawn the MCP server
+        let parts: Vec<&str> = command_str.split_whitespace().collect();
+        if parts.is_empty() {
+            continue;
+        }
+
+        let mut child = match Command::new(parts[0])
+            .args(&parts[1..])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        let mut stdin = match child.stdin.take() {
+            Some(s) => s,
+            None => continue,
+        };
+
+        let stdout = match child.stdout.take() {
+            Some(o) => o,
+            None => continue,
+        };
+
+        let reader = BufReader::new(stdout);
+        let mut lines = reader.lines();
+
+        // Send initialize request
+        let init_request = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {
+                    "tools": {}
+                },
+                "clientInfo": {
+                    "name": "workwithme",
+                    "version": "0.1.6"
+                }
+            }
+        });
+
+        if let Err(_) = stdin.write_all(format!("{}\n", init_request.to_string()).as_bytes()) {
+            let _ = child.kill();
+            continue;
+        }
+
+        // Read initialize response
+        if lines.next().is_none() {
+            let _ = child.kill();
+            continue;
+        }
+
+        // Send tool call request
+        let call_request = json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": tool_name,
+                "arguments": tool_input
+            }
+        });
+
+        if let Err(_) = stdin.write_all(format!("{}\n", call_request.to_string()).as_bytes()) {
+            let _ = child.kill();
+            continue;
+        }
+
+        // Read tool call response
+        match lines.next() {
+            Some(Ok(response_str)) => {
+                let _ = child.kill();
+
+                match serde_json::from_str::<Value>(&response_str) {
+                    Ok(response) => {
+                        if let Some(result) = response.get("result") {
+                            let content = result
+                                .get("content")
+                                .and_then(|c| c.as_array())
+                                .and_then(|arr| arr.first())
+                                .and_then(|item| item.get("text"))
+                                .and_then(|t| t.as_str())
+                                .unwrap_or("Tool execution succeeded with no output");
+
+                            return ToolResult {
+                                tool_use_id: tool.id.clone(),
+                                content: content.to_string(),
+                                is_error: false,
+                            };
+                        }
+                        // Check for error
+                        if let Some(error) = response.get("error") {
+                            let message = error
+                                .get("message")
+                                .and_then(|m| m.as_str())
+                                .unwrap_or("Unknown error");
+                            return ToolResult {
+                                tool_use_id: tool.id.clone(),
+                                content: format!("MCP tool error: {}", message),
+                                is_error: true,
+                            };
+                        }
+                    }
+                    Err(_) => {
+                        // Try next server
+                        continue;
+                    }
+                }
+            }
+            _ => {
+                let _ = child.kill();
+                continue;
+            }
+        }
+    }
+
+    // Tool not found in any MCP server
+    ToolResult {
+        tool_use_id: tool.id.clone(),
+        content: format!("Tool '{}' not found in any configured MCP server", tool_name),
+        is_error: true,
     }
 }
 
