@@ -1,7 +1,16 @@
+// Phase 3: Approval Flow for Sensitive Operations
+// ================================================
+//
+// Manages approvals for sandbox escapes, file writes, and privileged operations
+// - Request-response pattern with oneshot channels
+// - 30-second auto-denial timeout for security
+// - CancellationToken integration for agent abortion
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 use tokio::sync::oneshot;
+use tokio::time::{sleep, Duration};
 use uuid::Uuid;
 
 /// Global approval manager instance
@@ -140,6 +149,42 @@ pub fn create_bash_write_approval_request(command: &str) -> ApprovalRequest {
     }
 }
 
+/// Phase 3: Create approval request for sandbox escape (privilege escalation)
+pub fn create_sandbox_approval_request(
+    operation: &str,
+    reason: &str,
+    details: serde_json::Value,
+) -> ApprovalRequest {
+    ApprovalRequest {
+        id: Uuid::new_v4().to_string(),
+        operation_type: "sandbox_escape".to_string(),
+        description: format!("Sandbox escape: {} ({})", operation, reason),
+        details: serde_json::json!({
+            "operation": operation,
+            "reason": reason,
+            "context": details,
+        }),
+    }
+}
+
+/// Phase 3: Wait for approval with 30-second timeout
+/// Returns true if approved, false if denied or timeout expires
+pub async fn wait_for_approval_with_timeout(rx: oneshot::Receiver<bool>) -> bool {
+    match tokio::time::timeout(Duration::from_secs(30), rx).await {
+        Ok(Ok(approved)) => approved,
+        Ok(Err(_)) => {
+            // Channel closed without response
+            eprintln!("[approval] channel closed without response, auto-denying");
+            false
+        }
+        Err(_) => {
+            // 30-second timeout expired
+            eprintln!("[approval] approval timeout (30s), auto-denying for security");
+            false
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -194,5 +239,42 @@ mod tests {
         };
         let result = manager.respond(response);
         assert!(!result);
+    }
+
+    #[test]
+    fn test_sandbox_approval_request_creation() {
+        let request = create_sandbox_approval_request(
+            "read_system_files",
+            "requires root",
+            serde_json::json!({"required_level": "root"}),
+        );
+
+        assert_eq!(request.operation_type, "sandbox_escape");
+        assert!(request.description.contains("Sandbox escape"));
+        assert!(request.details.get("operation").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_approval_timeout() {
+        let (_tx, rx) = tokio::sync::oneshot::channel();
+        // Don't send anything - let it timeout
+        let approved = wait_for_approval_with_timeout(rx).await;
+        assert!(!approved); // Should deny on timeout
+    }
+
+    #[tokio::test]
+    async fn test_approval_with_timeout_approved() {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        tx.send(true).ok();
+        let approved = wait_for_approval_with_timeout(rx).await;
+        assert!(approved);
+    }
+
+    #[tokio::test]
+    async fn test_approval_with_timeout_denied() {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        tx.send(false).ok();
+        let approved = wait_for_approval_with_timeout(rx).await;
+        assert!(!approved);
     }
 }
