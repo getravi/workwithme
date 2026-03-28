@@ -27,7 +27,7 @@ pub mod errors;
 pub mod providers;
 
 use axum::{
-    extract::{ws::WebSocketUpgrade, Path},
+    extract::{ws::WebSocketUpgrade, Path, Query},
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post, delete},
@@ -606,29 +606,102 @@ mod agent_endpoints {
         )
     }
 
-    /// Get current project directory
-    pub async fn get_project() -> Json<serde_json::Value> {
-        // TODO: Return the session's working directory
-        Json(json!({
-            "cwd": std::env::current_dir()
+    /// Get current project directory from session metadata
+    pub async fn get_project(
+        Query(params): Query<HashMap<String, String>>
+    ) -> Json<serde_json::Value> {
+        let session_id = params.get("sessionId");
+
+        let cwd = if let Some(sid) = session_id {
+            // Load session and get cwd from metadata
+            match sessions::load_session(sid) {
+                Ok(Some(session)) => {
+                    session
+                        .get("metadata")
+                        .and_then(|m| m.get("cwd"))
+                        .and_then(|c| c.as_str())
+                        .unwrap_or("/")
+                        .to_string()
+                }
+                _ => "/".to_string(),
+            }
+        } else {
+            // Fallback to current directory if no session specified
+            std::env::current_dir()
                 .ok()
                 .and_then(|p| p.to_str().map(|s| s.to_string()))
                 .unwrap_or_else(|| "/".to_string())
+        };
+
+        Json(json!({
+            "cwd": cwd
         }))
     }
 
     #[derive(Deserialize)]
     pub struct SetProjectRequest {
         pub cwd: String,
+        #[serde(default)]
+        pub sessionId: Option<String>,
     }
 
-    /// Set project directory for new session
-    pub async fn set_project(Json(req): Json<SetProjectRequest>) -> (StatusCode, Json<serde_json::Value>) {
-        // TODO: Create new session at the specified directory
+    /// Set project directory (creates new session or updates existing)
+    pub async fn set_project(
+        Json(req): Json<SetProjectRequest>
+    ) -> (StatusCode, Json<serde_json::Value>) {
+        // If updating existing session, load it; otherwise create new
+        let mut session_data = if let Some(ref sid) = req.sessionId {
+            match sessions::load_session(sid) {
+                Ok(Some(s)) => s,
+                _ => {
+                    // Session doesn't exist, create new one
+                    serde_json::to_value(agent::create_session())
+                        .unwrap_or(json!({}))
+                }
+            }
+        } else {
+            // Create new session
+            serde_json::to_value(agent::create_session())
+                .unwrap_or(json!({}))
+        };
+
+        // Update metadata with cwd
+        if let Some(meta) = session_data.get_mut("metadata") {
+            if let Some(meta_obj) = meta.as_object_mut() {
+                meta_obj.insert("cwd".to_string(), json!(req.cwd.clone()));
+            }
+        } else {
+            if let Some(obj) = session_data.as_object_mut() {
+                obj.insert("metadata".to_string(), json!({
+                    "cwd": req.cwd.clone()
+                }));
+            }
+        }
+
+        // Save or update session
+        let session_id = if let Some(sid) = req.sessionId {
+            let _ = sessions::update_session(&sid, session_data);
+            sid
+        } else {
+            match sessions::create_session(session_data) {
+                Ok(id) => id,
+                Err(e) => {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({
+                            "success": false,
+                            "error": e
+                        }))
+                    );
+                }
+            }
+        };
+
         (
             StatusCode::CREATED,
             Json(json!({
                 "success": true,
+                "sessionId": session_id,
                 "cwd": req.cwd
             }))
         )
