@@ -25,6 +25,7 @@ impl SilenceDetector {
     /// - `min_chunk_ms`: shortest utterance to keep (500)
     /// - `max_chunk_ms`: force-split after this long (10000)
     pub fn new(sample_rate: u32, threshold: f32, silence_ms: u32, min_chunk_ms: u32, max_chunk_ms: u32) -> Self {
+        debug_assert!(sample_rate > 0, "sample_rate must be > 0");
         let frame_ms = 20u32;
         let frame_size = (sample_rate * frame_ms / 1000) as usize;
         let silence_frames_needed = (silence_ms / frame_ms) as usize;
