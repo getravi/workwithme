@@ -16,6 +16,16 @@ pub struct AudioRecorder {
     _stream: Option<cpal::Stream>,
 }
 
+// SAFETY: cpal::Stream on macOS (CoreAudio) is !Send because AudioUnit has thread affinity —
+// it must be created and destroyed on the same thread. This is safe here because:
+// 1. `_stream` is created in `start()`, called only from the global shortcut handler
+//    which on macOS dispatches on the main thread.
+// 2. `_stream` is dropped in `stop()`, also called only from the shortcut handler on
+//    the main thread.
+// 3. The polling thread accesses `AudioRecorder` via `drain()` which only touches
+//    `buffer: Arc<Mutex<Vec<f32>>>` — it never accesses `_stream`. Thread affinity preserved.
+unsafe impl Send for AudioRecorder {}
+
 impl AudioRecorder {
     pub fn new() -> Self {
         Self {

@@ -8,27 +8,19 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState, Modifiers, 
 
 /// Shared state for the dictation session.
 struct DictationState {
-    recorder: audio::AudioRecorder,
     detector: transcription::SilenceDetector,
     is_recording: bool,
     chunk_tx: std::sync::mpsc::SyncSender<(Vec<f32>, u32)>,
 }
-
-// SAFETY: cpal::Stream on macOS (CoreAudio) is !Send because AudioUnit has thread affinity.
-// This is safe here because:
-// 1. The stream is created in AudioRecorder::start(), called only from the global shortcut handler
-// 2. The stream is dropped in AudioRecorder::stop(), also called only from the same handler
-// 3. The global shortcut handler on macOS always dispatches on the main thread
-// Therefore the stream is always created and destroyed on the same thread.
-unsafe impl Send for DictationState {}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Channel: audio chunks (samples, native_rate) → transcription worker thread
     let (chunk_tx, chunk_rx) = std::sync::mpsc::sync_channel::<(Vec<f32>, u32)>(8);
 
+    let recorder = Arc::new(Mutex::new(audio::AudioRecorder::new()));
+
     let dictation = Arc::new(Mutex::new(DictationState {
-        recorder: audio::AudioRecorder::new(),
         detector: transcription::SilenceDetector::new(44100, 0.01, 300, 500, 10000),
         is_recording: false,
         chunk_tx,
@@ -42,6 +34,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin({
             let dictation = dictation.clone();
+            let recorder = recorder.clone();
             let recording_flag = recording_flag.clone();
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |app, shortcut, event| {
@@ -50,32 +43,45 @@ pub fn run() {
                     }
                     match event.state() {
                         ShortcutState::Pressed => {
-                            let mut d = dictation.lock().unwrap();
-                            if d.is_recording { return; }
-                            match d.recorder.start() {
-                                Ok(()) => {
-                                    d.detector = transcription::SilenceDetector::new(
-                                        d.recorder.native_sample_rate,
-                                        0.01, 300, 500, 10000,
-                                    );
-                                    d.is_recording = true;
-                                    *recording_flag.lock().unwrap() = true;
-                                    set_tray_recording(app, true);
-                                }
-                                Err(e) => eprintln!("[dictation] failed to start: {e}"),
+                            // Quick check: already recording?
+                            {
+                                let d = dictation.lock().unwrap();
+                                if d.is_recording { return; }
                             }
+                            // Start recorder OUTSIDE the dictation lock (may block for mic permission dialog)
+                            let native_rate = {
+                                let mut rec = recorder.lock().unwrap();
+                                match rec.start() {
+                                    Ok(()) => rec.native_sample_rate,
+                                    Err(e) => {
+                                        eprintln!("[dictation] failed to start: {e}");
+                                        return;
+                                    }
+                                }
+                            };
+                            // Commit state
+                            let mut d = dictation.lock().unwrap();
+                            d.detector = transcription::SilenceDetector::new(native_rate, 0.01, 300, 500, 10000);
+                            d.is_recording = true;
+                            *recording_flag.lock().unwrap() = true;
+                            set_tray_recording(app, true);
                         }
                         ShortcutState::Released => {
                             let mut d = dictation.lock().unwrap();
                             if !d.is_recording { return; }
-                            let remaining = d.recorder.drain();
-                            let native_rate = d.recorder.native_sample_rate;
-                            if let Some(chunk) = d.detector.push(&remaining)
-                                .or_else(|| d.detector.flush())
-                            {
+                            // Drain final audio from recorder
+                            let (remaining, native_rate) = {
+                                let rec = recorder.lock().unwrap();
+                                (rec.drain(), rec.native_sample_rate)
+                            };
+                            if let Some(chunk) = d.detector.push(&remaining).or_else(|| d.detector.flush()) {
                                 let _ = d.chunk_tx.try_send((chunk, native_rate));
                             }
-                            d.recorder.stop();
+                            // Stop recorder (outside dictation lock to avoid lock ordering issues)
+                            drop(d); // release dictation lock first
+                            recorder.lock().unwrap().stop();
+                            // Re-acquire dictation lock to update state
+                            let mut d = dictation.lock().unwrap();
                             d.is_recording = false;
                             *recording_flag.lock().unwrap() = false;
                             set_tray_recording(app, false);
@@ -160,18 +166,18 @@ pub fn run() {
 
             // Polling thread: feeds mic samples to SilenceDetector every 20ms for streaming transcription
             let dictation_poll = dictation.clone();
+            let recorder_poll = recorder.clone();
             std::thread::spawn(move || {
                 loop {
                     std::thread::sleep(std::time::Duration::from_millis(20));
+                    let is_recording = dictation_poll.lock().unwrap().is_recording;
+                    if !is_recording { continue; }
+                    let (samples, native_rate) = {
+                        let rec = recorder_poll.lock().unwrap();
+                        (rec.drain(), rec.native_sample_rate)
+                    };
+                    if samples.is_empty() { continue; }
                     let mut d = dictation_poll.lock().unwrap();
-                    if !d.is_recording {
-                        continue;
-                    }
-                    let samples = d.recorder.drain();
-                    if samples.is_empty() {
-                        continue;
-                    }
-                    let native_rate = d.recorder.native_sample_rate;
                     if let Some(chunk) = d.detector.push(&samples) {
                         let _ = d.chunk_tx.try_send((chunk, native_rate));
                     }
