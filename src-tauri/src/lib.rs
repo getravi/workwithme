@@ -14,11 +14,13 @@ struct DictationState {
     chunk_tx: std::sync::mpsc::SyncSender<(Vec<f32>, u32)>,
 }
 
-// cpal::Stream is not Send on macOS (CoreAudio), but we guard access with a Mutex
-// and only call audio methods from the shortcut handler (which runs on the main thread).
-// SAFETY: DictationState is only accessed while holding the Mutex.
+// SAFETY: cpal::Stream on macOS (CoreAudio) is !Send because AudioUnit has thread affinity.
+// This is safe here because:
+// 1. The stream is created in AudioRecorder::start(), called only from the global shortcut handler
+// 2. The stream is dropped in AudioRecorder::stop(), also called only from the same handler
+// 3. The global shortcut handler on macOS always dispatches on the main thread
+// Therefore the stream is always created and destroyed on the same thread.
 unsafe impl Send for DictationState {}
-unsafe impl Sync for DictationState {}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
