@@ -71,7 +71,7 @@ rand = "0.8"
 # Core agent runtime
 pi_agent_rust = "0.1"
 anyhow = "1"
-toml = "0.8"
+toml = "0.9"
 
 # Rate limiting and DoS protection
 governor = "0.6"
