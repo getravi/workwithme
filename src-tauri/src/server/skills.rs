@@ -167,7 +167,8 @@ pub fn get_skill_content(source: &str, slug: &str) -> Option<String> {
     }
 }
 
-/// Validate skill name format before processing
+/// Validate skill name format before processing — forward scaffolding for write operations
+#[allow(dead_code)]
 pub fn validate_skill_name(name: &str) -> Result<(), String> {
     if name.is_empty() {
         return Err("Skill name cannot be empty".to_string());
@@ -181,6 +182,7 @@ pub fn validate_skill_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[allow(dead_code)]
 /// Sanitize skill name for use as filename
 pub fn sanitize_skill_name(name: &str) -> String {
     name.to_lowercase()
@@ -203,6 +205,7 @@ pub fn sanitize_skill_name(name: &str) -> String {
 }
 
 /// Write a new user skill file
+#[allow(dead_code)]
 pub fn write_user_skill(name: &str, content: &str) -> Result<PathBuf, String> {
     let safe_name = sanitize_skill_name(name);
     if safe_name.is_empty() {

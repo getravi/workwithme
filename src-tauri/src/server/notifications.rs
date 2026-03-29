@@ -205,4 +205,65 @@ mod tests {
         let path = notifications_log_path();
         assert!(path.to_string_lossy().contains(".pi"));
     }
+
+    #[test]
+    fn test_notification_serialization_roundtrip() {
+        let notif = Notification {
+            id: "abc-123".to_string(),
+            title: "Agent complete".to_string(),
+            body: "Task finished successfully".to_string(),
+            level: "success".to_string(),
+            timestamp: "2026-01-01T00:00:00+00:00".to_string(),
+        };
+        let json = serde_json::to_string(&notif).unwrap();
+        let back: Notification = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.id, "abc-123");
+        assert_eq!(back.title, "Agent complete");
+        assert_eq!(back.level, "success");
+    }
+
+    #[test]
+    fn test_notifications_log_path_filename() {
+        let path = notifications_log_path();
+        assert_eq!(
+            path.file_name().and_then(|n| n.to_str()),
+            Some("notifications.log")
+        );
+    }
+
+    #[test]
+    fn test_notifications_log_path_under_home() {
+        let path = notifications_log_path();
+        let home = dirs::home_dir().unwrap();
+        assert!(path.starts_with(&home));
+    }
+
+    #[test]
+    fn test_get_recent_notifications_no_file() {
+        // Should return empty vec when log file doesn't exist yet
+        // (This is true in a fresh environment)
+        let result = get_recent_notifications(10);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_rate_limit_allows_first_notification() {
+        // First notification for a unique title should not be rate limited
+        let unique_title = format!("test-title-{}", uuid::Uuid::new_v4());
+        let limited = should_rate_limit(&unique_title);
+        assert!(!limited, "first notification should not be rate limited");
+    }
+
+    #[test]
+    fn test_rate_limit_blocks_after_max() {
+        let unique_title = format!("burst-test-{}", uuid::Uuid::new_v4());
+        // Send 10 — should all be allowed
+        for _ in 0..10 {
+            let limited = should_rate_limit(&unique_title);
+            assert!(!limited);
+        }
+        // 11th should be rate limited
+        let limited = should_rate_limit(&unique_title);
+        assert!(limited, "11th notification should be rate limited");
+    }
 }

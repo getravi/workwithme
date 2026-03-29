@@ -47,7 +47,7 @@ export interface PromptPayload {
   images?: { type: string; mimeType: string; data: string }[];
 }
 
-// WebSocket message type constants — single source of truth for both frontend and sidecar
+// WebSocket message type constants — single source of truth for both frontend and Rust backend
 export const WS_EVENTS = {
   // Client → Server
   PROMPT: "prompt",
@@ -65,7 +65,7 @@ export const WS_EVENTS = {
   TOOL_EXECUTION_END: "tool_execution_end",
   PROMPT_COMPLETE: "prompt_complete",
   ERROR: "error",
-  // Server → Client: sidecar requests user approval to run a command outside the sandbox
+  // Server → Client: backend requests user approval to run a command outside the sandbox
   SANDBOX_APPROVAL_REQUEST: "sandbox_approval_request",
   // Client → Server: user's response to a sandbox approval request
   SANDBOX_APPROVAL_RESPONSE: "sandbox_approval_response",

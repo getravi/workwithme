@@ -1,0 +1,4 @@
+[env]
+# arboard (clipboard) uses macOS AppKit APIs that are not thread-safe.
+# Running tests single-threaded prevents SIGSEGV from concurrent clipboard access.
+RUST_TEST_THREADS = "1"

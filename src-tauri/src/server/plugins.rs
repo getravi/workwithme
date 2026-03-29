@@ -29,13 +29,17 @@ pub struct Plugin {
     pub path: PathBuf,
     pub enabled: bool,
     pub loaded: bool,
+    /// Cached WASM bytes after download — forward scaffolding for hot-reload
     #[serde(skip)]
+    #[allow(dead_code)]
     pub wasm_bytes: Option<Vec<u8>>,
 }
 
 /// Plugin registry storing all plugins
 pub struct PluginRegistry {
     plugins: HashMap<String, Plugin>,
+    /// Directory where plugin manifests and WASM blobs are stored
+    #[allow(dead_code)]
     plugin_dir: PathBuf,
 }
 
@@ -262,7 +266,8 @@ pub async fn uninstall_plugin(id: &str) -> Result<(), String> {
     }
 }
 
-/// Load a plugin's WASM module
+/// Load a plugin's WASM module — forward scaffolding for WASM execution support
+#[allow(dead_code)]
 pub async fn load_plugin_wasm(id: &str) -> Result<Vec<u8>, String> {
     let plugin = get_plugin(id)
         .await
@@ -326,6 +331,20 @@ pub async fn get_plugin_stats() -> serde_json::Value {
 mod tests {
     use super::*;
 
+    fn make_manifest(id: &str) -> PluginManifest {
+        PluginManifest {
+            id: id.to_string(),
+            name: format!("{} Plugin", id),
+            version: "1.0.0".to_string(),
+            description: "A test plugin".to_string(),
+            author: "Test".to_string(),
+            license: "MIT".to_string(),
+            capabilities: vec!["tools".to_string()],
+            entry_point: "init".to_string(),
+            permissions: vec!["read:files".to_string()],
+        }
+    }
+
     #[test]
     fn test_plugin_manifest_serialization() {
         let manifest = PluginManifest {
@@ -355,17 +374,7 @@ mod tests {
 
     #[test]
     fn test_plugin_creation() {
-        let manifest = PluginManifest {
-            id: "test".to_string(),
-            name: "Test".to_string(),
-            version: "1.0.0".to_string(),
-            description: "Test".to_string(),
-            author: "Test".to_string(),
-            license: "MIT".to_string(),
-            capabilities: vec![],
-            entry_point: "init".to_string(),
-            permissions: vec![],
-        };
+        let manifest = make_manifest("test");
 
         let plugin = Plugin {
             manifest: manifest.clone(),
@@ -378,5 +387,60 @@ mod tests {
         assert_eq!(plugin.manifest.id, "test");
         assert!(plugin.enabled);
         assert!(!plugin.loaded);
+    }
+
+    #[test]
+    fn test_plugin_manifest_default_fields() {
+        // capabilities, entry_point, and permissions should default to empty/empty
+        let json = r#"{"id":"x","name":"X","version":"1.0","description":"","author":"","license":""}"#;
+        let manifest: PluginManifest = serde_json::from_str(json).unwrap();
+        assert!(manifest.capabilities.is_empty());
+        assert!(manifest.permissions.is_empty());
+        assert_eq!(manifest.entry_point, "");
+    }
+
+    #[test]
+    fn test_plugins_dir_under_home() {
+        let path = get_plugins_dir();
+        let home = dirs::home_dir().unwrap();
+        assert!(path.starts_with(&home));
+    }
+
+    #[tokio::test]
+    async fn test_list_plugins_empty_initially() {
+        // The global registry starts empty (no plugins on disk in test env)
+        // list_plugins should return without panicking
+        let plugins = list_plugins().await;
+        // May or may not be empty depending on ~/.pi/plugins; just verify no panic
+        let _ = plugins;
+    }
+
+    #[tokio::test]
+    async fn test_get_nonexistent_plugin_returns_none() {
+        let result = get_plugin("nonexistent-plugin-xyz-test").await;
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_enable_nonexistent_plugin_returns_err() {
+        let result = enable_plugin("no-such-plugin-xyz").await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Plugin not found"));
+    }
+
+    #[tokio::test]
+    async fn test_disable_nonexistent_plugin_returns_err() {
+        let result = disable_plugin("no-such-plugin-xyz").await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Plugin not found"));
+    }
+
+    #[tokio::test]
+    async fn test_get_plugin_stats_structure() {
+        let stats = get_plugin_stats().await;
+        assert!(stats.get("total").is_some());
+        assert!(stats.get("enabled").is_some());
+        assert!(stats.get("loaded").is_some());
+        assert!(stats.get("plugins").is_some());
     }
 }

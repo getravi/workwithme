@@ -1,0 +1,1587 @@
+//! Kafka producer with Cx integration for cancel-correct message publishing.
+//!
+//! This module provides a Kafka producer with exactly-once semantics and
+//! transactional support, integrated with the Asupersync `Cx` context for
+//! proper cancellation handling.
+//!
+//! # Design
+//!
+//! The implementation wraps the rdkafka crate (when available) with a Cx
+//! integration layer. In Phase 0, this provides the API shape as stubs.
+//!
+//! # Exactly-Once Semantics
+//!
+//! Kafka supports exactly-once via:
+//! - Idempotent producers (deduplication via sequence numbers)
+//! - Transactional producers (atomic batch commits)
+//!
+//! # Cancel-Correct Behavior
+//!
+//! - In-flight sends are tracked as obligations
+//! - Cancellation waits for pending acks (with bounded timeout)
+//! - Uncommitted transactions abort on cancellation
+
+// Phase 0 stubs return errors immediately; async is for API consistency
+// with eventual rdkafka integration.
+
+use crate::cx::Cx;
+use parking_lot::Mutex;
+#[cfg(feature = "kafka")]
+use rdkafka::producer::Producer;
+#[cfg(not(feature = "kafka"))]
+use std::collections::HashMap;
+use std::fmt;
+use std::io;
+#[cfg(not(feature = "kafka"))]
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
+
+#[cfg(feature = "kafka")]
+use rdkafka::{
+    client::ClientContext,
+    config::ClientConfig,
+    error::{KafkaError as RdKafkaError, RDKafkaErrorCode},
+    message::{BorrowedMessage, DeliveryResult, Header, Message, OwnedHeaders},
+    producer::{BaseRecord, ProducerContext, ThreadedProducer},
+};
+#[cfg(feature = "kafka")]
+use std::future::Future;
+#[cfg(feature = "kafka")]
+use std::pin::Pin;
+#[cfg(feature = "kafka")]
+use std::sync::Arc;
+#[cfg(feature = "kafka")]
+use std::task::{Context, Poll, Waker};
+
+/// Error type for Kafka operations.
+#[derive(Debug)]
+pub enum KafkaError {
+    /// I/O error during communication.
+    Io(io::Error),
+    /// Protocol error (malformed Kafka response).
+    Protocol(String),
+    /// Kafka broker returned an error.
+    Broker(String),
+    /// Producer queue is full.
+    QueueFull,
+    /// Message is too large.
+    MessageTooLarge {
+        /// Size of the message.
+        size: usize,
+        /// Maximum allowed size.
+        max_size: usize,
+    },
+    /// Invalid topic name.
+    InvalidTopic(String),
+    /// Transaction error.
+    Transaction(String),
+    /// Operation cancelled.
+    Cancelled,
+    /// The future was polled after it had already completed.
+    PolledAfterCompletion,
+    /// Configuration error.
+    Config(String),
+}
+
+impl fmt::Display for KafkaError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io(e) => write!(f, "Kafka I/O error: {e}"),
+            Self::Protocol(msg) => write!(f, "Kafka protocol error: {msg}"),
+            Self::Broker(msg) => write!(f, "Kafka broker error: {msg}"),
+            Self::QueueFull => write!(f, "Kafka producer queue is full"),
+            Self::MessageTooLarge { size, max_size } => {
+                write!(f, "Kafka message too large: {size} bytes (max: {max_size})")
+            }
+            Self::InvalidTopic(topic) => write!(f, "Invalid Kafka topic: {topic}"),
+            Self::Transaction(msg) => write!(f, "Kafka transaction error: {msg}"),
+            Self::Cancelled => write!(f, "Kafka operation cancelled"),
+            Self::PolledAfterCompletion => {
+                write!(f, "Kafka future polled after completion")
+            }
+            Self::Config(msg) => write!(f, "Kafka configuration error: {msg}"),
+        }
+    }
+}
+
+impl std::error::Error for KafkaError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl From<io::Error> for KafkaError {
+    fn from(err: io::Error) -> Self {
+        Self::Io(err)
+    }
+}
+
+impl KafkaError {
+    /// Whether this error is transient and may succeed on retry.
+    #[must_use]
+    pub fn is_transient(&self) -> bool {
+        matches!(
+            self,
+            Self::Io(_) | Self::Broker(_) | Self::QueueFull | Self::Transaction(_)
+        )
+    }
+
+    /// Whether this error indicates a connection-level failure.
+    #[must_use]
+    pub fn is_connection_error(&self) -> bool {
+        matches!(self, Self::Io(_) | Self::Broker(_))
+    }
+
+    /// Whether this error indicates resource/capacity exhaustion.
+    #[must_use]
+    pub fn is_capacity_error(&self) -> bool {
+        matches!(self, Self::QueueFull | Self::MessageTooLarge { .. })
+    }
+
+    /// Whether this error is a timeout.
+    #[must_use]
+    pub fn is_timeout(&self) -> bool {
+        matches!(self, Self::Io(e) if e.kind() == io::ErrorKind::TimedOut)
+    }
+
+    /// Whether the operation should be retried.
+    #[must_use]
+    pub fn is_retryable(&self) -> bool {
+        matches!(self, Self::Io(_) | Self::Broker(_) | Self::QueueFull)
+    }
+}
+
+#[cfg(feature = "kafka")]
+#[derive(Debug)]
+struct KafkaContext;
+
+#[cfg(feature = "kafka")]
+impl ClientContext for KafkaContext {}
+
+#[cfg(feature = "kafka")]
+impl ProducerContext for KafkaContext {
+    type DeliveryOpaque = Box<DeliverySender>;
+
+    fn delivery(
+        &self,
+        delivery_result: &DeliveryResult<'_>,
+        delivery_opaque: Self::DeliveryOpaque,
+    ) {
+        let mapped = map_delivery_result(delivery_result);
+        delivery_opaque.complete(mapped);
+    }
+}
+
+#[cfg(feature = "kafka")]
+#[derive(Debug)]
+struct DeliveryState {
+    value: Option<Result<RecordMetadata, KafkaError>>,
+    waker: Option<Waker>,
+    closed: bool,
+    completed: bool,
+}
+
+#[cfg(feature = "kafka")]
+impl DeliveryState {
+    fn new() -> Self {
+        Self {
+            value: None,
+            waker: None,
+            closed: false,
+            completed: false,
+        }
+    }
+}
+
+#[cfg(feature = "kafka")]
+#[derive(Debug)]
+struct DeliverySender {
+    inner: Arc<Mutex<DeliveryState>>,
+}
+
+#[cfg(feature = "kafka")]
+impl Drop for DeliverySender {
+    fn drop(&mut self) {
+        let waker = {
+            let mut state = self.inner.lock();
+            if state.closed || state.value.is_some() {
+                return;
+            }
+            state.value = Some(Err(KafkaError::Cancelled));
+            state.closed = true;
+            state.waker.take()
+        };
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+    }
+}
+
+#[cfg(feature = "kafka")]
+impl DeliverySender {
+    fn complete(self, value: Result<RecordMetadata, KafkaError>) {
+        let waker = {
+            let mut state = self.inner.lock();
+            if state.closed || state.value.is_some() {
+                return;
+            }
+            state.value = Some(value);
+            state.waker.take()
+        };
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+    }
+}
+
+#[cfg(feature = "kafka")]
+#[derive(Debug)]
+struct DeliveryReceiver {
+    inner: Arc<Mutex<DeliveryState>>,
+    cx: Cx,
+}
+
+#[cfg(feature = "kafka")]
+impl Drop for DeliveryReceiver {
+    fn drop(&mut self) {
+        let mut state = self.inner.lock();
+        state.closed = true;
+        state.waker = None;
+    }
+}
+
+#[cfg(feature = "kafka")]
+impl Future for DeliveryReceiver {
+    type Output = Result<RecordMetadata, KafkaError>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut state = self.inner.lock();
+
+        if state.completed {
+            return Poll::Ready(Err(KafkaError::PolledAfterCompletion));
+        }
+
+        if self.cx.checkpoint().is_err() {
+            state.closed = true;
+            state.completed = true;
+            state.waker = None;
+            return Poll::Ready(Err(KafkaError::Cancelled));
+        }
+
+        if let Some(value) = state.value.take() {
+            state.closed = true;
+            state.completed = true;
+            state.waker = None;
+            Poll::Ready(value)
+        } else {
+            if !state
+                .waker
+                .as_ref()
+                .is_some_and(|w| w.will_wake(cx.waker()))
+            {
+                state.waker = Some(cx.waker().clone());
+            }
+            Poll::Pending
+        }
+    }
+}
+
+#[cfg(feature = "kafka")]
+fn delivery_channel(cx: &Cx) -> (DeliverySender, DeliveryReceiver) {
+    let inner = Arc::new(Mutex::new(DeliveryState::new()));
+    (
+        DeliverySender {
+            inner: Arc::clone(&inner),
+        },
+        DeliveryReceiver {
+            inner,
+            cx: cx.clone(),
+        },
+    )
+}
+
+#[cfg(feature = "kafka")]
+fn map_delivery_result(delivery_result: &DeliveryResult<'_>) -> Result<RecordMetadata, KafkaError> {
+    match delivery_result {
+        Ok(message) => Ok(record_metadata_from_message(message)),
+        Err((err, message)) => Err(map_rdkafka_error(err, Some(message))),
+    }
+}
+
+#[cfg(feature = "kafka")]
+fn record_metadata_from_message(message: &BorrowedMessage<'_>) -> RecordMetadata {
+    RecordMetadata {
+        topic: message.topic().to_string(),
+        partition: message.partition(),
+        offset: message.offset(),
+        timestamp: message.timestamp().to_millis(),
+    }
+}
+
+#[cfg(feature = "kafka")]
+fn map_rdkafka_error(err: &RdKafkaError, message: Option<&BorrowedMessage<'_>>) -> KafkaError {
+    match err {
+        RdKafkaError::ClientConfig(_, _, _, msg) => KafkaError::Config(msg.clone()),
+        RdKafkaError::MessageProduction(code) => {
+            map_error_code(*code, message.map(rdkafka::Message::topic))
+        }
+        RdKafkaError::Canceled => KafkaError::Cancelled,
+        _ => KafkaError::Broker(err.to_string()),
+    }
+}
+
+#[cfg(feature = "kafka")]
+fn map_error_code(code: RDKafkaErrorCode, topic: Option<&str>) -> KafkaError {
+    match code {
+        RDKafkaErrorCode::QueueFull => KafkaError::QueueFull,
+        RDKafkaErrorCode::InvalidTopic | RDKafkaErrorCode::UnknownTopic => {
+            KafkaError::InvalidTopic(topic.unwrap_or("unknown").to_string())
+        }
+        _ => KafkaError::Broker(format!("{code:?}")),
+    }
+}
+
+#[cfg(feature = "kafka")]
+fn compression_to_str(compression: Compression) -> &'static str {
+    match compression {
+        Compression::None => "none",
+        Compression::Gzip => "gzip",
+        Compression::Snappy => "snappy",
+        Compression::Lz4 => "lz4",
+        Compression::Zstd => "zstd",
+    }
+}
+
+#[cfg(feature = "kafka")]
+fn acks_to_str(acks: Acks) -> &'static str {
+    match acks {
+        Acks::None => "0",
+        Acks::Leader => "1",
+        Acks::All => "all",
+    }
+}
+
+#[cfg(feature = "kafka")]
+struct SendRequest<'a> {
+    topic: &'a str,
+    key: Option<&'a [u8]>,
+    payload: &'a [u8],
+    partition: Option<i32>,
+    headers: Option<&'a [(&'a str, &'a [u8])]>,
+}
+
+#[cfg(feature = "kafka")]
+fn build_client_config(
+    config: &ProducerConfig,
+    transactional: Option<&TransactionalConfig>,
+) -> ClientConfig {
+    let mut client = ClientConfig::new();
+    client.set("bootstrap.servers", config.bootstrap_servers.join(","));
+    if let Some(client_id) = &config.client_id {
+        client.set("client.id", client_id);
+    }
+    client.set("batch.size", config.batch_size.to_string());
+    client.set("linger.ms", config.linger_ms.to_string());
+    client.set("compression.type", compression_to_str(config.compression));
+    client.set("enable.idempotence", config.enable_idempotence.to_string());
+    client.set("acks", acks_to_str(config.acks));
+    client.set("retries", config.retries.to_string());
+    client.set(
+        "request.timeout.ms",
+        config.request_timeout.as_millis().to_string(),
+    );
+    client.set("message.max.bytes", config.max_message_size.to_string());
+
+    if let Some(tx) = transactional {
+        client.set("transactional.id", tx.transaction_id.as_str());
+        client.set(
+            "transaction.timeout.ms",
+            tx.transaction_timeout.as_millis().to_string(),
+        );
+        client.set("enable.idempotence", "true");
+    }
+
+    client
+}
+
+#[cfg(feature = "kafka")]
+fn build_producer(
+    config: &ProducerConfig,
+    transactional: Option<&TransactionalConfig>,
+) -> Result<ThreadedProducer<KafkaContext>, KafkaError> {
+    let client = build_client_config(config, transactional);
+    client
+        .create_with_context(KafkaContext)
+        .map_err(|err| map_rdkafka_error(&err, None))
+}
+
+#[cfg(feature = "kafka")]
+async fn send_with_producer(
+    producer: &ThreadedProducer<KafkaContext>,
+    cx: &Cx,
+    config: &ProducerConfig,
+    request: SendRequest<'_>,
+) -> Result<RecordMetadata, KafkaError> {
+    cx.checkpoint().map_err(|_| KafkaError::Cancelled)?;
+
+    if request.payload.len() > config.max_message_size {
+        return Err(KafkaError::MessageTooLarge {
+            size: request.payload.len(),
+            max_size: config.max_message_size,
+        });
+    }
+
+    let (sender, receiver) = delivery_channel(cx);
+
+    let mut record =
+        BaseRecord::with_opaque_to(request.topic, Box::new(sender)).payload(request.payload);
+    if let Some(key) = request.key {
+        record = record.key(key);
+    }
+    if let Some(partition) = request.partition {
+        record = record.partition(partition);
+    }
+    if let Some(headers) = request.headers {
+        let mut owned_headers = OwnedHeaders::new();
+        for (key, value) in headers {
+            owned_headers = owned_headers.insert(Header {
+                key,
+                value: Some(*value),
+            });
+        }
+        record = record.headers(owned_headers);
+    }
+
+    match producer.send(record) {
+        Ok(()) => receiver.await,
+        Err((err, _)) => Err(map_rdkafka_error(&err, None)),
+    }
+}
+
+#[cfg(not(feature = "kafka"))]
+static STUB_DELIVERY_OFFSETS: OnceLock<Mutex<HashMap<(String, i32), i64>>> = OnceLock::new();
+
+#[cfg(not(feature = "kafka"))]
+fn next_stub_offset(topic: &str, partition: i32) -> i64 {
+    let offsets = STUB_DELIVERY_OFFSETS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut offsets = offsets.lock();
+    let entry = offsets.entry((topic.to_string(), partition)).or_insert(0);
+    let offset = *entry;
+    *entry += 1;
+    drop(offsets);
+    offset
+}
+
+fn validate_topic(topic: &str) -> Result<(), KafkaError> {
+    let topic = topic.trim();
+    if topic.is_empty() {
+        return Err(KafkaError::InvalidTopic(topic.to_string()));
+    }
+    Ok(())
+}
+
+/// Compression algorithm for Kafka messages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Compression {
+    /// No compression.
+    #[default]
+    None,
+    /// Gzip compression.
+    Gzip,
+    /// Snappy compression.
+    Snappy,
+    /// LZ4 compression.
+    Lz4,
+    /// Zstandard compression.
+    Zstd,
+}
+
+/// Acknowledgment level for producer requests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Acks {
+    /// No acknowledgment (fire and forget).
+    None,
+    /// Wait for leader acknowledgment.
+    Leader,
+    /// Wait for all in-sync replicas.
+    #[default]
+    All,
+}
+
+impl Acks {
+    /// Convert to Kafka protocol value.
+    #[must_use]
+    pub const fn as_i16(&self) -> i16 {
+        match self {
+            Self::None => 0,
+            Self::Leader => 1,
+            Self::All => -1,
+        }
+    }
+}
+
+/// Configuration for Kafka producer.
+#[derive(Debug, Clone)]
+pub struct ProducerConfig {
+    /// Bootstrap server addresses (host:port).
+    pub bootstrap_servers: Vec<String>,
+    /// Client identifier.
+    pub client_id: Option<String>,
+    /// Batch size in bytes (default: 16KB).
+    pub batch_size: usize,
+    /// Linger time before sending batch (default: 5ms).
+    pub linger_ms: u64,
+    /// Compression algorithm.
+    pub compression: Compression,
+    /// Enable idempotent producer (exactly-once without transactions).
+    pub enable_idempotence: bool,
+    /// Acknowledgment level.
+    pub acks: Acks,
+    /// Maximum retries for transient failures.
+    pub retries: u32,
+    /// Request timeout.
+    pub request_timeout: Duration,
+    /// Maximum message size in bytes.
+    pub max_message_size: usize,
+}
+
+impl Default for ProducerConfig {
+    fn default() -> Self {
+        Self {
+            bootstrap_servers: vec!["localhost:9092".to_string()],
+            client_id: None,
+            batch_size: 16_384, // 16KB
+            linger_ms: 5,       // 5ms
+            compression: Compression::None,
+            enable_idempotence: true,
+            acks: Acks::All,
+            retries: 3,
+            request_timeout: Duration::from_secs(30),
+            max_message_size: 1_048_576, // 1MB
+        }
+    }
+}
+
+impl ProducerConfig {
+    /// Create a new producer configuration.
+    #[must_use]
+    pub fn new(bootstrap_servers: Vec<String>) -> Self {
+        Self {
+            bootstrap_servers,
+            ..Default::default()
+        }
+    }
+
+    /// Set the client identifier.
+    #[must_use]
+    pub fn client_id(mut self, client_id: &str) -> Self {
+        self.client_id = Some(client_id.to_string());
+        self
+    }
+
+    /// Set the batch size in bytes.
+    #[must_use]
+    pub const fn batch_size(mut self, size: usize) -> Self {
+        self.batch_size = size;
+        self
+    }
+
+    /// Set the linger time in milliseconds.
+    #[must_use]
+    pub const fn linger_ms(mut self, ms: u64) -> Self {
+        self.linger_ms = ms;
+        self
+    }
+
+    /// Set the compression algorithm.
+    #[must_use]
+    pub const fn compression(mut self, compression: Compression) -> Self {
+        self.compression = compression;
+        self
+    }
+
+    /// Enable or disable idempotent producer.
+    #[must_use]
+    pub const fn enable_idempotence(mut self, enable: bool) -> Self {
+        self.enable_idempotence = enable;
+        self
+    }
+
+    /// Set the acknowledgment level.
+    #[must_use]
+    pub const fn acks(mut self, acks: Acks) -> Self {
+        self.acks = acks;
+        self
+    }
+
+    /// Set the maximum number of retries.
+    #[must_use]
+    pub const fn retries(mut self, retries: u32) -> Self {
+        self.retries = retries;
+        self
+    }
+
+    /// Validate the configuration.
+    pub fn validate(&self) -> Result<(), KafkaError> {
+        if self.bootstrap_servers.is_empty() {
+            return Err(KafkaError::Config(
+                "bootstrap_servers cannot be empty".to_string(),
+            ));
+        }
+        if self.batch_size == 0 {
+            return Err(KafkaError::Config("batch_size must be > 0".to_string()));
+        }
+        if self.max_message_size == 0 {
+            return Err(KafkaError::Config(
+                "max_message_size must be > 0".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Metadata returned after successfully sending a message.
+#[derive(Debug, Clone)]
+pub struct RecordMetadata {
+    /// Topic the message was sent to.
+    pub topic: String,
+    /// Partition the message was written to.
+    pub partition: i32,
+    /// Offset within the partition.
+    pub offset: i64,
+    /// Timestamp of the message (milliseconds since epoch).
+    pub timestamp: Option<i64>,
+}
+
+/// Kafka producer (Phase 0 stub).
+///
+/// Provides the API shape for a Kafka producer with Cx integration.
+/// Full implementation requires rdkafka integration.
+pub struct KafkaProducer {
+    config: ProducerConfig,
+    closed: AtomicBool,
+    #[cfg(feature = "kafka")]
+    producer: ThreadedProducer<KafkaContext>,
+}
+
+impl fmt::Debug for KafkaProducer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("KafkaProducer")
+            .field("config", &self.config)
+            .field("closed", &self.is_closed())
+            .finish_non_exhaustive()
+    }
+}
+
+impl KafkaProducer {
+    /// Create a new Kafka producer.
+    pub fn new(config: ProducerConfig) -> Result<Self, KafkaError> {
+        config.validate()?;
+
+        #[cfg(feature = "kafka")]
+        let producer = build_producer(&config, None)?;
+
+        Ok(Self {
+            config,
+            closed: AtomicBool::new(false),
+            #[cfg(feature = "kafka")]
+            producer,
+        })
+    }
+
+    /// Send a message to a topic.
+    ///
+    /// # Arguments
+    /// * `cx` - Cancellation context
+    /// * `topic` - Target topic name
+    /// * `key` - Optional message key for partitioning
+    /// * `payload` - Message payload
+    /// * `partition` - Optional partition override
+    ///
+    /// # Errors
+    /// Returns an error if the message cannot be sent.
+    #[allow(unused_variables, clippy::unused_async)]
+    pub async fn send(
+        &self,
+        cx: &Cx,
+        topic: &str,
+        key: Option<&[u8]>,
+        payload: &[u8],
+        partition: Option<i32>,
+    ) -> Result<RecordMetadata, KafkaError> {
+        cx.checkpoint().map_err(|_| KafkaError::Cancelled)?;
+        self.ensure_open()?;
+        validate_topic(topic)?;
+
+        // Check message size
+        if payload.len() > self.config.max_message_size {
+            return Err(KafkaError::MessageTooLarge {
+                size: payload.len(),
+                max_size: self.config.max_message_size,
+            });
+        }
+
+        #[cfg(feature = "kafka")]
+        {
+            send_with_producer(
+                &self.producer,
+                cx,
+                &self.config,
+                SendRequest {
+                    topic,
+                    key,
+                    payload,
+                    partition,
+                    headers: None,
+                },
+            )
+            .await
+        }
+
+        #[cfg(not(feature = "kafka"))]
+        {
+            let _ = key;
+            let partition = partition.unwrap_or(0);
+            let offset = next_stub_offset(topic, partition);
+            Ok(RecordMetadata {
+                topic: topic.to_string(),
+                partition,
+                offset,
+                timestamp: None,
+            })
+        }
+    }
+
+    /// Send a message with headers.
+    ///
+    /// # Arguments
+    /// * `cx` - Cancellation context
+    /// * `topic` - Target topic name
+    /// * `key` - Optional message key for partitioning
+    /// * `payload` - Message payload
+    /// * `headers` - Key-value header pairs
+    #[allow(unused_variables, clippy::unused_async)]
+    pub async fn send_with_headers(
+        &self,
+        cx: &Cx,
+        topic: &str,
+        key: Option<&[u8]>,
+        payload: &[u8],
+        headers: &[(&str, &[u8])],
+    ) -> Result<RecordMetadata, KafkaError> {
+        cx.checkpoint().map_err(|_| KafkaError::Cancelled)?;
+        self.ensure_open()?;
+        validate_topic(topic)?;
+
+        if payload.len() > self.config.max_message_size {
+            return Err(KafkaError::MessageTooLarge {
+                size: payload.len(),
+                max_size: self.config.max_message_size,
+            });
+        }
+
+        #[cfg(feature = "kafka")]
+        {
+            send_with_producer(
+                &self.producer,
+                cx,
+                &self.config,
+                SendRequest {
+                    topic,
+                    key,
+                    payload,
+                    partition: None,
+                    headers: Some(headers),
+                },
+            )
+            .await
+        }
+
+        #[cfg(not(feature = "kafka"))]
+        {
+            let _ = key;
+            let _ = headers;
+            let partition = 0;
+            let offset = next_stub_offset(topic, partition);
+            Ok(RecordMetadata {
+                topic: topic.to_string(),
+                partition,
+                offset,
+                timestamp: None,
+            })
+        }
+    }
+
+    /// Flush all pending messages.
+    ///
+    /// Blocks until all messages in the queue are sent or the timeout expires.
+    #[allow(unused_variables, clippy::unused_async)]
+    pub async fn flush(&self, cx: &Cx, timeout: Duration) -> Result<(), KafkaError> {
+        self.flush_inner(cx, timeout, false).await
+    }
+
+    /// Flush pending messages and close producer for new sends.
+    ///
+    /// This method is idempotent; repeated calls after the first successful
+    /// close return `Ok(())`. If the close operation is cancelled while flushing,
+    /// subsequent calls will retry the flush.
+    pub async fn close(&self, cx: &Cx, timeout: Duration) -> Result<(), KafkaError> {
+        cx.checkpoint().map_err(|_| KafkaError::Cancelled)?;
+
+        // Mark as closed to block new sends. We use swap to ensure it's
+        // always closed before we start flushing.
+        self.closed.store(true, Ordering::Release);
+
+        // Always flush. If a previous close was cancelled, this ensures
+        // the remaining messages are still flushed upon retry.
+        self.flush_inner(cx, timeout, true).await?;
+        Ok(())
+    }
+
+    /// Whether this producer has been closed.
+    #[must_use]
+    pub fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::Acquire)
+    }
+
+    #[allow(unused_variables, clippy::unused_async)]
+    async fn flush_inner(
+        &self,
+        cx: &Cx,
+        timeout: Duration,
+        allow_closed: bool,
+    ) -> Result<(), KafkaError> {
+        cx.checkpoint().map_err(|_| KafkaError::Cancelled)?;
+        if !allow_closed {
+            self.ensure_open()?;
+        }
+
+        #[cfg(feature = "kafka")]
+        {
+            let mut remaining = timeout;
+            loop {
+                cx.checkpoint().map_err(|_| KafkaError::Cancelled)?;
+                if self.producer.in_flight_count() == 0 {
+                    break;
+                }
+                let tick = remaining.min(Duration::from_millis(10));
+                self.producer.poll(tick);
+                if remaining <= tick {
+                    return Err(KafkaError::Broker("flush timeout elapsed".to_string()));
+                }
+                remaining -= tick;
+            }
+            Ok(())
+        }
+
+        #[cfg(not(feature = "kafka"))]
+        {
+            let _ = timeout;
+            Ok(())
+        }
+    }
+
+    fn ensure_open(&self) -> Result<(), KafkaError> {
+        if self.closed.load(Ordering::Acquire) {
+            Err(KafkaError::Config("producer is closed".to_string()))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Get the current configuration.
+    #[must_use]
+    pub const fn config(&self) -> &ProducerConfig {
+        &self.config
+    }
+}
+
+/// Configuration for transactional producer.
+#[derive(Debug, Clone)]
+pub struct TransactionalConfig {
+    /// Base producer configuration.
+    pub producer: ProducerConfig,
+    /// Transaction ID (must be unique per producer instance).
+    pub transaction_id: String,
+    /// Transaction timeout.
+    pub transaction_timeout: Duration,
+}
+
+impl TransactionalConfig {
+    /// Create a new transactional configuration.
+    #[must_use]
+    pub fn new(producer: ProducerConfig, transaction_id: String) -> Self {
+        Self {
+            producer,
+            transaction_id,
+            transaction_timeout: Duration::from_mins(1),
+        }
+    }
+
+    /// Set the transaction timeout.
+    #[must_use]
+    pub const fn transaction_timeout(mut self, timeout: Duration) -> Self {
+        self.transaction_timeout = timeout;
+        self
+    }
+}
+
+/// Transactional Kafka producer for exactly-once semantics.
+///
+/// Provides atomic message publishing across multiple topics/partitions.
+#[derive(Debug)]
+pub struct TransactionalProducer {
+    config: TransactionalConfig,
+}
+
+impl TransactionalProducer {
+    /// Create a new transactional producer.
+    pub fn new(config: TransactionalConfig) -> Result<Self, KafkaError> {
+        config.producer.validate()?;
+
+        if config.transaction_id.is_empty() {
+            return Err(KafkaError::Config(
+                "transaction_id cannot be empty".to_string(),
+            ));
+        }
+
+        Ok(Self { config })
+    }
+
+    /// Begin a new transaction.
+    ///
+    /// Returns a `Transaction` that must be committed or aborted.
+    #[allow(unused_variables, clippy::unused_async)]
+    pub fn begin_transaction(&self, cx: &Cx) -> Result<Transaction<'_>, KafkaError> {
+        cx.checkpoint().map_err(|_| KafkaError::Cancelled)?;
+
+        // Phase 0: stub implementation
+        Err(KafkaError::Io(io::Error::other(
+            "Phase 0: requires rdkafka integration",
+        )))
+    }
+
+    /// Get the transaction ID.
+    #[must_use]
+    pub fn transaction_id(&self) -> &str {
+        &self.config.transaction_id
+    }
+
+    /// Get the current configuration.
+    #[must_use]
+    pub const fn config(&self) -> &TransactionalConfig {
+        &self.config
+    }
+}
+
+/// An active Kafka transaction.
+///
+/// Messages sent within a transaction are atomically committed or aborted.
+/// The transaction must be explicitly committed or aborted before being dropped.
+#[derive(Debug)]
+pub struct Transaction<'a> {
+    producer: &'a TransactionalProducer,
+    committed: bool,
+}
+
+impl Transaction<'_> {
+    /// Send a message within the transaction.
+    #[allow(unused_variables, clippy::unused_async)]
+    pub async fn send(
+        &self,
+        cx: &Cx,
+        topic: &str,
+        key: Option<&[u8]>,
+        payload: &[u8],
+    ) -> Result<(), KafkaError> {
+        cx.checkpoint().map_err(|_| KafkaError::Cancelled)?;
+
+        Err(KafkaError::Io(io::Error::other(
+            "Phase 0: requires rdkafka integration",
+        )))
+    }
+
+    /// Commit the transaction.
+    ///
+    /// Atomically publishes all messages sent within this transaction.
+    #[allow(unused_variables, clippy::unused_async)]
+    pub async fn commit(mut self, cx: &Cx) -> Result<(), KafkaError> {
+        cx.checkpoint().map_err(|_| KafkaError::Cancelled)?;
+
+        // Phase 0: stub - mark as committed to prevent drop warning
+        self.committed = true;
+
+        Err(KafkaError::Io(io::Error::other(
+            "Phase 0: requires rdkafka integration",
+        )))
+    }
+
+    /// Abort the transaction.
+    ///
+    /// Discards all messages sent within this transaction.
+    #[allow(unused_variables, clippy::unused_async)]
+    pub async fn abort(mut self, cx: &Cx) -> Result<(), KafkaError> {
+        cx.checkpoint().map_err(|_| KafkaError::Cancelled)?;
+
+        // Phase 0: stub - mark as committed to prevent drop warning
+        self.committed = true;
+
+        Err(KafkaError::Io(io::Error::other(
+            "Phase 0: requires rdkafka integration",
+        )))
+    }
+}
+
+impl Drop for Transaction<'_> {
+    fn drop(&mut self) {
+        if !self.committed {
+            // In production, this should log a warning about uncommitted transaction
+            // The broker will abort it after transaction.timeout.ms expires
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[cfg(feature = "kafka")]
+    use std::sync::Arc;
+    #[cfg(feature = "kafka")]
+    use std::task::{Context, Wake, Waker};
+
+    #[cfg(feature = "kafka")]
+    struct NoopWaker;
+
+    #[cfg(feature = "kafka")]
+    impl Wake for NoopWaker {
+        fn wake(self: Arc<Self>) {}
+    }
+
+    #[cfg(feature = "kafka")]
+    fn noop_waker() -> Waker {
+        Waker::from(Arc::new(NoopWaker))
+    }
+
+    #[test]
+    fn test_acks_values() {
+        assert_eq!(Acks::None.as_i16(), 0);
+        assert_eq!(Acks::Leader.as_i16(), 1);
+        assert_eq!(Acks::All.as_i16(), -1);
+    }
+
+    #[test]
+    fn test_config_defaults() {
+        let config = ProducerConfig::default();
+        assert_eq!(config.batch_size, 16_384);
+        assert_eq!(config.linger_ms, 5);
+        assert!(config.enable_idempotence);
+        assert_eq!(config.acks, Acks::All);
+    }
+
+    #[test]
+    fn test_config_builder() {
+        let config = ProducerConfig::new(vec!["kafka:9092".to_string()])
+            .client_id("my-producer")
+            .batch_size(32_768)
+            .compression(Compression::Snappy)
+            .acks(Acks::Leader);
+
+        assert_eq!(config.bootstrap_servers, vec!["kafka:9092"]);
+        assert_eq!(config.client_id, Some("my-producer".to_string()));
+        assert_eq!(config.batch_size, 32_768);
+        assert_eq!(config.compression, Compression::Snappy);
+        assert_eq!(config.acks, Acks::Leader);
+    }
+
+    #[test]
+    fn test_config_validation() {
+        let empty_servers = ProducerConfig {
+            bootstrap_servers: vec![],
+            ..Default::default()
+        };
+        assert!(empty_servers.validate().is_err());
+
+        let valid = ProducerConfig::default();
+        assert!(valid.validate().is_ok());
+    }
+
+    #[test]
+    fn test_producer_creation() {
+        let config = ProducerConfig::default();
+        let producer = KafkaProducer::new(config);
+        assert!(producer.is_ok());
+    }
+
+    #[test]
+    fn test_transactional_config() {
+        let config =
+            TransactionalConfig::new(ProducerConfig::default(), "my-transaction-id".to_string())
+                .transaction_timeout(Duration::from_mins(2));
+
+        assert_eq!(config.transaction_id, "my-transaction-id");
+        assert_eq!(config.transaction_timeout, Duration::from_mins(2));
+    }
+
+    #[test]
+    fn test_transactional_producer_empty_id() {
+        let config = TransactionalConfig::new(ProducerConfig::default(), String::new());
+        let producer = TransactionalProducer::new(config);
+        assert!(producer.is_err());
+    }
+
+    #[test]
+    fn test_error_display() {
+        let io_err = KafkaError::Io(io::Error::other("test"));
+        assert!(io_err.to_string().contains("I/O error"));
+
+        let msg_err = KafkaError::MessageTooLarge {
+            size: 2_000_000,
+            max_size: 1_000_000,
+        };
+        assert!(msg_err.to_string().contains("2000000"));
+        assert!(msg_err.to_string().contains("1000000"));
+
+        let cancelled = KafkaError::Cancelled;
+        assert!(cancelled.to_string().contains("cancelled"));
+
+        let done = KafkaError::PolledAfterCompletion;
+        assert!(done.to_string().contains("polled after completion"));
+    }
+
+    #[test]
+    fn test_record_metadata() {
+        let meta = RecordMetadata {
+            topic: "test-topic".to_string(),
+            partition: 0,
+            offset: 42,
+            timestamp: Some(1_234_567_890),
+        };
+        assert_eq!(meta.topic, "test-topic");
+        assert_eq!(meta.partition, 0);
+        assert_eq!(meta.offset, 42);
+        assert_eq!(meta.timestamp, Some(1_234_567_890));
+    }
+
+    // Pure data-type tests (wave 13 – CyanBarn)
+
+    #[test]
+    fn kafka_error_display_all_variants() {
+        assert!(
+            KafkaError::Io(io::Error::other("e"))
+                .to_string()
+                .contains("I/O error")
+        );
+        assert!(
+            KafkaError::Protocol("p".into())
+                .to_string()
+                .contains("protocol error")
+        );
+        assert!(
+            KafkaError::Broker("b".into())
+                .to_string()
+                .contains("broker error")
+        );
+        assert!(KafkaError::QueueFull.to_string().contains("queue is full"));
+        assert!(
+            KafkaError::MessageTooLarge {
+                size: 10,
+                max_size: 5
+            }
+            .to_string()
+            .contains("10")
+        );
+        assert!(
+            KafkaError::InvalidTopic("bad".into())
+                .to_string()
+                .contains("bad")
+        );
+        assert!(
+            KafkaError::Transaction("tx".into())
+                .to_string()
+                .contains("transaction error")
+        );
+        assert!(KafkaError::Cancelled.to_string().contains("cancelled"));
+        assert!(
+            KafkaError::PolledAfterCompletion
+                .to_string()
+                .contains("polled after completion")
+        );
+        assert!(
+            KafkaError::Config("cfg".into())
+                .to_string()
+                .contains("configuration error")
+        );
+    }
+
+    #[test]
+    fn kafka_error_debug() {
+        let err = KafkaError::QueueFull;
+        let dbg = format!("{err:?}");
+        assert!(dbg.contains("QueueFull"));
+    }
+
+    #[test]
+    fn kafka_error_source_io() {
+        let err = KafkaError::Io(io::Error::other("disk"));
+        let src = std::error::Error::source(&err);
+        assert!(src.is_some());
+    }
+
+    #[test]
+    fn kafka_error_source_none_for_others() {
+        let err = KafkaError::Cancelled;
+        assert!(std::error::Error::source(&err).is_none());
+
+        let done = KafkaError::PolledAfterCompletion;
+        assert!(std::error::Error::source(&done).is_none());
+    }
+
+    #[test]
+    fn kafka_error_from_io() {
+        let io_err = io::Error::other("net");
+        let err: KafkaError = KafkaError::from(io_err);
+        assert!(matches!(err, KafkaError::Io(_)));
+    }
+
+    #[test]
+    fn compression_default_is_none() {
+        assert_eq!(Compression::default(), Compression::None);
+    }
+
+    #[test]
+    fn compression_debug_clone_copy_eq() {
+        let c = Compression::Snappy;
+        let dbg = format!("{c:?}");
+        assert!(dbg.contains("Snappy"));
+
+        let copy = c;
+        assert_eq!(c, copy);
+    }
+
+    #[test]
+    fn compression_all_variants_ne() {
+        let variants = [
+            Compression::None,
+            Compression::Gzip,
+            Compression::Snappy,
+            Compression::Lz4,
+            Compression::Zstd,
+        ];
+        for (i, a) in variants.iter().enumerate() {
+            for (j, b) in variants.iter().enumerate() {
+                if i != j {
+                    assert_ne!(a, b);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn acks_default_is_all() {
+        assert_eq!(Acks::default(), Acks::All);
+    }
+
+    #[test]
+    fn acks_debug_clone_copy_eq() {
+        let a = Acks::Leader;
+        let dbg = format!("{a:?}");
+        assert!(dbg.contains("Leader"));
+
+        let copy = a;
+        assert_eq!(a, copy);
+    }
+
+    #[test]
+    fn acks_as_i16_all_variants() {
+        assert_eq!(Acks::None.as_i16(), 0);
+        assert_eq!(Acks::Leader.as_i16(), 1);
+        assert_eq!(Acks::All.as_i16(), -1);
+    }
+
+    #[test]
+    fn producer_config_default_values() {
+        let cfg = ProducerConfig::default();
+        assert_eq!(cfg.bootstrap_servers, vec!["localhost:9092".to_string()]);
+        assert!(cfg.client_id.is_none());
+        assert_eq!(cfg.batch_size, 16_384);
+        assert_eq!(cfg.linger_ms, 5);
+        assert_eq!(cfg.compression, Compression::None);
+        assert!(cfg.enable_idempotence);
+        assert_eq!(cfg.acks, Acks::All);
+        assert_eq!(cfg.retries, 3);
+        assert_eq!(cfg.request_timeout, Duration::from_secs(30));
+        assert_eq!(cfg.max_message_size, 1_048_576);
+    }
+
+    #[test]
+    fn producer_config_debug_clone() {
+        let cfg = ProducerConfig::default();
+        let dbg = format!("{cfg:?}");
+        assert!(dbg.contains("ProducerConfig"));
+
+        let cloned = cfg;
+        assert_eq!(cloned.batch_size, 16_384);
+    }
+
+    #[test]
+    fn producer_config_builder_linger_retries() {
+        let cfg = ProducerConfig::new(vec!["k:9092".into()])
+            .linger_ms(100)
+            .retries(10)
+            .enable_idempotence(false);
+        assert_eq!(cfg.linger_ms, 100);
+        assert_eq!(cfg.retries, 10);
+        assert!(!cfg.enable_idempotence);
+    }
+
+    #[test]
+    fn producer_config_validate_zero_batch_size() {
+        let cfg = ProducerConfig {
+            batch_size: 0,
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn producer_config_validate_zero_max_message() {
+        let cfg = ProducerConfig {
+            max_message_size: 0,
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn record_metadata_debug_clone() {
+        let meta = RecordMetadata {
+            topic: "t".into(),
+            partition: 1,
+            offset: 99,
+            timestamp: None,
+        };
+        let dbg = format!("{meta:?}");
+        assert!(dbg.contains("RecordMetadata"));
+
+        let cloned = meta;
+        assert_eq!(cloned.partition, 1);
+        assert!(cloned.timestamp.is_none());
+    }
+
+    #[test]
+    fn kafka_producer_config_accessor() {
+        let cfg = ProducerConfig::new(vec!["host:9092".into()]).batch_size(999);
+        let producer = KafkaProducer::new(cfg).unwrap();
+        assert_eq!(producer.config().batch_size, 999);
+    }
+
+    #[test]
+    fn kafka_producer_debug() {
+        let producer = KafkaProducer::new(ProducerConfig::default()).unwrap();
+        let dbg = format!("{producer:?}");
+        assert!(dbg.contains("KafkaProducer"));
+    }
+
+    #[test]
+    fn kafka_producer_reject_empty_servers() {
+        let cfg = ProducerConfig {
+            bootstrap_servers: vec![],
+            ..Default::default()
+        };
+        assert!(KafkaProducer::new(cfg).is_err());
+    }
+
+    #[test]
+    fn transactional_config_debug_clone() {
+        let tc = TransactionalConfig::new(ProducerConfig::default(), "tx-1".into());
+        let dbg = format!("{tc:?}");
+        assert!(dbg.contains("TransactionalConfig"));
+
+        let cloned = tc;
+        assert_eq!(cloned.transaction_id, "tx-1");
+    }
+
+    #[test]
+    fn transactional_config_default_timeout() {
+        let tc = TransactionalConfig::new(ProducerConfig::default(), "tx-2".into());
+        assert_eq!(tc.transaction_timeout, Duration::from_mins(1));
+    }
+
+    #[test]
+    fn transactional_producer_debug() {
+        let tc = TransactionalConfig::new(ProducerConfig::default(), "tx-3".into());
+        let producer = TransactionalProducer::new(tc).unwrap();
+        let dbg = format!("{producer:?}");
+        assert!(dbg.contains("TransactionalProducer"));
+    }
+
+    #[test]
+    fn transactional_producer_accessors() {
+        let tc = TransactionalConfig::new(ProducerConfig::default(), "tx-4".into());
+        let producer = TransactionalProducer::new(tc).unwrap();
+        assert_eq!(producer.transaction_id(), "tx-4");
+        assert_eq!(producer.config().transaction_id, "tx-4");
+    }
+
+    #[test]
+    fn compression_debug_clone_copy_default_eq() {
+        let c = Compression::default();
+        assert_eq!(c, Compression::None);
+        let dbg = format!("{c:?}");
+        assert!(dbg.contains("None"), "{dbg}");
+        let copied: Compression = c;
+        let cloned = c;
+        assert_eq!(copied, cloned);
+        assert_ne!(c, Compression::Zstd);
+    }
+
+    #[test]
+    fn acks_debug_clone_copy_default_eq() {
+        let a = Acks::default();
+        assert_eq!(a, Acks::All);
+        let dbg = format!("{a:?}");
+        assert!(dbg.contains("All"), "{dbg}");
+        let copied: Acks = a;
+        let cloned = a;
+        assert_eq!(copied, cloned);
+        assert_ne!(a, Acks::Leader);
+    }
+
+    #[cfg(not(feature = "kafka"))]
+    #[test]
+    fn producer_send_returns_deterministic_delivery_metadata() {
+        crate::test_utils::run_test_with_cx(|cx| async move {
+            let producer = KafkaProducer::new(ProducerConfig::default()).unwrap();
+
+            // Use unique topic name to avoid cross-test contamination via the
+            // global STUB_DELIVERY_OFFSETS static.
+            let topic = "deterministic-delivery-metadata-test";
+            let first = producer
+                .send(&cx, topic, None, b"first", Some(2))
+                .await
+                .unwrap();
+            let second = producer
+                .send_with_headers(
+                    &cx,
+                    topic,
+                    Some(b"key"),
+                    b"second",
+                    &[("trace-id", b"abc-123")],
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(first.topic, topic);
+            assert_eq!(first.partition, 2);
+            assert_eq!(first.offset, 0);
+            assert_eq!(second.partition, 0);
+            assert_eq!(second.offset, 0);
+
+            let third = producer
+                .send(&cx, topic, None, b"third", Some(2))
+                .await
+                .unwrap();
+            assert_eq!(third.offset, first.offset + 1);
+
+            producer.flush(&cx, Duration::from_millis(5)).await.unwrap();
+        });
+    }
+
+    #[cfg(not(feature = "kafka"))]
+    #[test]
+    fn producer_rejects_blank_topic_name() {
+        crate::test_utils::run_test_with_cx(|cx| async move {
+            let producer = KafkaProducer::new(ProducerConfig::default()).unwrap();
+            let err = producer
+                .send(&cx, "   ", None, b"x", None)
+                .await
+                .unwrap_err();
+            assert!(matches!(err, KafkaError::InvalidTopic(topic) if topic.is_empty()));
+        });
+    }
+
+    #[cfg(not(feature = "kafka"))]
+    #[test]
+    fn producer_close_is_idempotent_and_blocks_new_operations() {
+        crate::test_utils::run_test_with_cx(|cx| async move {
+            let producer = KafkaProducer::new(ProducerConfig::default()).unwrap();
+            producer
+                .send(&cx, "orders", None, b"before-close", None)
+                .await
+                .unwrap();
+
+            producer.close(&cx, Duration::from_millis(5)).await.unwrap();
+            producer.close(&cx, Duration::from_millis(5)).await.unwrap();
+            assert!(producer.is_closed());
+
+            let send_err = producer
+                .send(&cx, "orders", None, b"after-close", None)
+                .await
+                .unwrap_err();
+            assert!(matches!(send_err, KafkaError::Config(msg) if msg.contains("closed")));
+
+            let flush_err = producer
+                .flush(&cx, Duration::from_millis(1))
+                .await
+                .unwrap_err();
+            assert!(matches!(flush_err, KafkaError::Config(msg) if msg.contains("closed")));
+        });
+    }
+
+    #[cfg(feature = "kafka")]
+    #[test]
+    fn delivery_receiver_repoll_after_success_fails_closed() {
+        let cx = Cx::for_testing();
+        let (sender, receiver) = delivery_channel(&cx);
+        sender.complete(Ok(RecordMetadata {
+            topic: "orders".to_string(),
+            partition: 2,
+            offset: 41,
+            timestamp: Some(123),
+        }));
+
+        let waker = noop_waker();
+        let mut task_cx = Context::from_waker(&waker);
+        let mut receiver = std::pin::pin!(receiver);
+
+        match receiver.as_mut().poll(&mut task_cx) {
+            Poll::Ready(Ok(metadata)) => {
+                assert_eq!(metadata.topic, "orders");
+                assert_eq!(metadata.partition, 2);
+                assert_eq!(metadata.offset, 41);
+                assert_eq!(metadata.timestamp, Some(123));
+            }
+            other => panic!("expected Ready(Ok(_)), got {other:?}"),
+        }
+
+        assert!(matches!(
+            receiver.as_mut().poll(&mut task_cx),
+            Poll::Ready(Err(KafkaError::PolledAfterCompletion))
+        ));
+    }
+
+    #[cfg(feature = "kafka")]
+    #[test]
+    fn delivery_receiver_repoll_after_cancellation_fails_closed() {
+        let cx = Cx::for_testing();
+        cx.set_cancel_requested(true);
+        let (_sender, receiver) = delivery_channel(&cx);
+
+        let waker = noop_waker();
+        let mut task_cx = Context::from_waker(&waker);
+        let mut receiver = std::pin::pin!(receiver);
+
+        assert!(matches!(
+            receiver.as_mut().poll(&mut task_cx),
+            Poll::Ready(Err(KafkaError::Cancelled))
+        ));
+        assert!(matches!(
+            receiver.as_mut().poll(&mut task_cx),
+            Poll::Ready(Err(KafkaError::PolledAfterCompletion))
+        ));
+    }
+}

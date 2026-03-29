@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 use tokio::sync::oneshot;
-use tokio::time::{sleep, Duration};
+use tokio::time::Duration;
 use uuid::Uuid;
 
 /// Global approval manager instance
@@ -50,8 +50,9 @@ impl ApprovalManager {
         }
     }
 
-    /// Request approval for an operation
+    /// Request approval for an operation — forward scaffolding for pi tool approval hook
     /// Returns a channel to wait for the user's response
+    #[allow(dead_code)]
     pub fn request_approval(&self, request: ApprovalRequest) -> oneshot::Receiver<bool> {
         let (tx, rx) = oneshot::channel();
         let mut pending = match self.pending.lock() {
@@ -82,7 +83,8 @@ impl ApprovalManager {
         }
     }
 
-    /// Get list of pending approvals (for future frontend integration)
+    /// Get list of pending approvals — forward scaffolding for frontend polling endpoint
+    #[allow(dead_code)]
     pub fn get_pending(&self) -> Vec<String> {
         let pending = match self.pending.lock() {
             Ok(p) => p,
@@ -109,6 +111,9 @@ impl Default for ApprovalManager {
     }
 }
 
+// Approval request factory functions — forward scaffolding for sandbox integration.
+// Will be called once pi exposes a blocking approval hook.
+#[allow(dead_code)]
 /// Create an approval request for file write operation
 pub fn create_write_file_approval_request(
     path: &str,
@@ -131,6 +136,7 @@ pub fn create_write_file_approval_request(
     }
 }
 
+#[allow(dead_code)]
 /// Create an approval request for bash command with write access
 pub fn create_bash_write_approval_request(command: &str) -> ApprovalRequest {
     let command_preview = if command.len() > 100 {
@@ -149,6 +155,7 @@ pub fn create_bash_write_approval_request(command: &str) -> ApprovalRequest {
     }
 }
 
+#[allow(dead_code)]
 /// Phase 3: Create approval request for sandbox escape (privilege escalation)
 pub fn create_sandbox_approval_request(
     operation: &str,
@@ -167,6 +174,7 @@ pub fn create_sandbox_approval_request(
     }
 }
 
+#[allow(dead_code)]
 /// Phase 3: Wait for approval with 30-second timeout
 /// Returns true if approved, false if denied or timeout expires
 pub async fn wait_for_approval_with_timeout(rx: oneshot::Receiver<bool>) -> bool {

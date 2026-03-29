@@ -1,0 +1,1266 @@
+//! Kafka consumer with Cx integration for cancel-correct message consumption.
+//!
+//! This module defines the API surface for a Kafka consumer that integrates
+//! with the Asupersync `Cx` context. The Phase 0 implementation is a stub
+//! that returns a clear error until rdkafka integration is added.
+//!
+//! # Cancel-Correct Behavior
+//!
+//! - Poll operations honor cancellation checkpoints
+//! - Offset commits are explicit and budget-aware
+//! - Consumer close drains in-flight operations (future implementation)
+
+// Phase 0 stubs return errors immediately; async is for API consistency
+// with eventual rdkafka integration.
+#![allow(clippy::unused_async)]
+
+use crate::cx::Cx;
+use crate::messaging::kafka::KafkaError;
+use parking_lot::Mutex;
+use std::collections::{BTreeMap, BTreeSet};
+#[cfg(test)]
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
+
+/// Offset reset strategy when no committed offset exists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AutoOffsetReset {
+    /// Start from the earliest available offset.
+    Earliest,
+    /// Start from the latest offset.
+    #[default]
+    Latest,
+    /// Fail if no committed offset is present.
+    None,
+}
+
+/// Isolation level for reading transactional messages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum IsolationLevel {
+    /// Read uncommitted messages (default).
+    #[default]
+    ReadUncommitted,
+    /// Read only committed messages.
+    ReadCommitted,
+}
+
+/// Configuration for a Kafka consumer.
+#[derive(Debug, Clone)]
+pub struct ConsumerConfig {
+    /// Bootstrap server addresses (host:port).
+    pub bootstrap_servers: Vec<String>,
+    /// Consumer group ID.
+    pub group_id: String,
+    /// Client identifier.
+    pub client_id: Option<String>,
+    /// Session timeout (detect failed consumers).
+    pub session_timeout: Duration,
+    /// Heartbeat interval.
+    pub heartbeat_interval: Duration,
+    /// Auto offset reset behavior.
+    pub auto_offset_reset: AutoOffsetReset,
+    /// Enable auto-commit of offsets.
+    pub enable_auto_commit: bool,
+    /// Auto-commit interval.
+    pub auto_commit_interval: Duration,
+    /// Max records returned per poll.
+    pub max_poll_records: usize,
+    /// Fetch minimum bytes.
+    pub fetch_min_bytes: usize,
+    /// Fetch maximum bytes.
+    pub fetch_max_bytes: usize,
+    /// Maximum wait time for fetch.
+    pub fetch_max_wait: Duration,
+    /// Isolation level for transactional reads.
+    pub isolation_level: IsolationLevel,
+}
+
+impl Default for ConsumerConfig {
+    fn default() -> Self {
+        Self {
+            bootstrap_servers: vec!["localhost:9092".to_string()],
+            group_id: "asupersync-default".to_string(),
+            client_id: None,
+            session_timeout: Duration::from_secs(45),
+            heartbeat_interval: Duration::from_secs(3),
+            auto_offset_reset: AutoOffsetReset::Latest,
+            enable_auto_commit: true,
+            auto_commit_interval: Duration::from_secs(5),
+            max_poll_records: 500,
+            fetch_min_bytes: 1,
+            fetch_max_bytes: 50 * 1024 * 1024,
+            fetch_max_wait: Duration::from_millis(500),
+            isolation_level: IsolationLevel::ReadUncommitted,
+        }
+    }
+}
+
+impl ConsumerConfig {
+    /// Create a new consumer configuration.
+    #[must_use]
+    pub fn new(bootstrap_servers: Vec<String>, group_id: impl Into<String>) -> Self {
+        Self {
+            bootstrap_servers,
+            group_id: group_id.into(),
+            ..Default::default()
+        }
+    }
+
+    /// Set the client identifier.
+    #[must_use]
+    pub fn client_id(mut self, client_id: &str) -> Self {
+        self.client_id = Some(client_id.to_string());
+        self
+    }
+
+    /// Set the session timeout.
+    #[must_use]
+    pub fn session_timeout(mut self, timeout: Duration) -> Self {
+        self.session_timeout = timeout;
+        self
+    }
+
+    /// Set the heartbeat interval.
+    #[must_use]
+    pub fn heartbeat_interval(mut self, interval: Duration) -> Self {
+        self.heartbeat_interval = interval;
+        self
+    }
+
+    /// Set auto offset reset behavior.
+    #[must_use]
+    pub const fn auto_offset_reset(mut self, reset: AutoOffsetReset) -> Self {
+        self.auto_offset_reset = reset;
+        self
+    }
+
+    /// Enable or disable auto-commit.
+    #[must_use]
+    pub const fn enable_auto_commit(mut self, enable: bool) -> Self {
+        self.enable_auto_commit = enable;
+        self
+    }
+
+    /// Set auto-commit interval.
+    #[must_use]
+    pub fn auto_commit_interval(mut self, interval: Duration) -> Self {
+        self.auto_commit_interval = interval;
+        self
+    }
+
+    /// Set max records returned per poll.
+    #[must_use]
+    pub const fn max_poll_records(mut self, max: usize) -> Self {
+        self.max_poll_records = max;
+        self
+    }
+
+    /// Set fetch minimum bytes.
+    #[must_use]
+    pub const fn fetch_min_bytes(mut self, min: usize) -> Self {
+        self.fetch_min_bytes = min;
+        self
+    }
+
+    /// Set fetch maximum bytes.
+    #[must_use]
+    pub const fn fetch_max_bytes(mut self, max: usize) -> Self {
+        self.fetch_max_bytes = max;
+        self
+    }
+
+    /// Set fetch maximum wait time.
+    #[must_use]
+    pub fn fetch_max_wait(mut self, wait: Duration) -> Self {
+        self.fetch_max_wait = wait;
+        self
+    }
+
+    /// Set isolation level.
+    #[must_use]
+    pub const fn isolation_level(mut self, level: IsolationLevel) -> Self {
+        self.isolation_level = level;
+        self
+    }
+
+    /// Validate the configuration.
+    pub fn validate(&self) -> Result<(), KafkaError> {
+        if self.bootstrap_servers.is_empty() {
+            return Err(KafkaError::Config(
+                "bootstrap_servers cannot be empty".to_string(),
+            ));
+        }
+        if self.group_id.trim().is_empty() {
+            return Err(KafkaError::Config("group_id cannot be empty".to_string()));
+        }
+        if self.max_poll_records == 0 {
+            return Err(KafkaError::Config(
+                "max_poll_records must be > 0".to_string(),
+            ));
+        }
+        if self.fetch_min_bytes > self.fetch_max_bytes {
+            return Err(KafkaError::Config(
+                "fetch_min_bytes must be <= fetch_max_bytes".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// A topic/partition/offset tuple for commits and seeks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TopicPartitionOffset {
+    /// Topic name.
+    pub topic: String,
+    /// Partition number.
+    pub partition: i32,
+    /// Offset to commit or seek.
+    pub offset: i64,
+}
+
+impl TopicPartitionOffset {
+    /// Create a new topic/partition/offset tuple.
+    #[must_use]
+    pub fn new(topic: impl Into<String>, partition: i32, offset: i64) -> Self {
+        Self {
+            topic: topic.into(),
+            partition,
+            offset,
+        }
+    }
+}
+
+/// Result emitted after a consumer group rebalance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RebalanceResult {
+    /// Monotonic rebalance generation for this consumer instance.
+    pub generation: u64,
+    /// Current assigned partitions after rebalance.
+    pub assigned: Vec<(String, i32)>,
+    /// Partitions revoked by the rebalance.
+    pub revoked: Vec<(String, i32)>,
+}
+
+/// A record returned from a Kafka consumer poll.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConsumerRecord {
+    /// Topic name.
+    pub topic: String,
+    /// Partition number.
+    pub partition: i32,
+    /// Offset of the record.
+    pub offset: i64,
+    /// Optional key.
+    pub key: Option<Vec<u8>>,
+    /// Payload bytes.
+    pub payload: Vec<u8>,
+    /// Record timestamp (ms since epoch).
+    pub timestamp: Option<i64>,
+    /// Header key/value pairs.
+    pub headers: Vec<(String, Vec<u8>)>,
+}
+
+/// Kafka consumer (Phase 0 stub).
+#[derive(Debug)]
+pub struct KafkaConsumer {
+    config: ConsumerConfig,
+    state: Mutex<ConsumerState>,
+    closed: AtomicBool,
+    #[cfg(test)]
+    rebalance_after_open_hook: Mutex<Option<Arc<RebalanceAfterOpenHook>>>,
+}
+
+#[derive(Debug, Default)]
+struct ConsumerState {
+    subscribed_topics: BTreeSet<String>,
+    assigned_partitions: BTreeSet<(String, i32)>,
+    committed_offsets: BTreeMap<(String, i32), i64>,
+    positions: BTreeMap<(String, i32), i64>,
+    rebalance_generation: u64,
+    last_revoked_partitions: BTreeSet<(String, i32)>,
+}
+
+#[cfg(test)]
+#[derive(Debug)]
+struct RebalanceAfterOpenHook {
+    arrived: std::sync::Barrier,
+    release: std::sync::Barrier,
+}
+
+#[cfg(test)]
+impl RebalanceAfterOpenHook {
+    fn new() -> Self {
+        Self {
+            arrived: std::sync::Barrier::new(2),
+            release: std::sync::Barrier::new(2),
+        }
+    }
+}
+
+impl KafkaConsumer {
+    /// Create a new Kafka consumer.
+    pub fn new(config: ConsumerConfig) -> Result<Self, KafkaError> {
+        config.validate()?;
+        Ok(Self {
+            config,
+            state: Mutex::new(ConsumerState::default()),
+            closed: AtomicBool::new(false),
+            #[cfg(test)]
+            rebalance_after_open_hook: Mutex::new(None),
+        })
+    }
+
+    #[cfg(test)]
+    fn install_rebalance_after_open_hook(&self, hook: Arc<RebalanceAfterOpenHook>) {
+        *self.rebalance_after_open_hook.lock() = Some(hook);
+    }
+
+    /// Subscribe to a set of topics.
+    #[allow(unused_variables)]
+    pub async fn subscribe(&self, cx: &Cx, topics: &[&str]) -> Result<(), KafkaError> {
+        cx.checkpoint().map_err(|_| KafkaError::Cancelled)?;
+        self.ensure_open()?;
+
+        if topics.is_empty() {
+            return Err(KafkaError::Config("topics cannot be empty".to_string()));
+        }
+
+        let mut normalized = BTreeSet::new();
+        for topic in topics {
+            let topic = topic.trim();
+            if topic.is_empty() {
+                return Err(KafkaError::Config("topic cannot be empty".to_string()));
+            }
+            normalized.insert(topic.to_string());
+        }
+
+        let mut state = self.state.lock();
+        // Re-check closed under lock to prevent TOCTOU race with close().
+        if self.closed.load(Ordering::Acquire) {
+            return Err(KafkaError::Config("consumer is closed".to_string()));
+        }
+        state.subscribed_topics = normalized;
+        state.assigned_partitions = state
+            .subscribed_topics
+            .iter()
+            .cloned()
+            .map(|topic| (topic, 0))
+            .collect();
+        state.positions.clear();
+        state.committed_offsets.clear();
+        state.rebalance_generation = 0;
+        state.last_revoked_partitions.clear();
+        drop(state);
+        Ok(())
+    }
+
+    /// Apply a deterministic rebalance assignment.
+    ///
+    /// The provided assignments replace current partition ownership. Any
+    /// previously assigned partition not present in `assignments` is revoked.
+    pub async fn rebalance(
+        &self,
+        cx: &Cx,
+        assignments: &[TopicPartitionOffset],
+    ) -> Result<RebalanceResult, KafkaError> {
+        cx.checkpoint().map_err(|_| KafkaError::Cancelled)?;
+        self.ensure_open()?;
+
+        #[cfg(test)]
+        let rebalance_after_open_hook = self.rebalance_after_open_hook.lock().clone();
+        #[cfg(test)]
+        if let Some(hook) = rebalance_after_open_hook {
+            hook.arrived.wait();
+            hook.release.wait();
+        }
+
+        let mut normalized = BTreeMap::new();
+        // Hold the lock across validation and mutation to prevent TOCTOU
+        // races where subscribed_topics could change between validation
+        // and the state update below.
+        let mut state = self.state.lock();
+        // Re-check closed under lock to prevent TOCTOU race with close().
+        if self.closed.load(Ordering::Acquire) {
+            return Err(KafkaError::Config("consumer is closed".to_string()));
+        }
+        if state.subscribed_topics.is_empty() {
+            return Err(KafkaError::Config(
+                "consumer has no active topic subscription".to_string(),
+            ));
+        }
+
+        for tpo in assignments {
+            if tpo.topic.trim().is_empty() {
+                return Err(KafkaError::Config("topic cannot be empty".to_string()));
+            }
+            validate_partition_number(tpo.partition)?;
+            if !state.subscribed_topics.contains(&tpo.topic) {
+                return Err(KafkaError::InvalidTopic(tpo.topic.clone()));
+            }
+            if tpo.offset < 0 {
+                return Err(KafkaError::Config(
+                    "rebalance offsets must be non-negative".to_string(),
+                ));
+            }
+            if normalized
+                .insert((tpo.topic.clone(), tpo.partition), tpo.offset)
+                .is_some()
+            {
+                return Err(KafkaError::Config(
+                    "duplicate topic/partition entry in rebalance batch".to_string(),
+                ));
+            }
+        }
+        let previous_assignments = state.assigned_partitions.clone();
+        let next_assignments: BTreeSet<(String, i32)> = normalized.keys().cloned().collect();
+        let revoked: Vec<(String, i32)> = previous_assignments
+            .difference(&next_assignments)
+            .cloned()
+            .collect();
+        let assigned: Vec<(String, i32)> = next_assignments.iter().cloned().collect();
+
+        state.assigned_partitions = next_assignments;
+        let retained_assignments = state.assigned_partitions.clone();
+        state
+            .positions
+            .retain(|key, _| retained_assignments.contains(key));
+        state
+            .committed_offsets
+            .retain(|key, _| retained_assignments.contains(key));
+        for (partition, offset) in normalized {
+            state.positions.insert(partition, offset);
+        }
+        state.rebalance_generation = state.rebalance_generation.saturating_add(1);
+        state.last_revoked_partitions = revoked.iter().cloned().collect();
+        let generation = state.rebalance_generation;
+        drop(state);
+
+        Ok(RebalanceResult {
+            generation,
+            assigned,
+            revoked,
+        })
+    }
+
+    /// Poll for the next record.
+    #[allow(unused_variables)]
+    pub async fn poll(
+        &self,
+        cx: &Cx,
+        timeout: Duration,
+    ) -> Result<Option<ConsumerRecord>, KafkaError> {
+        cx.checkpoint().map_err(|_| KafkaError::Cancelled)?;
+        self.ensure_open()?;
+        let _ = timeout;
+
+        let has_subscriptions = {
+            let state = self.state.lock();
+            // Re-check closed under lock to prevent TOCTOU race with close().
+            if self.closed.load(Ordering::Acquire) {
+                return Err(KafkaError::Config("consumer is closed".to_string()));
+            }
+            !state.subscribed_topics.is_empty()
+        };
+        if !has_subscriptions {
+            return Err(KafkaError::Config(
+                "consumer has no active topic subscription".to_string(),
+            ));
+        }
+        Ok(None)
+    }
+
+    /// Commit offsets explicitly.
+    #[allow(unused_variables)]
+    pub async fn commit_offsets(
+        &self,
+        cx: &Cx,
+        offsets: &[TopicPartitionOffset],
+    ) -> Result<(), KafkaError> {
+        cx.checkpoint().map_err(|_| KafkaError::Cancelled)?;
+        self.ensure_open()?;
+
+        if offsets.is_empty() {
+            return Err(KafkaError::Config("offsets cannot be empty".to_string()));
+        }
+
+        // Hold the lock across validation and mutation to prevent TOCTOU
+        // races between concurrent commit_offsets calls.
+        let mut state = self.state.lock();
+        // Re-check closed under lock to prevent TOCTOU race with close().
+        if self.closed.load(Ordering::Acquire) {
+            return Err(KafkaError::Config("consumer is closed".to_string()));
+        }
+        let mut normalized = BTreeMap::new();
+        for tpo in offsets {
+            validate_partition_number(tpo.partition)?;
+            if !state.subscribed_topics.contains(&tpo.topic) {
+                return Err(KafkaError::InvalidTopic(tpo.topic.clone()));
+            }
+            let key = (tpo.topic.clone(), tpo.partition);
+            if !state.assigned_partitions.contains(&key) {
+                return Err(KafkaError::Config(
+                    "partition is not assigned to this consumer".to_string(),
+                ));
+            }
+            if tpo.offset < 0 {
+                return Err(KafkaError::Config(
+                    "offsets must be non-negative".to_string(),
+                ));
+            }
+            if let Some(previous) = state.committed_offsets.get(&key)
+                && tpo.offset < *previous
+            {
+                return Err(KafkaError::Config(
+                    "offset commit regression is not allowed".to_string(),
+                ));
+            }
+            if normalized.insert(key, tpo.offset).is_some() {
+                return Err(KafkaError::Config(
+                    "duplicate topic/partition entry in commit batch".to_string(),
+                ));
+            }
+        }
+        for (key, offset) in normalized {
+            state.committed_offsets.insert(key, offset);
+        }
+        drop(state);
+        Ok(())
+    }
+
+    /// Seek to a specific offset.
+    #[allow(unused_variables)]
+    pub async fn seek(&self, cx: &Cx, tpo: &TopicPartitionOffset) -> Result<(), KafkaError> {
+        cx.checkpoint().map_err(|_| KafkaError::Cancelled)?;
+        self.ensure_open()?;
+
+        validate_partition_number(tpo.partition)?;
+        if tpo.offset < 0 {
+            return Err(KafkaError::Config(
+                "seek offset must be non-negative".to_string(),
+            ));
+        }
+
+        // Hold the lock across validation and mutation to prevent TOCTOU races
+        // where assignment state could change between checks and update.
+        let mut state = self.state.lock();
+        if self.closed.load(Ordering::Acquire) {
+            return Err(KafkaError::Config("consumer is closed".to_string()));
+        }
+        if !state.subscribed_topics.contains(&tpo.topic) {
+            return Err(KafkaError::InvalidTopic(tpo.topic.clone()));
+        }
+        if !state
+            .assigned_partitions
+            .contains(&(tpo.topic.clone(), tpo.partition))
+        {
+            return Err(KafkaError::Config(
+                "partition is not assigned to this consumer".to_string(),
+            ));
+        }
+        state
+            .positions
+            .insert((tpo.topic.clone(), tpo.partition), tpo.offset);
+        drop(state);
+        Ok(())
+    }
+
+    /// Close the consumer.
+    #[allow(unused_variables)]
+    pub async fn close(&self, cx: &Cx) -> Result<(), KafkaError> {
+        cx.checkpoint().map_err(|_| KafkaError::Cancelled)?;
+        let was_closed = self.closed.swap(true, Ordering::AcqRel);
+        if !was_closed {
+            let mut state = self.state.lock();
+            state.subscribed_topics.clear();
+            state.assigned_partitions.clear();
+            state.committed_offsets.clear();
+            state.positions.clear();
+            state.last_revoked_partitions.clear();
+            drop(state);
+        }
+        Ok(())
+    }
+
+    /// Get the current configuration.
+    #[must_use]
+    pub const fn config(&self) -> &ConsumerConfig {
+        &self.config
+    }
+
+    /// Snapshot of currently subscribed topics.
+    #[must_use]
+    pub fn subscriptions(&self) -> Vec<String> {
+        self.state
+            .lock()
+            .subscribed_topics
+            .iter()
+            .cloned()
+            .collect()
+    }
+
+    /// Snapshot of assigned topic/partitions for the current subscription.
+    #[must_use]
+    pub fn assigned_partitions(&self) -> Vec<(String, i32)> {
+        self.state
+            .lock()
+            .assigned_partitions
+            .iter()
+            .cloned()
+            .collect()
+    }
+
+    /// Monotonic rebalance generation counter.
+    #[must_use]
+    pub fn rebalance_generation(&self) -> u64 {
+        self.state.lock().rebalance_generation
+    }
+
+    /// Snapshot of partitions revoked during the latest rebalance.
+    #[must_use]
+    pub fn last_revoked_partitions(&self) -> Vec<(String, i32)> {
+        self.state
+            .lock()
+            .last_revoked_partitions
+            .iter()
+            .cloned()
+            .collect()
+    }
+
+    /// Read committed offset for a topic/partition.
+    #[must_use]
+    pub fn committed_offset(&self, topic: &str, partition: i32) -> Option<i64> {
+        self.state
+            .lock()
+            .committed_offsets
+            .get(&(topic.to_string(), partition))
+            .copied()
+    }
+
+    /// Read current seek position for a topic/partition.
+    #[must_use]
+    pub fn position(&self, topic: &str, partition: i32) -> Option<i64> {
+        self.state
+            .lock()
+            .positions
+            .get(&(topic.to_string(), partition))
+            .copied()
+    }
+
+    /// Returns true once `close()` has been called.
+    #[must_use]
+    pub fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::Acquire)
+    }
+
+    fn ensure_open(&self) -> Result<(), KafkaError> {
+        if self.closed.load(Ordering::Acquire) {
+            Err(KafkaError::Config("consumer is closed".to_string()))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+fn validate_partition_number(partition: i32) -> Result<(), KafkaError> {
+    if partition < 0 {
+        Err(KafkaError::Config(
+            "partition must be non-negative".to_string(),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::run_test_with_cx;
+    use std::sync::Arc;
+
+    #[test]
+    fn test_config_defaults() {
+        let config = ConsumerConfig::default();
+        assert_eq!(config.group_id, "asupersync-default");
+        assert_eq!(config.max_poll_records, 500);
+        assert!(config.enable_auto_commit);
+    }
+
+    #[test]
+    fn test_config_builder() {
+        let config = ConsumerConfig::new(vec!["kafka:9092".to_string()], "group-1")
+            .client_id("consumer-1")
+            .auto_offset_reset(AutoOffsetReset::Earliest)
+            .enable_auto_commit(false)
+            .max_poll_records(1000)
+            .fetch_min_bytes(4)
+            .fetch_max_bytes(1024)
+            .isolation_level(IsolationLevel::ReadCommitted);
+
+        assert_eq!(config.bootstrap_servers, vec!["kafka:9092"]);
+        assert_eq!(config.group_id, "group-1");
+        assert_eq!(config.client_id, Some("consumer-1".to_string()));
+        assert_eq!(config.auto_offset_reset, AutoOffsetReset::Earliest);
+        assert!(!config.enable_auto_commit);
+        assert_eq!(config.max_poll_records, 1000);
+        assert_eq!(config.fetch_min_bytes, 4);
+        assert_eq!(config.fetch_max_bytes, 1024);
+        assert_eq!(config.isolation_level, IsolationLevel::ReadCommitted);
+    }
+
+    #[test]
+    fn test_config_validation() {
+        let empty_servers = ConsumerConfig {
+            bootstrap_servers: vec![],
+            ..Default::default()
+        };
+        assert!(empty_servers.validate().is_err());
+
+        let empty_group = ConsumerConfig::new(vec!["kafka:9092".to_string()], "");
+        assert!(empty_group.validate().is_err());
+
+        let bad_fetch = ConsumerConfig::new(vec!["kafka:9092".to_string()], "group")
+            .fetch_min_bytes(10)
+            .fetch_max_bytes(1);
+        assert!(bad_fetch.validate().is_err());
+    }
+
+    #[test]
+    fn test_topic_partition_offset() {
+        let tpo = TopicPartitionOffset::new("topic", 1, 42);
+        assert_eq!(tpo.topic, "topic");
+        assert_eq!(tpo.partition, 1);
+        assert_eq!(tpo.offset, 42);
+    }
+
+    #[test]
+    fn test_consumer_creation() {
+        let config = ConsumerConfig::default();
+        let consumer = KafkaConsumer::new(config);
+        assert!(consumer.is_ok());
+    }
+
+    // Pure data-type tests (wave 12 – CyanBarn)
+
+    #[test]
+    fn auto_offset_reset_default() {
+        let d = AutoOffsetReset::default();
+        assert_eq!(d, AutoOffsetReset::Latest);
+    }
+
+    #[test]
+    fn auto_offset_reset_debug_copy_eq() {
+        let e = AutoOffsetReset::Earliest;
+        let dbg = format!("{e:?}");
+        assert!(dbg.contains("Earliest"));
+
+        // Copy
+        let e2 = e;
+        assert_eq!(e, e2);
+
+        // Clone
+        let e3 = e;
+        assert_eq!(e, e3);
+
+        // Inequality
+        assert_ne!(AutoOffsetReset::Earliest, AutoOffsetReset::Latest);
+        assert_ne!(AutoOffsetReset::Latest, AutoOffsetReset::None);
+    }
+
+    #[test]
+    fn isolation_level_default() {
+        let d = IsolationLevel::default();
+        assert_eq!(d, IsolationLevel::ReadUncommitted);
+    }
+
+    #[test]
+    fn isolation_level_debug_copy_eq() {
+        let rc = IsolationLevel::ReadCommitted;
+        let dbg = format!("{rc:?}");
+        assert!(dbg.contains("ReadCommitted"));
+
+        let rc2 = rc;
+        assert_eq!(rc, rc2);
+
+        assert_ne!(
+            IsolationLevel::ReadCommitted,
+            IsolationLevel::ReadUncommitted
+        );
+    }
+
+    #[test]
+    fn consumer_config_debug_clone() {
+        let cfg = ConsumerConfig::default();
+        let dbg = format!("{cfg:?}");
+        assert!(dbg.contains("asupersync-default"));
+
+        let cloned = cfg;
+        assert_eq!(cloned.group_id, "asupersync-default");
+    }
+
+    #[test]
+    fn consumer_config_new_overrides_defaults() {
+        let cfg = ConsumerConfig::new(vec!["broker:9092".into()], "my-group");
+        assert_eq!(cfg.bootstrap_servers, vec!["broker:9092"]);
+        assert_eq!(cfg.group_id, "my-group");
+        // Other fields still have defaults
+        assert_eq!(cfg.max_poll_records, 500);
+        assert!(cfg.enable_auto_commit);
+    }
+
+    #[test]
+    fn consumer_config_session_timeout_builder() {
+        let cfg = ConsumerConfig::default().session_timeout(Duration::from_mins(1));
+        assert_eq!(cfg.session_timeout, Duration::from_mins(1));
+    }
+
+    #[test]
+    fn consumer_config_heartbeat_builder() {
+        let cfg = ConsumerConfig::default().heartbeat_interval(Duration::from_secs(10));
+        assert_eq!(cfg.heartbeat_interval, Duration::from_secs(10));
+    }
+
+    #[test]
+    fn consumer_config_auto_commit_interval_builder() {
+        let cfg = ConsumerConfig::default().auto_commit_interval(Duration::from_secs(15));
+        assert_eq!(cfg.auto_commit_interval, Duration::from_secs(15));
+    }
+
+    #[test]
+    fn consumer_config_fetch_max_wait_builder() {
+        let cfg = ConsumerConfig::default().fetch_max_wait(Duration::from_secs(1));
+        assert_eq!(cfg.fetch_max_wait, Duration::from_secs(1));
+    }
+
+    #[test]
+    fn consumer_config_validate_zero_poll_records() {
+        let cfg = ConsumerConfig::default().max_poll_records(0);
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn consumer_config_validate_whitespace_group() {
+        let cfg = ConsumerConfig::new(vec!["kafka:9092".into()], "   ");
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn consumer_config_validate_ok() {
+        let cfg = ConsumerConfig::default();
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn topic_partition_offset_debug_clone_eq() {
+        let tpo = TopicPartitionOffset::new("events", 0, 100);
+        let dbg = format!("{tpo:?}");
+        assert!(dbg.contains("events"));
+        assert!(dbg.contains("100"));
+
+        let cloned = tpo.clone();
+        assert_eq!(tpo, cloned);
+    }
+
+    #[test]
+    fn topic_partition_offset_inequality() {
+        let a = TopicPartitionOffset::new("t1", 0, 0);
+        let b = TopicPartitionOffset::new("t2", 0, 0);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn consumer_record_debug_clone() {
+        let rec = ConsumerRecord {
+            topic: "test-topic".into(),
+            partition: 3,
+            offset: 42,
+            key: Some(b"key".to_vec()),
+            payload: b"value".to_vec(),
+            timestamp: Some(1000),
+            headers: vec![("h1".into(), b"v1".to_vec())],
+        };
+        let dbg = format!("{rec:?}");
+        assert!(dbg.contains("test-topic"));
+        assert!(dbg.contains("42"));
+
+        let cloned = rec;
+        assert_eq!(cloned.topic, "test-topic");
+        assert_eq!(cloned.partition, 3);
+        assert_eq!(cloned.key, Some(b"key".to_vec()));
+    }
+
+    #[test]
+    fn consumer_record_no_key_no_timestamp() {
+        let rec = ConsumerRecord {
+            topic: "t".into(),
+            partition: 0,
+            offset: 0,
+            key: None,
+            payload: vec![],
+            timestamp: None,
+            headers: vec![],
+        };
+        assert!(rec.key.is_none());
+        assert!(rec.timestamp.is_none());
+    }
+
+    #[test]
+    fn kafka_consumer_debug_config_accessor() {
+        let cfg = ConsumerConfig::default();
+        let consumer = KafkaConsumer::new(cfg).unwrap();
+        let dbg = format!("{consumer:?}");
+        assert!(dbg.contains("KafkaConsumer"));
+
+        assert_eq!(consumer.config().group_id, "asupersync-default");
+    }
+
+    #[test]
+    fn kafka_consumer_rejects_invalid_config() {
+        let cfg = ConsumerConfig {
+            bootstrap_servers: vec![],
+            ..Default::default()
+        };
+        assert!(KafkaConsumer::new(cfg).is_err());
+    }
+
+    #[test]
+    fn auto_offset_reset_debug_clone_copy_eq_default() {
+        let a = AutoOffsetReset::default();
+        assert_eq!(a, AutoOffsetReset::Latest);
+        let b = a; // Copy
+        let c = a;
+        assert_eq!(a, b);
+        assert_eq!(a, c);
+        assert_ne!(a, AutoOffsetReset::Earliest);
+        assert_ne!(a, AutoOffsetReset::None);
+        let dbg = format!("{a:?}");
+        assert!(dbg.contains("Latest"));
+    }
+
+    #[test]
+    fn isolation_level_debug_clone_copy_eq_default() {
+        let a = IsolationLevel::default();
+        assert_eq!(a, IsolationLevel::ReadUncommitted);
+        let b = a; // Copy
+        let c = a;
+        assert_eq!(a, b);
+        assert_eq!(a, c);
+        assert_ne!(a, IsolationLevel::ReadCommitted);
+        let dbg = format!("{a:?}");
+        assert!(dbg.contains("ReadUncommitted"));
+    }
+
+    #[test]
+    fn consumer_config_debug_clone_default() {
+        let cfg = ConsumerConfig::default();
+        let cloned = cfg.clone();
+        assert_eq!(cloned.group_id, "asupersync-default");
+        assert_eq!(cloned.auto_offset_reset, AutoOffsetReset::Latest);
+        assert_eq!(cloned.isolation_level, IsolationLevel::ReadUncommitted);
+        let dbg = format!("{cfg:?}");
+        assert!(dbg.contains("ConsumerConfig"));
+    }
+
+    #[test]
+    fn consumer_subscribe_tracks_assignments() {
+        run_test_with_cx(|cx| async move {
+            let consumer = KafkaConsumer::new(ConsumerConfig::default()).unwrap();
+            consumer
+                .subscribe(&cx, &["orders", "orders", "payments"])
+                .await
+                .unwrap();
+
+            assert_eq!(
+                consumer.subscriptions(),
+                vec!["orders".to_string(), "payments".to_string()]
+            );
+            assert_eq!(
+                consumer.assigned_partitions(),
+                vec![("orders".to_string(), 0), ("payments".to_string(), 0)]
+            );
+            assert!(
+                consumer
+                    .poll(&cx, Duration::from_millis(1))
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        });
+    }
+
+    #[test]
+    fn consumer_commit_and_seek_track_offsets() {
+        run_test_with_cx(|cx| async move {
+            let consumer = KafkaConsumer::new(ConsumerConfig::default()).unwrap();
+            consumer.subscribe(&cx, &["orders"]).await.unwrap();
+
+            consumer
+                .commit_offsets(&cx, &[TopicPartitionOffset::new("orders", 0, 7)])
+                .await
+                .unwrap();
+            assert_eq!(consumer.committed_offset("orders", 0), Some(7));
+
+            consumer
+                .seek(&cx, &TopicPartitionOffset::new("orders", 0, 42))
+                .await
+                .unwrap();
+            assert_eq!(consumer.position("orders", 0), Some(42));
+
+            let missing = consumer
+                .commit_offsets(&cx, &[TopicPartitionOffset::new("missing", 0, 1)])
+                .await
+                .unwrap_err();
+            assert!(matches!(missing, KafkaError::InvalidTopic(topic) if topic == "missing"));
+
+            let negative = consumer
+                .seek(&cx, &TopicPartitionOffset::new("orders", 0, -1))
+                .await
+                .unwrap_err();
+            assert!(matches!(negative, KafkaError::Config(msg) if msg.contains("non-negative")));
+        });
+    }
+
+    #[test]
+    fn consumer_close_is_idempotent_and_blocks_operations() {
+        run_test_with_cx(|cx| async move {
+            let consumer = KafkaConsumer::new(ConsumerConfig::default()).unwrap();
+            consumer.subscribe(&cx, &["orders"]).await.unwrap();
+            consumer.close(&cx).await.unwrap();
+            consumer.close(&cx).await.unwrap();
+            assert!(consumer.is_closed());
+
+            let err = consumer
+                .commit_offsets(&cx, &[TopicPartitionOffset::new("orders", 0, 1)])
+                .await
+                .unwrap_err();
+            assert!(matches!(err, KafkaError::Config(msg) if msg.contains("closed")));
+
+            let seek_err = consumer
+                .seek(&cx, &TopicPartitionOffset::new("orders", 0, 42))
+                .await
+                .unwrap_err();
+            assert!(matches!(seek_err, KafkaError::Config(msg) if msg.contains("closed")));
+        });
+    }
+
+    #[test]
+    fn consumer_rejects_empty_topic_entries() {
+        run_test_with_cx(|cx| async move {
+            let consumer = KafkaConsumer::new(ConsumerConfig::default()).unwrap();
+            let err = consumer.subscribe(&cx, &["orders", ""]).await.unwrap_err();
+            assert!(
+                matches!(err, KafkaError::Config(msg) if msg.contains("topic cannot be empty"))
+            );
+        });
+    }
+
+    #[test]
+    fn consumer_rebalance_tracks_assignment_and_revocation() {
+        run_test_with_cx(|cx| async move {
+            let consumer = KafkaConsumer::new(ConsumerConfig::default()).unwrap();
+            consumer
+                .subscribe(&cx, &["orders", "payments"])
+                .await
+                .unwrap();
+
+            let result = consumer
+                .rebalance(
+                    &cx,
+                    &[
+                        TopicPartitionOffset::new("orders", 1, 10),
+                        TopicPartitionOffset::new("orders", 2, 0),
+                    ],
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(result.generation, 1);
+            assert_eq!(
+                result.assigned,
+                vec![("orders".to_string(), 1), ("orders".to_string(), 2)]
+            );
+            assert_eq!(
+                result.revoked,
+                vec![("orders".to_string(), 0), ("payments".to_string(), 0)]
+            );
+            assert_eq!(consumer.position("orders", 1), Some(10));
+            assert_eq!(consumer.position("orders", 2), Some(0));
+            assert_eq!(consumer.rebalance_generation(), 1);
+            assert_eq!(
+                consumer.last_revoked_partitions(),
+                vec![("orders".to_string(), 0), ("payments".to_string(), 0)]
+            );
+        });
+    }
+
+    #[test]
+    fn consumer_rebalance_rejects_duplicate_partition_entries() {
+        run_test_with_cx(|cx| async move {
+            let consumer = KafkaConsumer::new(ConsumerConfig::default()).unwrap();
+            consumer
+                .subscribe(&cx, &["orders", "payments"])
+                .await
+                .unwrap();
+
+            let err = consumer
+                .rebalance(
+                    &cx,
+                    &[
+                        TopicPartitionOffset::new("orders", 1, 10),
+                        TopicPartitionOffset::new("orders", 1, 25),
+                    ],
+                )
+                .await
+                .unwrap_err();
+            assert!(matches!(err, KafkaError::Config(msg) if msg.contains("duplicate")));
+            assert_eq!(
+                consumer.assigned_partitions(),
+                vec![("orders".to_string(), 0), ("payments".to_string(), 0)]
+            );
+            assert_eq!(consumer.rebalance_generation(), 0);
+            assert!(consumer.last_revoked_partitions().is_empty());
+            assert_eq!(consumer.position("orders", 1), None);
+        });
+    }
+
+    #[test]
+    fn consumer_rebalance_rejects_close_race_after_open() {
+        run_test_with_cx(|cx| async move {
+            let consumer = Arc::new(KafkaConsumer::new(ConsumerConfig::default()).unwrap());
+            consumer.subscribe(&cx, &["orders"]).await.unwrap();
+
+            let hook = Arc::new(RebalanceAfterOpenHook::new());
+            consumer.install_rebalance_after_open_hook(Arc::clone(&hook));
+
+            let rebalance_consumer = Arc::clone(&consumer);
+            let rebalance_cx = cx.clone();
+            let handle = std::thread::spawn(move || {
+                futures_lite::future::block_on(
+                    rebalance_consumer
+                        .rebalance(&rebalance_cx, &[TopicPartitionOffset::new("orders", 1, 10)]),
+                )
+            });
+
+            hook.arrived.wait();
+            consumer.closed.store(true, Ordering::Release);
+            hook.release.wait();
+
+            let err = handle
+                .join()
+                .expect("rebalance thread panicked")
+                .unwrap_err();
+            assert!(matches!(err, KafkaError::Config(msg) if msg.contains("closed")));
+            assert_eq!(consumer.rebalance_generation(), 0);
+            assert_eq!(
+                consumer.assigned_partitions(),
+                vec![("orders".to_string(), 0)]
+            );
+            assert_eq!(consumer.position("orders", 1), None);
+        });
+    }
+
+    #[test]
+    fn consumer_rebalance_rejects_negative_partition_numbers() {
+        run_test_with_cx(|cx| async move {
+            let consumer = KafkaConsumer::new(ConsumerConfig::default()).unwrap();
+            consumer
+                .subscribe(&cx, &["orders", "payments"])
+                .await
+                .unwrap();
+
+            let err = consumer
+                .rebalance(&cx, &[TopicPartitionOffset::new("orders", -1, 10)])
+                .await
+                .unwrap_err();
+            assert!(matches!(err, KafkaError::Config(msg) if msg.contains("non-negative")));
+            assert_eq!(
+                consumer.assigned_partitions(),
+                vec![("orders".to_string(), 0), ("payments".to_string(), 0)]
+            );
+            assert_eq!(consumer.rebalance_generation(), 0);
+            assert!(consumer.last_revoked_partitions().is_empty());
+            assert_eq!(consumer.position("orders", -1), None);
+        });
+    }
+
+    #[test]
+    fn consumer_commit_rejects_unassigned_partitions_and_regression() {
+        run_test_with_cx(|cx| async move {
+            let consumer = KafkaConsumer::new(ConsumerConfig::default()).unwrap();
+            consumer.subscribe(&cx, &["orders"]).await.unwrap();
+
+            let unassigned = consumer
+                .commit_offsets(&cx, &[TopicPartitionOffset::new("orders", 1, 5)])
+                .await
+                .unwrap_err();
+            assert!(matches!(unassigned, KafkaError::Config(msg) if msg.contains("not assigned")));
+
+            consumer
+                .commit_offsets(&cx, &[TopicPartitionOffset::new("orders", 0, 8)])
+                .await
+                .unwrap();
+            let regression = consumer
+                .commit_offsets(&cx, &[TopicPartitionOffset::new("orders", 0, 7)])
+                .await
+                .unwrap_err();
+            assert!(matches!(regression, KafkaError::Config(msg) if msg.contains("regression")));
+        });
+    }
+
+    #[test]
+    fn consumer_commit_rejects_duplicate_partition_entries_in_single_batch() {
+        run_test_with_cx(|cx| async move {
+            let consumer = KafkaConsumer::new(ConsumerConfig::default()).unwrap();
+            consumer.subscribe(&cx, &["orders"]).await.unwrap();
+
+            let err = consumer
+                .commit_offsets(
+                    &cx,
+                    &[
+                        TopicPartitionOffset::new("orders", 0, 8),
+                        TopicPartitionOffset::new("orders", 0, 7),
+                    ],
+                )
+                .await
+                .unwrap_err();
+            assert!(matches!(err, KafkaError::Config(msg) if msg.contains("duplicate")));
+            assert_eq!(consumer.committed_offset("orders", 0), None);
+        });
+    }
+
+    #[test]
+    fn consumer_commit_and_seek_reject_negative_partition_numbers() {
+        run_test_with_cx(|cx| async move {
+            let consumer = KafkaConsumer::new(ConsumerConfig::default()).unwrap();
+            consumer.subscribe(&cx, &["orders"]).await.unwrap();
+
+            let commit_err = consumer
+                .commit_offsets(&cx, &[TopicPartitionOffset::new("orders", -1, 8)])
+                .await
+                .unwrap_err();
+            assert!(matches!(commit_err, KafkaError::Config(msg) if msg.contains("non-negative")));
+            assert_eq!(consumer.committed_offset("orders", -1), None);
+
+            let seek_err = consumer
+                .seek(&cx, &TopicPartitionOffset::new("orders", -1, 42))
+                .await
+                .unwrap_err();
+            assert!(matches!(seek_err, KafkaError::Config(msg) if msg.contains("non-negative")));
+            assert_eq!(consumer.position("orders", -1), None);
+        });
+    }
+
+    #[test]
+    fn consumer_seek_rejects_unassigned_partitions() {
+        run_test_with_cx(|cx| async move {
+            let consumer = KafkaConsumer::new(ConsumerConfig::default()).unwrap();
+            consumer.subscribe(&cx, &["orders"]).await.unwrap();
+
+            let err = consumer
+                .seek(&cx, &TopicPartitionOffset::new("orders", 1, 1))
+                .await
+                .unwrap_err();
+            assert!(matches!(err, KafkaError::Config(msg) if msg.contains("not assigned")));
+        });
+    }
+}

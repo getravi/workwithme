@@ -1,3 +1,8 @@
+//! Structured in-process logging with file persistence.
+//! Helper functions (`log`, `debug`, `info`, `warn`, `error`) are forward
+//! scaffolding — they will be called once tracing is wired up.
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs::OpenOptions;
@@ -184,5 +189,57 @@ mod tests {
         assert_eq!(LogLevel::from_str("DEBUG"), Some(LogLevel::Debug));
         assert_eq!(LogLevel::from_str("info"), Some(LogLevel::Info));
         assert_eq!(LogLevel::from_str("INVALID"), None);
+    }
+
+    #[test]
+    fn test_log_level_from_str_all_variants() {
+        assert_eq!(LogLevel::from_str("DEBUG"), Some(LogLevel::Debug));
+        assert_eq!(LogLevel::from_str("INFO"), Some(LogLevel::Info));
+        assert_eq!(LogLevel::from_str("WARN"), Some(LogLevel::Warn));
+        assert_eq!(LogLevel::from_str("ERROR"), Some(LogLevel::Error));
+        assert_eq!(LogLevel::from_str("debug"), Some(LogLevel::Debug));
+        assert_eq!(LogLevel::from_str("warn"), Some(LogLevel::Warn));
+        assert_eq!(LogLevel::from_str("error"), Some(LogLevel::Error));
+    }
+
+    #[test]
+    fn test_log_level_from_str_unknown_returns_none() {
+        assert!(LogLevel::from_str("TRACE").is_none());
+        assert!(LogLevel::from_str("VERBOSE").is_none());
+        assert!(LogLevel::from_str("").is_none());
+        assert!(LogLevel::from_str("123").is_none());
+    }
+
+    #[test]
+    fn test_log_level_warn_as_str() {
+        assert_eq!(LogLevel::Warn.as_str(), "WARN");
+    }
+
+    #[test]
+    fn test_log_level_equality() {
+        assert_eq!(LogLevel::Info, LogLevel::Info);
+        assert_ne!(LogLevel::Debug, LogLevel::Error);
+    }
+
+    #[test]
+    fn test_set_and_get_log_level() {
+        // Save original level to restore
+        let original = get_log_level();
+
+        set_log_level(LogLevel::Debug).unwrap();
+        assert_eq!(get_log_level(), LogLevel::Debug);
+
+        set_log_level(LogLevel::Error).unwrap();
+        assert_eq!(get_log_level(), LogLevel::Error);
+
+        // Restore original
+        set_log_level(original).unwrap();
+    }
+
+    #[test]
+    fn test_get_recent_logs_returns_ok_when_no_file() {
+        // If log file doesn't exist yet, should return empty vec not error
+        let result = get_recent_logs(10);
+        assert!(result.is_ok());
     }
 }

@@ -3,6 +3,14 @@ use serde::{Serialize, Deserialize};
 use std::fs;
 use std::path::PathBuf;
 
+/// Tool definition with JSON schema, used by MCP tool loading.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolDefinition {
+    pub name: String,
+    pub description: String,
+    pub input_schema: Value,
+}
+
 /// Get the MCP config file path (~/.pi/agent/mcp.json)
 fn mcp_config_path() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "~".to_string());
@@ -667,7 +675,8 @@ pub struct McpTool {
 use std::process::{Command, Stdio};
 use std::io::{BufRead, BufReader, Write};
 
-/// Spawn an MCP stdio server and query its tools
+/// Spawn an MCP stdio server and query its tools — used by `load_agent_mcp_tools`
+#[allow(dead_code)]
 async fn query_mcp_server_tools(server_config: &Value) -> Result<Vec<McpTool>, String> {
     // Get the command to run - could be a direct binary or a node/python script
     let command_str = server_config
@@ -713,7 +722,7 @@ async fn query_mcp_server_tools(server_config: &Value) -> Result<Vec<McpTool>, S
             },
             "clientInfo": {
                 "name": "workwithme",
-                "version": "0.1.6"
+                "version": env!("CARGO_PKG_VERSION")
             }
         }
     });
@@ -769,8 +778,9 @@ async fn query_mcp_server_tools(server_config: &Value) -> Result<Vec<McpTool>, S
     Ok(mcp_tools)
 }
 
-/// Load all enabled MCP tools from configuration
-pub async fn load_agent_mcp_tools() -> Vec<crate::server::tools::ToolDefinition> {
+/// Load all enabled MCP tools from configuration — forward scaffolding for MCP → pi bridge
+#[allow(dead_code)]
+pub async fn load_agent_mcp_tools() -> Vec<ToolDefinition> {
     let config = match load_mcp_config() {
         Ok(cfg) => cfg,
         Err(_) => return Vec::new(),
@@ -788,7 +798,7 @@ pub async fn load_agent_mcp_tools() -> Vec<crate::server::tools::ToolDefinition>
             match query_mcp_server_tools(server_config).await {
                 Ok(mcp_tools) => {
                     for mcp_tool in mcp_tools {
-                        tools.push(crate::server::tools::ToolDefinition {
+                        tools.push(ToolDefinition {
                             name: mcp_tool.name,
                             description: mcp_tool.description,
                             input_schema: mcp_tool.input_schema,
@@ -1135,7 +1145,7 @@ mod tests {
         };
 
         // Convert to ToolDefinition
-        let tool_def = crate::server::tools::ToolDefinition {
+        let tool_def = ToolDefinition {
             name: mcp_tool.name.clone(),
             description: mcp_tool.description.clone(),
             input_schema: mcp_tool.input_schema.clone(),
@@ -1171,6 +1181,21 @@ mod tests {
 
         assert!(default_config["mcpServers"].is_object());
         assert_eq!(default_config["mcpServers"].as_object().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_tool_definition_serialization() {
+        // ToolDefinition moved from tools.rs into mcp.rs — verify it round-trips correctly
+        let td = ToolDefinition {
+            name: "my_tool".to_string(),
+            description: "does something".to_string(),
+            input_schema: json!({"type": "object", "properties": {"x": {"type": "string"}}}),
+        };
+        let serialized = serde_json::to_string(&td).unwrap();
+        let back: ToolDefinition = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(back.name, "my_tool");
+        assert_eq!(back.description, "does something");
+        assert!(back.input_schema["properties"]["x"].is_object());
     }
 
     #[test]

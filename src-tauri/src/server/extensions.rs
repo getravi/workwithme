@@ -10,7 +10,7 @@ use serde_json::json;
 
 /// Generate a short, descriptive name for a session using Claude Haiku
 /// Phase 3 Enhancement: Automatically names sessions for better UX
-pub async fn generate_session_label(api_key: &str) -> Result<String, String> {
+pub async fn generate_session_label(api_key: &str, first_message: &str) -> Result<String, String> {
     // Call Claude Haiku to generate a session label
     // This is a lightweight operation for naming sessions
 
@@ -18,11 +18,11 @@ pub async fn generate_session_label(api_key: &str) -> Result<String, String> {
     let body = json!({
         "model": "claude-3-5-haiku-20241022",
         "max_tokens": 50,
-        "system": "You are a session naming assistant. Generate a short (2-4 words), creative, lowercase name for an AI coding session. Examples: 'bug-hunting', 'feature-brainstorm', 'refactor-sprint'. Return ONLY the name, no explanation.",
+        "system": "Generate a short (2-4 words), lowercase, hyphenated label for a coding session based on the user's first message. Examples: 'fix-login-bug', 'add-dark-mode', 'refactor-auth'. Return ONLY the label, no explanation.",
         "messages": [
             {
                 "role": "user",
-                "content": "Generate a name for this new coding session."
+                "content": first_message
             }
         ]
     });
@@ -69,8 +69,8 @@ pub async fn generate_session_label(api_key: &str) -> Result<String, String> {
 
 /// Try to generate a session label, fallback to default if it fails
 /// Phase 3: Used during session creation to immediately provide a label
-pub async fn generate_session_label_with_fallback(api_key: &str) -> String {
-    match generate_session_label(api_key).await {
+pub async fn generate_session_label_with_fallback(api_key: &str, first_message: &str) -> String {
+    match generate_session_label(api_key, first_message).await {
         Ok(label) => label,
         Err(e) => {
             println!("[extensions] failed to generate session label: {}", e);
@@ -81,31 +81,10 @@ pub async fn generate_session_label_with_fallback(api_key: &str) -> String {
     }
 }
 
-/// Generate session label asynchronously (spawn and forget)
-/// Phase 3: For background label generation after first message
-/// Returns the label via optional callback (for WS broadcasts)
-pub fn spawn_label_generation_async(api_key: String, session_id: String) {
-    // Spawn async task to generate label without blocking
-    tokio::spawn(async move {
-        match generate_session_label(&api_key).await {
-            Ok(label) => {
-                // TODO: Broadcast session_label_updated WS event
-                // event: {
-                //   "type": "session_label_updated",
-                //   "session_id": session_id,
-                //   "label": label
-                // }
-                println!("[extensions] generated label '{}' for session {}", label, session_id);
-            }
-            Err(e) => {
-                println!("[extensions] async label generation failed for {}: {}", session_id, e);
-            }
-        }
-    });
-}
 
 #[cfg(test)]
 mod tests {
+    use super::*;
 
     #[test]
     fn test_label_cleanup() {
@@ -144,4 +123,13 @@ mod tests {
         let cleaned = raw.trim().trim_matches('"').to_lowercase();
         assert_eq!(cleaned, "bug-hunting");
     }
+
+    #[test]
+    fn test_label_with_hyphens() {
+        // Multi-word labels with hyphens should pass through unchanged
+        let raw = "refactor-sprint";
+        let cleaned = raw.trim().trim_matches('"').to_lowercase();
+        assert_eq!(cleaned, "refactor-sprint");
+    }
+
 }

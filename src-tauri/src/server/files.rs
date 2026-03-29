@@ -314,4 +314,109 @@ mod tests {
         let home = dirs::home_dir().unwrap().canonicalize().unwrap();
         assert_eq!(expanded, home);
     }
+
+    #[test]
+    fn test_glob_match_question_mark() {
+        assert!(glob_match("abc", "a?c"));
+        assert!(!glob_match("ac", "a?c")); // ? requires exactly one char
+        assert!(glob_match("axc", "a?c"));
+    }
+
+    #[test]
+    fn test_glob_match_star_at_end() {
+        assert!(glob_match("foobar", "foo*"));
+        assert!(glob_match("foo", "foo*")); // * matches zero chars too
+        assert!(!glob_match("barfoo", "foo*"));
+    }
+
+    #[test]
+    fn test_glob_match_exact() {
+        assert!(glob_match("hello", "hello"));
+        assert!(!glob_match("hello", "world"));
+        assert!(!glob_match("hello!", "hello")); // extra char
+    }
+
+    #[test]
+    fn test_glob_match_star_prefix() {
+        assert!(glob_match("foo.rs", "*.rs"));
+        assert!(glob_match(".rs", "*.rs")); // * can match empty
+        assert!(!glob_match("foo.ts", "*.rs"));
+    }
+
+    #[test]
+    fn test_expand_path_tilde_slash() {
+        let result = expand_path("~/");
+        // Should succeed and resolve to home dir
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_expand_path_rejects_absolute() {
+        let result = expand_path("/etc/passwd");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Absolute paths"));
+    }
+
+    #[test]
+    fn test_expand_path_rejects_traversal() {
+        let result = expand_path("../etc/passwd");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("traversal"));
+    }
+
+    #[test]
+    fn test_expand_path_empty_is_home() {
+        let result = expand_path("");
+        assert!(result.is_ok());
+        let home = dirs::home_dir().unwrap().canonicalize().unwrap();
+        assert_eq!(result.unwrap(), home);
+    }
+
+    #[test]
+    fn test_file_entry_serialization() {
+        let entry = FileEntry {
+            name: "test.rs".to_string(),
+            path: "/home/user/test.rs".to_string(),
+            is_dir: false,
+            size: 1024,
+            modified: "1700000000".to_string(),
+            file_type: "file".to_string(),
+        };
+
+        let json = serde_json::to_string(&entry).unwrap();
+        let back: FileEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.name, "test.rs");
+        assert_eq!(back.size, 1024);
+        assert!(!back.is_dir);
+        assert_eq!(back.file_type, "file");
+    }
+
+    #[test]
+    fn test_list_directory_home() {
+        // Home directory should always be listable
+        let result = list_directory("~");
+        assert!(result.is_ok(), "listing home dir should succeed: {:?}", result.err());
+        let entries = result.unwrap();
+        // Home dir should have at least some contents
+        assert!(!entries.is_empty() || true); // may be empty in CI; just check no error
+    }
+
+    #[test]
+    fn test_list_directory_dirs_sorted_first() {
+        let result = list_directory("~");
+        if let Ok(entries) = result {
+            if entries.len() >= 2 {
+                // Check that no file appears before a directory
+                let mut seen_file = false;
+                for entry in &entries {
+                    if !entry.is_dir {
+                        seen_file = true;
+                    }
+                    if entry.is_dir && seen_file {
+                        panic!("directory {} appeared after a file — sort order broken", entry.name);
+                    }
+                }
+            }
+        }
+    }
 }

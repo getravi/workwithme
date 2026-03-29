@@ -1,3 +1,6 @@
+//! Sandbox execution profiles — forward scaffolding for pi tool approval integration.
+#![allow(dead_code)]
+
 use std::process::Command;
 
 /// Sandbox profile for restricting tool execution
@@ -188,7 +191,8 @@ impl Sandbox {
     }
 }
 
-/// Apply sandbox to command execution
+/// Apply sandbox to command execution — forward scaffolding for pi approval integration
+#[allow(dead_code)]
 pub fn apply_sandbox(
     profile: SandboxProfile,
     command: &str,

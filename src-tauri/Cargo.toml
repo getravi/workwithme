@@ -1,6 +1,6 @@
 [package]
 name = "workwithme"
-version = "0.1.6"
+version = "0.1.7"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -31,6 +31,7 @@ tokio = { version = "1", features = ["full"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace", "fs"] }
 futures = "0.3"
+async-stream = "0.3"
 
 # HTTP client
 reqwest = { version = "0.12", features = ["json", "stream"] }
@@ -61,18 +62,14 @@ dirs = "5"
 # Phase 7 dependencies
 lazy_static = "1.4"
 
-# Phase 8 dependencies
-sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite"] }
-
 # Phase 9 dependencies
 oauth2 = "4"
 urlencoding = "2"
 base64 = "0.21"
 rand = "0.8"
 
-# Phase 10 dependencies
-wasmtime = "17"
-wasmtime-wasi = "17"
+# Core agent runtime
+pi_agent_rust = "0.1"
 anyhow = "1"
 toml = "0.8"
 
@@ -81,6 +78,10 @@ governor = "0.6"
 
 # Phase 3 dependencies
 async-trait = "0.1"
+
+[patch.crates-io]
+asupersync = { path = "../patches/asupersync" }
+pi_agent_rust = { path = "../patches/pi_agent_rust" }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

@@ -68,3 +68,6 @@ src/plans/
 # Reference repos — not part of this project
 pi-mono-ref/
 workwithme/
+
+# Legacy vendored runtime dumps — current patches live under patches/
+vendor/

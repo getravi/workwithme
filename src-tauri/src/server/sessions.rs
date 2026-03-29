@@ -10,8 +10,10 @@ pub fn sessions_dir() -> PathBuf {
     PathBuf::from(home).join(".pi/sessions")
 }
 
-/// Session metadata constants
+/// Session metadata constants — used by cleanup_expired_sessions (scheduled maintenance task)
+#[allow(dead_code)]
 const SESSION_EXPIRY_DAYS: i64 = 30;
+#[allow(dead_code)]
 const STALE_SESSION_CLEANUP_INTERVAL_DAYS: i64 = 7;
 
 /// Get the archive directory path (~/.pi/sessions/archive)
@@ -26,6 +28,7 @@ fn ensure_sessions_dir() -> Result<(), String> {
 }
 
 /// List all sessions
+#[allow(dead_code)]
 pub fn list_sessions() -> Result<Vec<Value>, String> {
     ensure_sessions_dir()?;
 
@@ -104,6 +107,7 @@ pub fn update_session(id: &str, mut data: Value) -> Result<(), String> {
 }
 
 /// Check if a session is expired based on creation date
+#[allow(dead_code)]
 fn is_session_expired(session: &Value) -> bool {
     if let Some(created_at_str) = session.get("created_at").and_then(|v| v.as_str()) {
         if let Ok(created_at) = DateTime::parse_from_rfc3339(created_at_str) {
@@ -115,7 +119,8 @@ fn is_session_expired(session: &Value) -> bool {
     false
 }
 
-/// Clean up expired sessions
+/// Clean up expired sessions — forward scaffolding for scheduled maintenance
+#[allow(dead_code)]
 pub fn cleanup_expired_sessions() -> Result<usize, String> {
     let dir = sessions_dir();
     if !dir.exists() {
@@ -167,6 +172,132 @@ pub fn archive_session(id: &str) -> Result<bool, String> {
     fs::rename(&source, &dest).map_err(|e| format!("Failed to archive session: {}", e))?;
 
     Ok(true)
+}
+
+/// Unarchive a session (move from archive back to active)
+pub fn unarchive_session(id: &str) -> Result<bool, String> {
+    let source = archive_dir().join(format!("{}.json", id));
+    if !source.exists() {
+        return Ok(false);
+    }
+
+    ensure_sessions_dir()?;
+
+    let dest = sessions_dir().join(format!("{}.json", id));
+    fs::rename(&source, &dest).map_err(|e| format!("Failed to unarchive session: {}", e))?;
+
+    Ok(true)
+}
+
+/// List all sessions including optionally archived ones.
+/// Each session entry is enriched with `path` (absolute file path) and `archived` fields.
+pub fn list_sessions_all(include_archived: bool) -> Result<Vec<Value>, String> {
+    ensure_sessions_dir()?;
+
+    let mut sessions = Vec::new();
+
+    // Active sessions
+    if let Ok(entries) = fs::read_dir(sessions_dir()) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().map_or(false, |ext| ext == "json") {
+                if let Ok(content) = fs::read_to_string(&path) {
+                    if let Ok(mut session) = serde_json::from_str::<Value>(&content) {
+                        if let Some(obj) = session.as_object_mut() {
+                            obj.insert("path".to_string(), json!(path.to_string_lossy().to_string()));
+                            obj.entry("archived".to_string()).or_insert(json!(false));
+                        }
+                        sessions.push(session);
+                    }
+                }
+            }
+        }
+    }
+
+    // Archived sessions
+    if include_archived {
+        let _ = fs::create_dir_all(archive_dir());
+        if let Ok(entries) = fs::read_dir(archive_dir()) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().map_or(false, |ext| ext == "json") {
+                    if let Ok(content) = fs::read_to_string(&path) {
+                        if let Ok(mut session) = serde_json::from_str::<Value>(&content) {
+                            if let Some(obj) = session.as_object_mut() {
+                                obj.insert("path".to_string(), json!(path.to_string_lossy().to_string()));
+                                obj.insert("archived".to_string(), json!(true));
+                            }
+                            sessions.push(session);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Sort by most recently modified (updated_at or created_at)
+    sessions.sort_by(|a, b| {
+        let time_a = a.get("updated_at").or_else(|| a.get("created_at"))
+            .and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let time_b = b.get("updated_at").or_else(|| b.get("created_at"))
+            .and_then(|v| v.as_str()).unwrap_or("").to_string();
+        time_b.cmp(&time_a)
+    });
+
+    Ok(sessions)
+}
+
+/// Load a session by its absolute file path.
+/// The path must be within ~/.pi/sessions/ or its archive subdirectory.
+pub fn load_session_by_path(path: &str) -> Result<Option<Value>, String> {
+    let canonical_sessions = sessions_dir().canonicalize()
+        .unwrap_or_else(|_| sessions_dir());
+
+    let file_path = std::path::PathBuf::from(path);
+    let canonical_file = file_path.canonicalize()
+        .map_err(|_| format!("Session file not found: {}", path))?;
+
+    // Security: path must be inside the sessions directory
+    if !canonical_file.starts_with(&canonical_sessions) {
+        return Err("Access denied: path is outside sessions directory".to_string());
+    }
+
+    if !canonical_file.exists() {
+        return Ok(None);
+    }
+
+    let content = fs::read_to_string(&canonical_file)
+        .map_err(|e| format!("Failed to read session: {}", e))?;
+    let mut session = serde_json::from_str::<Value>(&content)
+        .map_err(|e| format!("Invalid session JSON: {}", e))?;
+
+    // Ensure path and archived fields are present
+    if let Some(obj) = session.as_object_mut() {
+        obj.insert("path".to_string(), json!(canonical_file.to_string_lossy().to_string()));
+        let is_in_archive = canonical_file.starts_with(archive_dir());
+        obj.entry("archived".to_string()).or_insert(json!(is_in_archive));
+    }
+
+    Ok(Some(session))
+}
+
+/// Archive or unarchive a session by its absolute file path.
+pub fn set_archived_by_path(path: &str, archived: bool) -> Result<bool, String> {
+    let file_path = std::path::PathBuf::from(path);
+
+    // Extract the filename (session id + .json)
+    let filename = file_path.file_name()
+        .ok_or("Invalid path: no filename")?
+        .to_string_lossy()
+        .to_string();
+
+    let id = filename.strip_suffix(".json").unwrap_or(&filename);
+
+    if archived {
+        archive_session(id)
+    } else {
+        unarchive_session(id)
+    }
 }
 
 #[cfg(test)]

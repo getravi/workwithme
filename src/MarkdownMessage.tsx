@@ -1,3 +1,4 @@
+import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import SyntaxHighlighter from "react-syntax-highlighter/dist/esm/prism-light";
@@ -12,7 +13,7 @@ import rust from "react-syntax-highlighter/dist/esm/languages/prism/rust";
 import markdown from "react-syntax-highlighter/dist/esm/languages/prism/markdown";
 import yaml from "react-syntax-highlighter/dist/esm/languages/prism/yaml";
 import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, Copy, Check } from "lucide-react";
 
 SyntaxHighlighter.registerLanguage("tsx", tsx);
 SyntaxHighlighter.registerLanguage("typescript", typescript);
@@ -34,6 +35,32 @@ interface MarkdownMessageProps {
   isStreaming?: boolean;
 }
 
+/** Copy button shown on code block hover */
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Clipboard may be unavailable (e.g. non-https in some browsers)
+    }
+  };
+
+  return (
+    <button
+      onClick={handleCopy}
+      title={copied ? "Copied!" : "Copy code"}
+      className="absolute top-2 right-2 p-1 rounded bg-[#1f2937] text-gray-400 hover:text-white hover:bg-[#374151] transition-all opacity-0 group-hover:opacity-100"
+    >
+      {copied ? <Check className="w-3.5 h-3.5 text-[#c5f016]" /> : <Copy className="w-3.5 h-3.5" />}
+    </button>
+  );
+}
+
 export function MarkdownMessage({ content, isStreaming }: MarkdownMessageProps) {
   return (
     <div className="text-[13px] leading-6 text-[#e5e7eb]">
@@ -46,7 +73,7 @@ export function MarkdownMessage({ content, isStreaming }: MarkdownMessageProps) 
               const lines = String(children).trim().split('\n');
               const firstLine = lines[0] || "Thinking";
               const rest = lines.slice(1).join('\n').trim();
-              
+
               return (
                 <details className="my-2 border border-[#c5f016]/20 rounded-lg bg-[#182234] overflow-hidden group">
                   <summary className="px-3 py-2 cursor-pointer list-none flex items-center gap-2 hover:bg-[#c5f016]/5 transition-colors">
@@ -63,19 +90,23 @@ export function MarkdownMessage({ content, isStreaming }: MarkdownMessageProps) 
             }
 
             if (isBlock) {
+              const codeText = String(children).replace(/\n$/, "");
               return (
-                <SyntaxHighlighter
-                  style={vscDarkPlus}
-                  language={match ? match[1] : "text"}
-                  PreTag="div"
-                  customStyle={{
-                    margin: "0.5rem 0",
-                    borderRadius: "0.5rem",
-                    fontSize: "12px",
-                  }}
-                >
-                  {String(children).replace(/\n$/, "")}
-                </SyntaxHighlighter>
+                <div className="relative group my-2">
+                  <CopyButton text={codeText} />
+                  <SyntaxHighlighter
+                    style={vscDarkPlus}
+                    language={match ? match[1] : "text"}
+                    PreTag="div"
+                    customStyle={{
+                      margin: 0,
+                      borderRadius: "0.5rem",
+                      fontSize: "12px",
+                    }}
+                  >
+                    {codeText}
+                  </SyntaxHighlighter>
+                </div>
               );
             }
             return (

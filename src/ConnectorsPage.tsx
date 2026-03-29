@@ -7,7 +7,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 /**
  * Open a URL only if it is a safe https:// or http:// link.
  * Plain http:// is intentionally allowed for connector docs links: the catalog
- * originates from our own sidecar API (localhost), not untrusted external input,
+ * originates from our own backend API (localhost), not untrusted external input,
  * and opening a docs page in the system browser over http is not a meaningful
  * attack vector for a local desktop app. If the catalog source ever changes to
  * an untrusted third party, restrict this to ^https:\/\/ only.
@@ -99,7 +99,7 @@ function StatusDot({ status }: { status: "connected" | "available" }) {
 type FilterTab = "all" | "connected" | "available";
 
 interface ConnectorsPageProps {
-  onOpenSettings: () => void;
+  onOpenSettings?: () => void;
   refreshKey?: number;
 }
 
@@ -118,7 +118,7 @@ function generateSlug(name: string, existingIds: Set<string>): string {
   return "";
 }
 
-export function ConnectorsPage({ onOpenSettings, refreshKey = 0 }: ConnectorsPageProps) {
+export function ConnectorsPage({ onOpenSettings = () => {}, refreshKey = 0 }: ConnectorsPageProps) {
   const [connectors, setConnectors] = useState<ConnectorEntry[]>([]);
   const [warning, setWarning] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);

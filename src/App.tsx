@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import { Send, Terminal, Loader2, Bot, Sidebar as SidebarIcon, Plus, MessageSquare, PanelRightOpen, Paperclip, ChevronDown, FolderOpen, PanelRightClose, Settings, Maximize2, Minimize2, X, CircleStop, Zap, Archive, ArchiveRestore, Network } from "lucide-react";
-import { SettingsModal } from "./SettingsModal";
+import { Send, Terminal, Loader2, Bot, Sidebar as SidebarIcon, Plus, MessageSquare, PanelRightOpen, Paperclip, ChevronDown, FolderOpen, PanelRightClose, Settings, Maximize2, Minimize2, X, CircleStop, Zap, Archive, ArchiveRestore, Bell, Mic, MicOff, ClipboardPaste } from "lucide-react";
 import { MarkdownMessage } from "./MarkdownMessage";
 import { API_BASE } from "./config";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";
 import { Message, Model, Session, ToolExecution, AttachedFile, PromptPayload, WS_EVENTS } from "./types";
+import { InboxPage } from "./InboxPage";
+import { SettingsTabBar, SettingsContent, SettingsTab } from "./SettingsPage";
 import { SkillsPage } from "./SkillsPage";
 import { ConnectorsPage } from "./ConnectorsPage";
 
@@ -76,15 +77,16 @@ function App() {
   const sidebarDragRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [isPreviewMaximized, setIsPreviewMaximized] = useState(false);
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [selectedModel, setSelectedModel] = useState<Model | null>(null);
   const [availableModels, setAvailableModels] = useState<Model[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [projectDir, setProjectDir] = useState<string | null>(null);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [showArchived, setShowArchived] = useState(false);
-  const [activeView, setActiveView] = useState<'chat' | 'skills' | 'connectors'>('chat');
-  const [connectorsRefreshKey, setConnectorsRefreshKey] = useState(0);
+  const [activeView, setActiveView] = useState<'chat' | 'inbox' | 'settings'>('chat');
+  const [connectorsRefreshKey] = useState(0);
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("connections");
+  const [inboxCount, setInboxCount] = useState(0);
 
   const activeSessions = useMemo(() => sessions.filter((session) => !session.archived), [sessions]);
   const archivedSessions = useMemo(() => sessions.filter((session) => session.archived), [sessions]);
@@ -102,6 +104,8 @@ function App() {
   const reconnectTimeoutRef = useRef<number | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const reconnectAttemptsRef = useRef(0);
+  const [isRecording, setIsRecording] = useState(false);
+  const recognitionRef = useRef<any | null>(null);
 
   const handleSidebarResizeStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -135,6 +139,17 @@ function App() {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messageCount]);
 
+  const fetchInboxCount = useCallback(async () => {
+    try {
+      const resp = await fetch(`${API_BASE}/api/notifications`);
+      if (!resp.ok) return;
+      const data = await resp.json();
+      setInboxCount((data.notifications ?? []).length);
+    } catch {
+      // non-critical
+    }
+  }, []);
+
   const fetchSessions = useCallback(async () => {
     try {
       const resp = await fetchWithTimeout(`${API_BASE}/api/sessions?includeArchived=true`);
@@ -152,7 +167,7 @@ function App() {
       url.searchParams.append("sessionId", currentSessionId);
       const resp = await fetchWithTimeout(url.toString());
       const data = await resp.json();
-      setProjectDir(data.cwd);
+      if (data.cwd) setProjectDir(data.cwd);
     } catch (err) {
       console.error("Failed to fetch project", err);
     }
@@ -175,10 +190,10 @@ function App() {
     }
   }, [currentSessionId]);
 
-  // Combined fetch for convenience — runs all three in parallel
+  // Combined fetch for convenience — runs all in parallel
   const refreshAll = useCallback(async () => {
-    await Promise.all([fetchSessions(), fetchProject(), fetchModels()]);
-  }, [fetchSessions, fetchProject, fetchModels]);
+    await Promise.all([fetchSessions(), fetchProject(), fetchModels(), fetchInboxCount()]);
+  }, [fetchSessions, fetchProject, fetchModels, fetchInboxCount]);
 
   useEffect(() => {
     // Connect to backend websocket
@@ -199,6 +214,8 @@ function App() {
           .then(r => r.json())
           .then((status: SandboxStatus) => setSandboxStatus(status))
           .catch(() => {}); // non-critical
+        // Auto-create a session so currentSessionId is set before the first prompt
+        ws.send(JSON.stringify({ type: "new_chat", cwd: null }));
       };
 
       ws.onmessage = (event) => {
@@ -316,6 +333,9 @@ function App() {
           else if (data.type === WS_EVENTS.PROMPT_COMPLETE) {
              setIsProcessing(false);
           }
+          else if (data.type === "session_label_updated") {
+             fetchSessions();
+          }
           else if (data.type === WS_EVENTS.ERROR) {
              setError(data.message);
              setIsProcessing(false);
@@ -345,7 +365,7 @@ function App() {
         reconnectAttemptsRef.current += 1;
         if (attempt >= 5) {
           setError(
-            "Unable to reach the sidecar after several attempts. " +
+            "Unable to reach the backend server after several attempts. " +
             "Port 4242 may be in use by another application. " +
             "Try quitting and restarting WorkWithMe."
           );
@@ -375,7 +395,7 @@ function App() {
       if (currentSessionId) {
         fetchProject();
         fetchModels();
-        // Inform sidecar about active session to receive relevant events
+        // Inform backend about active session to receive relevant events
         wsSend({ type: WS_EVENTS.JOIN, sessionId: currentSessionId });
       }
     }
@@ -500,6 +520,92 @@ function App() {
       setError("Connection lost — please retry.");
       setMessages(prev => prev.filter(m => m.id !== newId));
     }
+  };
+
+  const handleVoiceInput = () => {
+    const SpeechRecognition =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setError("Voice input is not supported in this browser.");
+      return;
+    }
+
+    if (isRecording && recognitionRef.current) {
+      recognitionRef.current.stop();
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.lang = "en-US";
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+    recognitionRef.current = recognition;
+
+    recognition.onstart = () => setIsRecording(true);
+    recognition.onend = () => {
+      setIsRecording(false);
+      recognitionRef.current = null;
+    };
+    recognition.onerror = () => {
+      setIsRecording(false);
+      recognitionRef.current = null;
+    };
+    recognition.onresult = (event: any) => {
+      const transcript = event.results[0][0].transcript;
+      setInput(prev => (prev ? prev + " " + transcript : transcript));
+    };
+
+    recognition.start();
+  };
+
+  const handlePasteFromClipboard = async () => {
+    try {
+      const items = await navigator.clipboard.read();
+      for (const item of items) {
+        const imageType = item.types.find(t => t.startsWith("image/"));
+        if (imageType) {
+          const blob = await item.getType(imageType);
+          const ext = imageType.split("/")[1] ?? "png";
+          const name = `clipboard.${ext}`;
+          const data = new Uint8Array(await blob.arrayBuffer());
+          setAttachments(prev => [...prev, { name, path: "", data }]);
+          return;
+        }
+        if (item.types.includes("text/plain")) {
+          const blob = await item.getType("text/plain");
+          const text = await blob.text();
+          if (text.trim()) {
+            setInput(prev => (prev ? prev + "\n" + text : text));
+            return;
+          }
+        }
+      }
+    } catch {
+      try {
+        const text = await navigator.clipboard.readText();
+        if (text.trim()) setInput(prev => (prev ? prev + "\n" + text : text));
+      } catch {
+        setError("Clipboard access denied. Allow clipboard permissions and try again.");
+      }
+    }
+  };
+
+  const handleTextareaPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const item of Array.from(items)) {
+      if (item.type.startsWith("image/")) {
+        e.preventDefault();
+        const file = item.getAsFile();
+        if (!file) return;
+        file.arrayBuffer().then(buf => {
+          const data = new Uint8Array(buf);
+          setAttachments(prev => [...prev, { name: file.name || "pasted-image.png", path: "", data }]);
+        });
+        return;
+      }
+    }
+    // plain text paste — let textarea handle it natively
   };
 
   const handleNewChat = () => {
@@ -639,12 +745,12 @@ function App() {
           const data = await resp.json();
           if (data.success) {
              setProjectDir(selected);
-             setCurrentSessionId(data.sessionId);
              setMessages([]);
              setToolExecutions([]);
-             fetchSessions(); // Refresh list to see the newly created session
-             
-             wsSend({ type: WS_EVENTS.JOIN, sessionId: data.sessionId });
+             fetchSessions();
+             // Create a fresh pi session scoped to the selected folder.
+             // new_chat response will set currentSessionId via CHAT_CLEARED handler.
+             wsSend({ type: WS_EVENTS.NEW_CHAT, cwd: selected });
           }
        }
     } catch (err) {
@@ -704,20 +810,25 @@ function App() {
         {/* Nav items — icon+label when expanded, icon-only when collapsed */}
         <div className={`flex flex-col ${isLeftSidebarOpen ? 'px-2.5 gap-0.5 pb-1' : 'items-center gap-1 px-1 pb-1'}`}>
           {([
-            { view: 'chat' as const, Icon: MessageSquare, label: 'Chat' },
-            { view: 'skills' as const, Icon: Zap, label: 'Skills' },
-            { view: 'connectors' as const, Icon: Network, label: 'Connectors' },
-          ]).map(({ view, Icon, label }) => (
+            { view: 'inbox' as const, Icon: Bell, label: 'Inbox', badge: inboxCount },
+          ]).map(({ view, Icon, label, badge }) => (
             <button
               key={view}
-              onClick={() => setActiveView(view)}
+              onClick={() => { setActiveView(view); if (view === 'inbox') setInboxCount(0); }}
               title={label}
-              className={`rounded-lg transition-colors ${isLeftSidebarOpen
+              className={`relative rounded-lg transition-colors ${isLeftSidebarOpen
                 ? `w-full flex items-center gap-2 px-2.5 py-1.5 text-[13px] font-medium ${activeView === view ? 'bg-[#1f2937] text-[#c5f016]' : 'text-gray-400 hover:bg-[#1f2937] hover:text-gray-200'}`
                 : `p-2 ${activeView === view ? 'text-[#c5f016] bg-[#1f2937]' : 'text-gray-500 hover:text-gray-200 hover:bg-[#1f2937]'}`
               }`}
             >
-              <Icon className={isLeftSidebarOpen ? "w-3.5 h-3.5 flex-shrink-0" : "w-4 h-4"} />
+              <div className="relative flex-shrink-0">
+                <Icon className={isLeftSidebarOpen ? "w-3.5 h-3.5" : "w-4 h-4"} />
+                {badge > 0 && (
+                  <span className="absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full bg-[#c5f016] text-[#111827] text-[9px] font-bold flex items-center justify-center">
+                    {badge > 9 ? "9+" : badge}
+                  </span>
+                )}
+              </div>
               {isLeftSidebarOpen && label}
             </button>
           ))}
@@ -801,7 +912,7 @@ function App() {
         {/* Footer */}
         <div className={`border-t border-[#1f2937]/50 ${isLeftSidebarOpen ? 'px-3 py-2.5 flex items-center justify-between' : 'py-2.5 flex flex-col items-center gap-2'}`}>
           <button
-            onClick={() => setIsSettingsOpen(true)}
+            onClick={() => setActiveView('settings')}
             className="text-gray-400 hover:text-white transition-colors"
             title="Open Settings"
           >
@@ -826,10 +937,19 @@ function App() {
         )}
       </aside>
 
-      {activeView === 'skills' ? (
-        <SkillsPage />
-      ) : activeView === 'connectors' ? (
-        <ConnectorsPage onOpenSettings={() => setIsSettingsOpen(true)} refreshKey={connectorsRefreshKey} />
+      {activeView === 'settings' ? (
+        <main className="flex-1 flex flex-col bg-[#111827] min-w-0 min-h-0 rounded-tl-[20px] rounded-bl-[20px] overflow-hidden">
+          <SettingsTabBar tab={settingsTab} onChange={setSettingsTab} />
+          {settingsTab === 'skills' ? (
+            <SkillsPage />
+          ) : settingsTab === 'connectors' ? (
+            <ConnectorsPage refreshKey={connectorsRefreshKey} />
+          ) : (
+            <SettingsContent tab={settingsTab} isConnected={isConnected} />
+          )}
+        </main>
+      ) : activeView === 'inbox' ? (
+        <InboxPage />
       ) : (
       <main className="flex-1 flex flex-col bg-[#111827] relative min-w-0 rounded-tl-[20px] rounded-bl-[20px] z-10">
 
@@ -992,6 +1112,7 @@ function App() {
                     handleSubmit(e);
                   }
                 }}
+                onPaste={handleTextareaPaste}
                 rows={Math.min(Math.max(input.split('\n').length, 1), 8)}
               />
             </div>
@@ -1002,10 +1123,26 @@ function App() {
                  <button type="button" onClick={handleAttachFile} className="p-1.5 text-gray-400 hover:text-white rounded-lg hover:bg-[#374151] transition-colors" title="Attach Files">
                    <Paperclip className="w-4 h-4" />
                  </button>
-                 <button 
-                   type="button" 
+                 <button
+                   type="button"
+                   onClick={handleVoiceInput}
+                   className={`p-1.5 rounded-lg hover:bg-[#374151] transition-colors ${isRecording ? "text-red-400 animate-pulse" : "text-gray-400 hover:text-white"}`}
+                   title={isRecording ? "Stop recording" : "Voice input"}
+                 >
+                   {isRecording ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+                 </button>
+                 <button
+                   type="button"
+                   onClick={handlePasteFromClipboard}
+                   className="p-1.5 text-gray-400 hover:text-white rounded-lg hover:bg-[#374151] transition-colors"
+                   title="Paste from clipboard"
+                 >
+                   <ClipboardPaste className="w-4 h-4" />
+                 </button>
+                 <button
+                   type="button"
                    onClick={handleSelectProject}
-                   className="p-1.5 text-gray-400 hover:text-[#c5f016] rounded-lg hover:bg-[#374151] transition-colors" 
+                   className="p-1.5 text-gray-400 hover:text-[#c5f016] rounded-lg hover:bg-[#374151] transition-colors"
                    title="Select Project Folder"
                  >
                    <FolderOpen className="w-4 h-4" />
@@ -1119,14 +1256,6 @@ function App() {
          </div>
       </aside>
 
-      <SettingsModal
-        isOpen={isSettingsOpen}
-        onClose={() => {
-          setIsSettingsOpen(false);
-          if (activeView === 'connectors') setConnectorsRefreshKey(k => k + 1);
-        }}
-        isConnected={isConnected}
-      />
 
       {/* Sandbox Approval Modal */}
       {approvalRequest && (

@@ -7,18 +7,17 @@ First, thank you for considering contributing to Work With Me! It's people like 
 | Directory | What it contains |
 |-----------|-----------------|
 | `src/` | Tauri frontend — React + TypeScript UI |
-| `sidecar/` | Node.js backend — hosts the pi-agent session, exposes REST + WebSocket API |
-| `src-tauri/` | Rust/Tauri native shell |
-| `sidecar/extensions/` | Local pi-extensions bundled with the app |
+| `src-tauri/` | Rust/Tauri native shell + backend server |
+| `src-tauri/src/server/` | Axum HTTP + WebSocket server, agent runtime, REST API |
 
-The frontend communicates with the sidecar over WebSocket for streaming agent events and REST for configuration. The sidecar manages agent sessions using `@mariozechner/pi-coding-agent`.
+The frontend communicates with the Rust backend over WebSocket for streaming agent events and REST for configuration. The backend manages agent sessions using the embedded `pi_agent_rust` library.
 
 ### Adding Extensions
 
-You can add community pi-extensions or build your own:
-1. Install the extension package in `sidecar/` (e.g. `pnpm add github:author/my-extension`)
-2. Import and register it in `sidecar/server.ts` in the `extensions` array
-3. Restart the sidecar
+Work With Me supports [Model Context Protocol (MCP)](https://modelcontextprotocol.io) tool servers. To add extensions:
+
+1. Add your MCP server entry to `~/.pi/mcp.json`
+2. Restart the app — extensions are loaded automatically at session start
 
 ## How to Contribute
 
@@ -57,7 +56,6 @@ If you have an idea for an enhancement, please submit a feature request issue wi
 2. Install dependencies:
    ```bash
    pnpm install
-   cd sidecar && pnpm install && cd ..
    ```
 
    **Linux:** Ensure `libsecret-tools` is installed for keychain storage support:
@@ -71,23 +69,12 @@ If you have an idea for an enhancement, please submit a feature request issue wi
    pnpm run tauri:dev
    ```
 
-   Note: `pnpm run dev` runs `tsx server.ts` directly for local development — no change from previous workflow.
-
 ### Building for Release
 
-Before building or releasing the app:
+```bash
+pnpm run tauri:build
+```
 
-1. Build the sidecar SEA binary:
-   ```bash
-   pnpm run build:sidecar
-   ```
-   This populates `src-tauri/binaries/` with the Self-Extracting Archive (SEA) binaries. This step is required before any production build.
-
-2. Then proceed with your Tauri build:
-   ```bash
-   pnpm run tauri:build
-   ```
-
-**Note:** `sidecar/.node-cache/` is gitignored and auto-populated on first build. It contains cached Node.js binary downloads used by the SEA build process.
+The Rust backend is compiled and bundled automatically as part of the Tauri build — no separate build step is needed.
 
 Thank you!

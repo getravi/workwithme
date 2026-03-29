@@ -57,7 +57,6 @@ For **developers**: You'll need the following to build from source:
 2. **Install dependencies:**
    ```bash
    pnpm install
-   cd sidecar && pnpm install && cd ..
    ```
 
 3. **Run in development mode:**
@@ -85,7 +84,7 @@ Work With Me ships with a curated set of [pi-extensions](https://github.com/badl
 | [pi-parallel](https://github.com/HazAT/pi-parallel) | Parallel task execution |
 | [chrome-cdp-skill](https://github.com/pasky/chrome-cdp-skill) | Browser automation via CDP |
 
-You can add your own pi-extensions by installing them in `sidecar/` and registering them in `sidecar/server.ts`.
+You can add your own pi-extensions by configuring them in `~/.pi/mcp.json` — they are loaded automatically at agent session start.
 
 ---
 

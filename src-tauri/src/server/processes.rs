@@ -1,3 +1,8 @@
+//! Process lifecycle tracking for long-running tool invocations.
+//! `spawn_process`, `mark_completed`, and `get_process` are forward scaffolding
+//! for the processes dashboard — they will be wired to the REST endpoints.
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::process::Command;
@@ -117,5 +122,67 @@ mod tests {
     fn test_list_empty_processes() {
         let processes = list_processes();
         assert!(processes.is_ok());
+    }
+
+    #[test]
+    fn test_process_info_serialization() {
+        let info = ProcessInfo {
+            id: "abc-123".to_string(),
+            tool_name: "read_file".to_string(),
+            pid: 0,
+            started_at: "2026-01-01T00:00:00+00:00".to_string(),
+            status: "running".to_string(),
+        };
+        let json = serde_json::to_string(&info).unwrap();
+        let back: ProcessInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.id, "abc-123");
+        assert_eq!(back.tool_name, "read_file");
+        assert_eq!(back.status, "running");
+    }
+
+    #[test]
+    fn test_get_nonexistent_process() {
+        let result = get_process("does-not-exist-xyz");
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
+    }
+
+    #[test]
+    fn test_kill_nonexistent_process_returns_false() {
+        let result = kill_process("no-such-process");
+        assert!(result.is_ok());
+        assert!(!result.unwrap());
+    }
+
+    #[test]
+    fn test_mark_completed_nonexistent_is_ok() {
+        // Should not error even if process doesn't exist
+        let result = mark_completed("phantom-process-id");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_list_processes_returns_only_running() {
+        // All entries from list_processes should have status "running"
+        let processes = list_processes().unwrap();
+        for p in processes {
+            assert_eq!(p.status, "running", "list_processes should only return running processes");
+        }
+    }
+
+    #[test]
+    fn test_process_info_status_values() {
+        // Validate that known status strings are consistent
+        let statuses = ["running", "completed", "failed", "killed"];
+        for status in statuses {
+            let info = ProcessInfo {
+                id: Uuid::new_v4().to_string(),
+                tool_name: "test".to_string(),
+                pid: 0,
+                started_at: chrono::Local::now().to_rfc3339(),
+                status: status.to_string(),
+            };
+            assert_eq!(info.status, status);
+        }
     }
 }

@@ -68,16 +68,20 @@ pub fn log_event(event_type: &str, details: Option<Value>) -> Result<(), String>
     log_event_with_severity(event_type, AuditSeverity::Info, details)
 }
 
+// Convenience wrappers — forward scaffolding for callers that need typed audit helpers.
+#[allow(dead_code)]
 /// Log a security-sensitive event (warning severity)
 pub fn log_security_event(event_type: &str, details: Option<Value>) -> Result<(), String> {
     log_event_with_severity(event_type, AuditSeverity::Warning, details)
 }
 
+#[allow(dead_code)]
 /// Log a critical security event
 pub fn log_critical_event(event_type: &str, details: Option<Value>) -> Result<(), String> {
     log_event_with_severity(event_type, AuditSeverity::Critical, details)
 }
 
+#[allow(dead_code)]
 /// Log OAuth authentication attempt
 pub fn log_oauth_attempt(provider: &str, success: bool, reason: Option<&str>) -> Result<(), String> {
     let details = json!({
@@ -89,6 +93,7 @@ pub fn log_oauth_attempt(provider: &str, success: bool, reason: Option<&str>) ->
     log_event_with_severity("oauth:attempt", severity, Some(details))
 }
 
+#[allow(dead_code)]
 /// Log file access event
 pub fn log_file_access(operation: &str, path: &str) -> Result<(), String> {
     let details = json!({
@@ -98,6 +103,7 @@ pub fn log_file_access(operation: &str, path: &str) -> Result<(), String> {
     log_event("file:access", Some(details))
 }
 
+#[allow(dead_code)]
 /// Log tool execution
 pub fn log_tool_execution(tool_name: &str, success: bool) -> Result<(), String> {
     let details = json!({
@@ -107,6 +113,7 @@ pub fn log_tool_execution(tool_name: &str, success: bool) -> Result<(), String> 
     log_event("tool:executed", Some(details))
 }
 
+#[allow(dead_code)]
 /// Log approval request
 pub fn log_approval(request_type: &str, approved: bool, user_id: Option<&str>) -> Result<(), String> {
     let details = json!({

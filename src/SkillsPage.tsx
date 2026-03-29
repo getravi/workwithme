@@ -12,6 +12,27 @@ interface SkillEntry {
   path: string;
 }
 
+interface SkillsListResponse {
+  skills?: SkillEntry[];
+}
+
+function parseSkillsListResponse(data: unknown): SkillEntry[] {
+  if (Array.isArray(data)) {
+    return data as SkillEntry[];
+  }
+
+  if (
+    data &&
+    typeof data === "object" &&
+    "skills" in data &&
+    Array.isArray((data as SkillsListResponse).skills)
+  ) {
+    return (data as SkillsListResponse).skills as SkillEntry[];
+  }
+
+  throw new Error("Invalid skills response");
+}
+
 interface CreateSkillModalProps {
   onClose: () => void;
   onCreated: () => void;
@@ -192,9 +213,11 @@ export function SkillsPage() {
     try {
       const res = await fetch(`${API_BASE}/api/skills`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setSkills(await res.json());
+      const data = await res.json();
+      setSkills(parseSkillsListResponse(data));
     } catch (err) {
       setError(String(err));
+      setSkills([]);
     } finally {
       setLoading(false);
     }
@@ -224,8 +247,8 @@ export function SkillsPage() {
   const groupKeys = Object.keys(grouped).sort((a, b) => grouped[b].length - grouped[a].length);
 
   return (
-    <div className="flex-1 flex bg-[#111827] overflow-hidden">
-    <div className="flex-1 flex flex-col overflow-hidden">
+    <div className="flex-1 flex min-h-0">
+    <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
       {/* Header */}
       <div className="px-6 pt-5 pb-3 flex items-center justify-between border-b border-[#1f2937]">
         <h1 className="text-[18px] font-semibold text-gray-100 flex items-center gap-2">

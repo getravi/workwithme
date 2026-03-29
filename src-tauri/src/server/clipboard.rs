@@ -34,4 +34,39 @@ mod tests {
         let _ = copy_to_clipboard("test");
         let _ = paste_from_clipboard();
     }
+
+    #[test]
+    fn test_copy_to_clipboard_roundtrip() {
+        // If clipboard is available, verify copy+paste roundtrip.
+        // Some environments (CI, headless) return empty string — tolerate that.
+        let text = "workwithme-test-string-12345";
+        if copy_to_clipboard(text).is_ok() {
+            match paste_from_clipboard() {
+                Ok(pasted) => {
+                    // Accept exact match OR empty string (headless env with no clipboard daemon)
+                    assert!(
+                        pasted == text || pasted.is_empty(),
+                        "unexpected clipboard value: {:?}",
+                        pasted
+                    );
+                }
+                Err(_) => {} // clipboard unavailable in this env
+            }
+        }
+    }
+
+    #[test]
+    fn test_copy_empty_string() {
+        // Empty string should not panic
+        let result = copy_to_clipboard("");
+        // May succeed or fail depending on environment, but should not panic
+        let _ = result;
+    }
+
+    #[test]
+    fn test_copy_unicode_string() {
+        let text = "Hello 世界 🌍";
+        // Should not panic regardless of clipboard availability
+        let _ = copy_to_clipboard(text);
+    }
 }

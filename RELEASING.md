@@ -59,10 +59,9 @@ git push origin vX.Y.Z
 Pushing a `v*.*.*` tag triggers the full CI pipeline:
 
 1. **CodeQL** — static analysis (SAST)
-2. **Type checks + tests** — frontend tsc, vitest, sidecar tsc, unit tests, integration tests, `pnpm audit`
+2. **Type checks + tests** — frontend tsc, vitest, Rust unit/integration tests, `pnpm audit`
 3. **Build** — runs on `ubuntu-22.04`, `macos-latest`, `windows-latest` in parallel
-   - Builds the sidecar SEA binary for each platform
-   - Runs `tauri-apps/tauri-action` to produce platform installers
+   - Runs `tauri-apps/tauri-action` to produce platform installers (Rust backend compiled in)
 4. **GitHub Release** — published automatically (not a draft) with tag name `vX.Y.Z`
 5. **SHA256 checksums** — uploaded to the release as `SHA256SUMS-{OS}.txt`
 

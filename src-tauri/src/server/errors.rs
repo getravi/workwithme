@@ -1,3 +1,7 @@
+//! Standardized API error/response helpers — forward scaffolding for consistent
+//! error handling across all REST endpoints.
+#![allow(dead_code)]
+
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;

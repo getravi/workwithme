@@ -121,4 +121,62 @@ mod tests {
         let theme = defaults.get("theme");
         assert!(theme.is_some());
     }
+
+    #[test]
+    fn test_default_settings_all_keys_present() {
+        let defaults = default_settings();
+        let obj = defaults.as_object().expect("defaults should be an object");
+        assert!(obj.contains_key("theme"));
+        assert!(obj.contains_key("model"));
+        assert!(obj.contains_key("max_tokens"));
+        assert!(obj.contains_key("temperature"));
+        assert!(obj.contains_key("auto_save_sessions"));
+        assert!(obj.contains_key("notification_enabled"));
+        assert!(obj.contains_key("font_size"));
+        assert!(obj.contains_key("editor_wrap"));
+    }
+
+    #[test]
+    fn test_default_settings_numeric_values() {
+        let defaults = default_settings();
+        assert_eq!(defaults["max_tokens"].as_u64(), Some(4096));
+        assert_eq!(defaults["font_size"].as_u64(), Some(14));
+    }
+
+    #[test]
+    fn test_default_settings_boolean_values() {
+        let defaults = default_settings();
+        assert_eq!(defaults["auto_save_sessions"].as_bool(), Some(true));
+        assert_eq!(defaults["notification_enabled"].as_bool(), Some(true));
+        assert_eq!(defaults["editor_wrap"].as_bool(), Some(true));
+    }
+
+    #[test]
+    fn test_default_settings_temperature_is_float() {
+        let defaults = default_settings();
+        let temp = defaults["temperature"].as_f64();
+        assert!(temp.is_some());
+        let t = temp.unwrap();
+        assert!(t > 0.0 && t <= 2.0, "temperature should be in (0, 2]");
+    }
+
+    #[test]
+    fn test_settings_path_is_under_home() {
+        let path = settings_path();
+        let home = dirs::home_dir().unwrap();
+        assert!(path.starts_with(&home), "settings path should be under home dir");
+    }
+
+    #[test]
+    fn test_settings_path_filename() {
+        let path = settings_path();
+        assert_eq!(path.file_name().and_then(|n| n.to_str()), Some("settings.json"));
+    }
+
+    #[test]
+    fn test_settings_path_parent_dir() {
+        let path = settings_path();
+        let parent = path.parent().unwrap();
+        assert_eq!(parent.file_name().and_then(|n| n.to_str()), Some(".pi"));
+    }
 }

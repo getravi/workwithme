@@ -30,19 +30,6 @@ async fn start_http_server() {
     // Initialize approval manager
     server::approval::init_approval_manager();
 
-    // Initialize database and run migrations
-    match server::db::get_pool().await {
-        Ok(pool) => {
-            // Run JSON migration on first startup
-            if let Err(e) = server::db::migrate_from_json(&pool).await {
-                eprintln!("[http-server] migration error: {}", e);
-            }
-        }
-        Err(e) => {
-            eprintln!("[http-server] database initialization failed: {}", e);
-        }
-    }
-
     // Initialize plugin system
     if let Err(e) = server::plugins::init_plugins().await {
         eprintln!("[http-server] plugin initialization failed: {}", e);

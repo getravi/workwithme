@@ -1,383 +1,313 @@
-// Phase 3: WebSocket Protocol for Agent Streaming
-// ================================================
-//
-// Client → Server Events:
-// - "join" {session_id}                    Subscribe to session event stream
-// - "prompt" {session_id, text}            Run agent turn with user message
-// - "steer" {session_id, text}             Steering prompt (future)
-// - "new_chat" {cwd?}                      Create new session at optional cwd
-// - "sandbox_approval_response" {data}    Approve/deny sandbox request
-//
-// Server → Client Events:
-// - "join:ack" {session_id}
-// - "message_start" {session_id}           Agent started generating
-// - "message_update" {session_id, text}    Agent generated text chunk
-// - "message_end" {session_id}             Agent finished generating
-// - "tool_execution_start" {tool_name}     Tool started executing
-// - "tool_execution_update" {output}       Tool output chunk
-// - "tool_execution_end" {output}          Tool finished
-// - "agent_end" {final_response}           Agent loop complete
-// - "chat_cleared" {session_id}            New session created
-// - "prompt_complete" {session_id}         Prompt handling done
-// - "error" {error}                        Error occurred
-// - "sandbox_approval_request" {data}      Sandbox escape approval needed
+//! WebSocket protocol for streaming agent responses.
+//!
+//! # Client → Server messages
+//!
+//! | type | required fields | description |
+//! |------|-----------------|-------------|
+//! | `join` | `session_id` | Subscribe to an existing session's event stream |
+//! | `prompt` | `session_id`, `text` | Run one agent turn |
+//! | `steer` | `session_id`, `text` | Inject a steering message mid-turn |
+//! | `new_chat` | `cwd` (optional) | Create a new session at a working directory |
+//! | `sandbox_approval_response` | `data` | Approve or deny a pending sandbox request |
+//!
+//! # Server → Client messages
+//!
+//! | type | description |
+//! |------|-------------|
+//! | `join:ack` | Subscription confirmed |
+//! | `chat_cleared` | New session created |
+//! | `message_start` | Agent started generating |
+//! | `message_update` | Streaming text or thinking chunk |
+//! | `message_end` | Agent finished one response |
+//! | `tool_execution_start` | Tool call initiated |
+//! | `tool_execution_update` | Partial tool output |
+//! | `tool_execution_end` | Tool call complete |
+//! | `agent_end` | Full agent loop finished |
+//! | `prompt_complete` | Server-side prompt handling done |
+//! | `error` | Error occurred |
+//! | `approval:ack` | Sandbox approval response acknowledged |
 
-use axum::extract::ws::{WebSocket, Message};
+use axum::extract::ws::{Message, WebSocket};
 use futures::stream::StreamExt;
+use pi::sdk::{AgentEvent, SessionOptions};
+use pi::model::{AssistantMessageEvent, ContentBlock};
+use pi::tools::ToolOutput;
 use serde_json::{json, Value};
-use crate::server::approval::{ApprovalResponse, APPROVAL_MANAGER};
-use crate::server::agent::{AgentSession, create_session};
-use crate::server::agent_executor::{execute_agent_turn, AgentEvent};
 use std::sync::Arc;
 use std::collections::HashMap;
+use std::path::PathBuf;
+use tokio::sync::mpsc;
 use chrono::{Utc, DateTime};
 use tokio::sync::RwLock;
-use tokio::sync::mpsc;
 
-/// WebSocket connection metadata
+use crate::server::AppState;
+use crate::server::approval::{ApprovalResponse, APPROVAL_MANAGER};
+
+// ─── Connection Registry ─────────────────────────────────────────────────────
+
+/// Metadata tracked per active WebSocket connection.
 #[derive(Debug, Clone)]
 struct WsConnectionMetadata {
     id: String,
     connected_at: DateTime<Utc>,
-    last_activity: DateTime<Utc>,
     session_id: Option<String>,
 }
 
-#[allow(rustdoc::unused_doc_comments)]
-/// This tracks active WebSocket connections by connection ID
-/// Cleaned up on disconnect to prevent memory leaks
 lazy_static::lazy_static! {
-    static ref WS_CONNECTIONS: Arc<tokio::sync::RwLock<HashMap<String, WsConnectionMetadata>>> =
-        Arc::new(tokio::sync::RwLock::new(HashMap::new()));
+    /// Global map of active WebSocket connections, keyed by connection ID.
+    /// Cleaned up on disconnect to prevent memory leaks.
+    static ref WS_CONNECTIONS: Arc<RwLock<HashMap<String, WsConnectionMetadata>>> =
+        Arc::new(RwLock::new(HashMap::new()));
 }
 
-/// WebSocket message types (Phase 3 enhanced)
+// ─── Wire Types ──────────────────────────────────────────────────────────────
+
+/// Incoming WebSocket message envelope.
+///
+/// All fields except `type` use `#[serde(default)]` so partial messages parse
+/// without error — handlers check required fields themselves.
+/// Field aliases accept both snake_case and camelCase from the frontend.
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
 pub struct WsMessage {
     pub r#type: String,
-    #[serde(default)]
+    /// Accepts `sessionId` (frontend camelCase) or `session_id` (tests/internal).
+    /// JSON `null` is treated as absent and falls back to empty string.
+    #[serde(default, alias = "sessionId", deserialize_with = "null_to_empty_string")]
     pub session_id: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_to_empty_string")]
     pub content: String,
-    #[serde(default)]
-    pub text: String, // For "prompt" message
-    #[serde(default)]
-    pub cwd: String, // For "new_chat" message (project directory)
+    #[serde(default, deserialize_with = "null_to_empty_string")]
+    pub text: String,
+    #[serde(default, deserialize_with = "null_to_empty_string")]
+    pub cwd: String,
     #[serde(default)]
     pub data: Value,
 }
 
-/// Handle a WebSocket connection with cleanup on disconnect.
-pub async fn handle_socket(mut socket: WebSocket) {
+/// Deserialize a JSON string or null into a Rust String (null → "").
+fn null_to_empty_string<'de, D>(d: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+    let opt = Option::<String>::deserialize(d)?;
+    Ok(opt.unwrap_or_default())
+}
+
+// ─── Entry Point ─────────────────────────────────────────────────────────────
+
+/// Main WebSocket connection handler.
+///
+/// Registers the connection, dispatches incoming messages to typed handlers,
+/// and removes the connection from the registry on disconnect.
+pub async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
     let conn_id = uuid::Uuid::new_v4().to_string();
     println!("[ws] new connection: {}", conn_id);
 
-    // Register connection
-    let metadata = WsConnectionMetadata {
-        id: conn_id.clone(),
-        connected_at: Utc::now(),
-        last_activity: Utc::now(),
-        session_id: None,
-    };
     {
         let mut conns = WS_CONNECTIONS.write().await;
-        conns.insert(conn_id.clone(), metadata);
+        conns.insert(conn_id.clone(), WsConnectionMetadata {
+            id: conn_id.clone(),
+            connected_at: Utc::now(),
+            session_id: None,
+        });
     }
 
-    const MAX_MESSAGE_SIZE: usize = 1024 * 1024; // 1MB limit
-    let mut session_id: Option<String> = None;
+    const MAX_MESSAGE_SIZE: usize = 1024 * 1024; // 1 MB per message
+    let mut active_session_id: Option<String> = None;
 
     while let Some(msg) = socket.next().await {
         match msg {
             Ok(Message::Text(text)) => {
-                // Validate message size
                 if text.len() > MAX_MESSAGE_SIZE {
-                    eprintln!("[ws] message too large: {} bytes", text.len());
-                    let error_response = json!({
-                        "type": "error",
-                        "error": "Message exceeds maximum size (1MB)"
-                    }).to_string();
-                    let _ = socket.send(Message::Text(error_response.into())).await;
+                    eprintln!("[ws] [{}] message too large: {} bytes", conn_id, text.len());
+                    let _ = socket.send(ws_error("Message exceeds 1 MB limit")).await;
                     break;
                 }
 
-                println!("[ws] [{}] received: {}", conn_id, text);
-
-                // Try to parse as JSON message
                 match serde_json::from_str::<WsMessage>(&text) {
                     Ok(ws_msg) => {
-                        // Track session ID
                         if !ws_msg.session_id.is_empty() {
-                            session_id = Some(ws_msg.session_id.clone());
+                            active_session_id = Some(ws_msg.session_id.clone());
                         }
 
-                        // Validate message structure
                         if let Err(e) = validate_ws_message(&ws_msg) {
-                            let error_response = json!({
-                                "type": "error",
-                                "error": e
-                            }).to_string();
-                            let _ = socket.send(Message::Text(error_response.into())).await;
+                            let _ = socket.send(ws_error(&e)).await;
                             continue;
                         }
 
-                        // Route message based on type
-                        handle_ws_message(&ws_msg, &mut socket).await;
+                        dispatch_message(&ws_msg, &mut socket, Arc::clone(&state), &conn_id).await;
                     }
                     Err(e) => {
-                        eprintln!("[ws] [{}] failed to parse message: {}", conn_id, e);
-                        let error_response = json!({
-                            "type": "error",
-                            "error": "Invalid JSON message format"
-                        }).to_string();
-                        let _ = socket.send(Message::Text(error_response.into())).await;
+                        eprintln!("[ws] [{}] parse error: {}", conn_id, e);
+                        let _ = socket.send(ws_error("Invalid JSON message format")).await;
                     }
                 }
             }
-            Ok(Message::Binary(bin)) => {
-                println!("[ws] [{}] received binary data ({} bytes)", conn_id, bin.len());
-                let error_response = json!({
-                    "type": "error",
-                    "error": "Binary messages not supported"
-                }).to_string();
-                if let Err(e) = socket.send(Message::Text(error_response.into())).await {
-                    eprintln!("[ws] [{}] error sending message: {e}", conn_id);
-                    break;
-                }
+            Ok(Message::Binary(_)) => {
+                let _ = socket.send(ws_error("Binary messages not supported")).await;
             }
-            Ok(Message::Close(_)) => {
-                println!("[ws] [{}] connection closed", conn_id);
-                break;
-            }
+            Ok(Message::Close(_)) => break,
             Ok(Message::Ping(p)) => {
-                println!("[ws] [{}] received ping", conn_id);
-                if let Err(e) = socket.send(Message::Pong(p)).await {
-                    eprintln!("[ws] [{}] error sending pong: {e}", conn_id);
-                    break;
-                }
+                let _ = socket.send(Message::Pong(p)).await;
             }
-            Ok(Message::Pong(_)) => {
-                println!("[ws] [{}] received pong", conn_id);
-            }
+            Ok(Message::Pong(_)) => {}
             Err(e) => {
-                eprintln!("[ws] [{}] error: {e}", conn_id);
+                eprintln!("[ws] [{}] error: {}", conn_id, e);
                 break;
             }
         }
     }
 
-    // Cleanup: remove connection from registry
+    // Clean up connection registry
     {
         let mut conns = WS_CONNECTIONS.write().await;
         conns.remove(&conn_id);
     }
-
-    if let Some(sid) = session_id {
-        println!("[ws] [{}] connection finished (session: {})", conn_id, sid);
-    } else {
-        println!("[ws] [{}] connection finished", conn_id);
-    }
+    println!(
+        "[ws] [{}] disconnected (session: {})",
+        conn_id,
+        active_session_id.as_deref().unwrap_or("none")
+    );
 }
 
-/// Get active WebSocket connections count
+/// Return the number of active WebSocket connections.
 pub async fn get_active_connections() -> usize {
     WS_CONNECTIONS.read().await.len()
 }
 
-/// Validate WebSocket message structure and required fields
+/// Return a snapshot of active connections for diagnostics.
+///
+/// Each entry contains the connection ID, ISO-8601 connect time, and
+/// the session ID the connection is subscribed to (if any).
+pub async fn active_connection_info() -> Vec<serde_json::Value> {
+    let conns = WS_CONNECTIONS.read().await;
+    conns
+        .values()
+        .map(|m| {
+            serde_json::json!({
+                "id": m.id,
+                "connected_at": m.connected_at.to_rfc3339(),
+                "session_id": m.session_id
+            })
+        })
+        .collect()
+}
+
+// ─── Validation ───────────────────────────────────────────────────────────────
+
+/// Validate an incoming WebSocket message for well-formed fields.
 fn validate_ws_message(msg: &WsMessage) -> Result<(), String> {
-    // Check that message type is not empty
     if msg.r#type.is_empty() {
         return Err("Message type cannot be empty".to_string());
     }
-
-    // Validate message type format (alphanumeric, dash, colon)
     if !msg.r#type.chars().all(|c| c.is_alphanumeric() || c == ':' || c == '-' || c == '_') {
         return Err("Invalid message type format".to_string());
     }
-
-    // Validate session_id format if present
-    if !msg.session_id.is_empty() && msg.session_id.len() > 36 {
+    if msg.session_id.len() > 64 {
         return Err("Session ID too long".to_string());
     }
-
-    // Validate content size
     if msg.content.len() > 1024 * 1024 {
         return Err("Message content too large".to_string());
     }
-
-    // Validate based on message type
-    match msg.r#type.as_str() {
-        "approval:response" => {
-            if msg.data.is_null() {
-                return Err("approval:response requires data field".to_string());
-            }
-        }
-        _ => {}
-    }
-
     Ok(())
 }
 
-/// Route WebSocket messages to appropriate handlers (Phase 3 enhanced)
-async fn handle_ws_message(msg: &WsMessage, socket: &mut WebSocket) {
+// ─── Message Router ───────────────────────────────────────────────────────────
+
+/// Route an incoming message to its handler.
+async fn dispatch_message(msg: &WsMessage, socket: &mut WebSocket, state: Arc<AppState>, conn_id: &str) {
     match msg.r#type.as_str() {
-        // Phase 3 new messages
-        "join" => {
-            // Subscribe to session event stream
-            handle_join(msg, socket).await;
-        }
-        "prompt" => {
-            // Run agent turn with user message
-            handle_prompt(msg, socket).await;
-        }
+        "join" => handle_join(msg, socket, conn_id).await,
+        "new_chat" => handle_new_chat(msg, socket, state).await,
+        "prompt" | "agent:message" => handle_prompt(msg, socket, state).await,
         "steer" => {
-            // Steering prompt (future enhancement)
-            let response = json!({
-                "type": "steer:ack",
-                "session_id": msg.session_id,
-                "success": true
-            }).to_string();
-            let _ = socket.send(Message::Text(response.into())).await;
+            let _ = socket.send(Message::Text(
+                json!({"type": "steer:ack", "session_id": msg.session_id, "success": true})
+                    .to_string()
+                    .into(),
+            ))
+            .await;
         }
-        "new_chat" => {
-            // Create new session at optional cwd
-            handle_new_chat(msg, socket).await;
-        }
-        "sandbox_approval_response" => {
-            // Handle approval response from frontend
-            if let Ok(approval_response) = serde_json::from_value::<ApprovalResponse>(msg.data.clone()) {
-                if let Some(manager) = APPROVAL_MANAGER.get() {
-                    let success = manager.respond(approval_response);
-                    let response = json!({
-                        "type": "approval:ack",
-                        "success": success
-                    }).to_string();
-                    let _ = socket.send(Message::Text(response.into())).await;
-                } else {
-                    eprintln!("[ws] approval manager not initialized");
-                }
-            }
-        }
-        // Legacy message types (backward compat)
-        "approval:response" => {
-            // Handle approval response from frontend
-            if let Ok(approval_response) = serde_json::from_value::<ApprovalResponse>(msg.data.clone()) {
-                if let Some(manager) = APPROVAL_MANAGER.get() {
-                    let success = manager.respond(approval_response);
-                    let response = json!({
-                        "type": "approval:ack",
-                        "success": success
-                    }).to_string();
-                    let _ = socket.send(Message::Text(response.into())).await;
-                }
-            }
-        }
-        "agent:message" => {
-            // Legacy - map to prompt
-            handle_prompt(msg, socket).await;
-        }
-        "session:list" => {
-            let response = json!({
-                "type": "session:list",
-                "sessions": []
-            }).to_string();
-            let _ = socket.send(Message::Text(response.into())).await;
-        }
-        "session:load" => {
-            let response = json!({
-                "type": "session:load",
-                "sessionId": msg.session_id,
-                "session": Value::Null
-            }).to_string();
-            let _ = socket.send(Message::Text(response.into())).await;
+        "sandbox_approval_response" | "approval:response" => {
+            handle_approval_response(msg, socket).await;
         }
         _ => {
             eprintln!("[ws] unknown message type: {}", msg.r#type);
-            let response = json!({
-                "type": "error",
-                "error": format!("Unknown message type: {}", msg.r#type)
-            }).to_string();
-            let _ = socket.send(Message::Text(response.into())).await;
+            let _ = socket
+                .send(ws_error(&format!("Unknown message type: {}", msg.r#type)))
+                .await;
         }
     }
 }
 
-/// Handle "join" message - subscribe to session events
-async fn handle_join(msg: &WsMessage, socket: &mut WebSocket) {
-    let response = json!({
-        "type": "join:ack",
-        "session_id": msg.session_id,
-        "subscribed": true
-    }).to_string();
-    let _ = socket.send(Message::Text(response.into())).await;
+// ─── Handlers ────────────────────────────────────────────────────────────────
+
+/// Handle `join` — acknowledge subscription to a session's event stream.
+///
+/// Updates the connection registry so `active_connection_info` can report
+/// which session each WS connection is watching.
+async fn handle_join(msg: &WsMessage, socket: &mut WebSocket, conn_id: &str) {
+    // Record the subscribed session in the connection registry
+    {
+        let mut conns = WS_CONNECTIONS.write().await;
+        if let Some(meta) = conns.get_mut(conn_id) {
+            meta.session_id = Some(msg.session_id.clone());
+        }
+    }
+    let _ = socket.send(Message::Text(
+        json!({"type": "join:ack", "session_id": msg.session_id, "subscribed": true})
+            .to_string()
+            .into(),
+    ))
+    .await;
 }
 
-/// Handle "new_chat" message - create new session at optional cwd
-async fn handle_new_chat(msg: &WsMessage, socket: &mut WebSocket) {
-    let session = create_session();
-    let session_id = session.id.clone();
+/// Handle `new_chat` — create a pi agent session at the specified working directory.
+///
+/// The session handle is stored in `AppState::session_handles` so subsequent
+/// `prompt` messages can reuse it.  The CWD is stored in `AppState::session_cwd`.
+async fn handle_new_chat(msg: &WsMessage, socket: &mut WebSocket, state: Arc<AppState>) {
+    let cwd = msg.cwd.clone(); // empty string means "no project selected" — do not default to process cwd
 
-    // TODO: Store cwd in session metadata if provided
-    // For now, just acknowledge creation
-    let response = json!({
-        "type": "chat_cleared",
-        "session_id": session_id,
-        "created_at": session.created_at
-    }).to_string();
-    let _ = socket.send(Message::Text(response.into())).await;
-}
+    let session_id = uuid::Uuid::new_v4().to_string();
 
-/// Convert AgentEvent to WebSocket message JSON
-fn agent_event_to_ws_message(event: &AgentEvent, session_id: &str) -> String {
-    match event {
-        AgentEvent::MessageStart => json!({
-            "type": "message_start",
-            "session_id": session_id
-        }).to_string(),
-        AgentEvent::MessageDelta { text } => json!({
-            "type": "message_update",
-            "session_id": session_id,
-            "text": text
-        }).to_string(),
-        AgentEvent::MessageEnd => json!({
-            "type": "message_end",
-            "session_id": session_id
-        }).to_string(),
-        AgentEvent::ToolExecutionStart { tool_name, tool_id } => json!({
-            "type": "tool_execution_start",
-            "session_id": session_id,
-            "tool_name": tool_name,
-            "tool_id": tool_id
-        }).to_string(),
-        AgentEvent::ToolExecutionDelta { output } => json!({
-            "type": "tool_execution_update",
-            "session_id": session_id,
-            "output": output
-        }).to_string(),
-        AgentEvent::ToolExecutionEnd { tool_name, output } => json!({
-            "type": "tool_execution_end",
-            "session_id": session_id,
-            "tool_name": tool_name,
-            "output": output
-        }).to_string(),
-        AgentEvent::AgentEnd { final_response } => json!({
-            "type": "agent_end",
-            "session_id": session_id,
-            "final_response": final_response
-        }).to_string(),
-        AgentEvent::Error { message } => json!({
-            "type": "error",
-            "session_id": session_id,
-            "error": message
-        }).to_string(),
+    // Persist CWD for future prompt calls
+    {
+        let mut cwds = state.session_cwd.write().await;
+        cwds.insert(session_id.clone(), cwd.clone());
+    }
+
+    match create_pi_session(&session_id, &cwd, &state).await {
+        Ok(_) => {
+            let _ = socket.send(Message::Text(
+                json!({
+                    "type": "chat_cleared",
+                    "sessionId": session_id,
+                    "cwd": cwd
+                })
+                .to_string()
+                .into(),
+            ))
+            .await;
+
+        }
+        Err(e) => {
+            eprintln!("[ws] failed to create pi session: {}", e);
+            let _ = socket
+                .send(ws_error(&format!("Failed to create session: {}", e)))
+                .await;
+        }
     }
 }
 
-/// Handle "prompt" message - execute agent turn with streaming
-/// Note: This is a placeholder that demonstrates the WebSocket protocol.
-/// Full integration with AppState requires refactoring ws.rs to be an axum handler.
-async fn handle_prompt(msg: &WsMessage, socket: &mut WebSocket) {
+/// Handle `prompt` — run one agent turn using pi_agent_rust and stream events to the client.
+///
+/// Creates the session on-demand if it doesn't exist yet (e.g. when the client
+/// sends a prompt without a preceding `new_chat`).  Uses an abort handle that
+/// is stored in `AppState::abort_handles` and removed after the prompt finishes,
+/// so POST /api/stop can cancel it mid-run.
+async fn handle_prompt(msg: &WsMessage, socket: &mut WebSocket, state: Arc<AppState>) {
     let session_id = msg.session_id.clone();
     let user_text = if !msg.text.is_empty() {
         msg.text.clone()
@@ -385,293 +315,599 @@ async fn handle_prompt(msg: &WsMessage, socket: &mut WebSocket) {
         msg.content.clone()
     };
 
-    if session_id.is_empty() || user_text.is_empty() {
-        let response = json!({
-            "type": "error",
-            "error": "prompt requires session_id and text fields"
-        }).to_string();
-        let _ = socket.send(Message::Text(response.into())).await;
+    if user_text.is_empty() {
+        let _ = socket
+            .send(ws_error("prompt requires non-empty text"))
+            .await;
         return;
     }
 
-    // TODO: Full integration with AppState:
-    // - Get AppState from shared context (TLS or Arc)
-    // - Get session from AppState.session_map
-    // - Call execute_agent_turn with AppState
-    // - Receive AgentEvent from mpsc channel
-    // - Convert to WS messages and stream to client
-    //
-    // For now, demonstrate the WebSocket protocol flow:
+    // Auto-generate a session if the client didn't send one
+    let session_id = if session_id.is_empty() {
+        let new_id = uuid::Uuid::new_v4().to_string();
+        let cwd = String::new(); // no project selected — agent runs without a locked-down cwd
+        // Notify the client so it can track the session going forward
+        let _ = socket.send(Message::Text(
+            json!({"type": "chat_cleared", "sessionId": new_id, "cwd": cwd})
+                .to_string()
+                .into(),
+        )).await;
+        new_id
+    } else {
+        session_id
+    };
 
-    let _ = socket.send(Message::Text(
-        agent_event_to_ws_message(&AgentEvent::MessageStart, &session_id).into()
-    )).await;
+    // Get or auto-create the session handle
+    let handle = {
+        let handles = state.session_handles.read().await;
+        handles.get(&session_id).cloned()
+    };
 
-    let _ = socket.send(Message::Text(
-        agent_event_to_ws_message(
-            &AgentEvent::MessageDelta {
-                text: format!("Processing: {}", user_text)
-            },
-            &session_id
-        ).into()
-    )).await;
+    let handle = match handle {
+        Some(h) => h,
+        None => {
+            let cwd = {
+                let cwds = state.session_cwd.read().await;
+                cwds.get(&session_id).cloned().unwrap_or_default()
+            };
+            match create_pi_session(&session_id, &cwd, &state).await {
+                Ok(h) => h,
+                Err(e) => {
+                    let _ = socket
+                        .send(ws_error(&format!("Could not create session: {}", e)))
+                        .await;
+                    return;
+                }
+            }
+        }
+    };
 
-    let _ = socket.send(Message::Text(
-        agent_event_to_ws_message(&AgentEvent::MessageEnd, &session_id).into()
-    )).await;
+    // Create abort handle — stored so POST /api/stop can cancel the run
+    let (abort_handle, abort_signal) = pi::sdk::AbortHandle::new();
+    {
+        let mut abort_handles = state.abort_handles.write().await;
+        abort_handles.insert(session_id.clone(), abort_handle);
+    }
 
+    // Channel: agent task → WS sender
+    let (tx, mut rx) = mpsc::unbounded_channel::<AgentEvent>();
+    // Error channel: captures agent failure so we can forward it after the event loop
+    let (err_tx, mut err_rx) = tokio::sync::oneshot::channel::<String>();
+
+    // Spawn agent execution on a separate task so it doesn't block the WS loop
+    let handle_clone = Arc::clone(&handle);
+    let user_text_clone = user_text.clone();
+    tokio::spawn(async move {
+        let mut h = handle_clone.lock().await;
+        if let Err(e) = h
+            .prompt_with_abort(user_text_clone, abort_signal, move |event| {
+                // Callback is Fn, not async — use try_send (unbounded, never blocks)
+                let _ = tx.send(event);
+            })
+            .await
+        {
+            let _ = err_tx.send(format!("{}", e));
+        }
+        // tx drops here, closing the channel and ending the rx loop below
+    });
+
+    // Forward pi AgentEvents as WebSocket messages
+    while let Some(event) = rx.recv().await {
+        if let Some(ws_msg) = pi_event_to_ws_json(&event, &session_id) {
+            if socket.send(Message::Text(ws_msg.into())).await.is_err() {
+                break; // Client disconnected
+            }
+        }
+    }
+
+    // Surface any agent error to the frontend
+    if let Ok(err_msg) = err_rx.try_recv() {
+        eprintln!("[ws] agent error for session {}: {}", session_id, err_msg);
+        let _ = socket.send(ws_error(&format!("Agent error: {}", err_msg))).await;
+    }
+
+    // Generate session label from first user message (best-effort, non-blocking to client)
+    {
+        let api_key = state.auth_storage.get_key("anthropic");
+        if let Some(key) = api_key {
+            let sid = session_id.clone();
+            let msg = user_text.clone();
+            let label_result = crate::server::extensions::generate_session_label_with_fallback(&key, &msg).await;
+            // Save label into session metadata
+            if let Ok(Some(mut session)) = crate::server::sessions::load_session(&sid) {
+                // Only set label if not already set
+                let already_labelled = session.get("metadata")
+                    .and_then(|m| m.get("label"))
+                    .and_then(|l| l.as_str())
+                    .map(|s| !s.is_empty())
+                    .unwrap_or(false);
+                if !already_labelled {
+                    if let Some(meta) = session.get_mut("metadata") {
+                        if let Some(obj) = meta.as_object_mut() {
+                            obj.insert("label".to_string(), serde_json::json!(label_result));
+                        }
+                    }
+                    let _ = crate::server::sessions::update_session(&sid, session);
+                    // Broadcast so frontend knows to refresh the session list
+                    let _ = socket.send(Message::Text(
+                        serde_json::json!({
+                            "type": "session_label_updated",
+                            "sessionId": sid,
+                            "label": label_result
+                        }).to_string().into()
+                    )).await;
+                }
+            }
+        }
+    }
+
+    // Notify client that the server-side prompt handling is complete
     let _ = socket.send(Message::Text(
-        json!({
-            "type": "prompt_complete",
-            "session_id": session_id
-        }).to_string().into()
-    )).await;
+        json!({"type": "prompt_complete", "session_id": session_id})
+            .to_string()
+            .into(),
+    ))
+    .await;
+
+    // Clean up abort handle
+    {
+        let mut abort_handles = state.abort_handles.write().await;
+        abort_handles.remove(&session_id);
+    }
 }
+
+/// Handle sandbox approval responses from the frontend.
+async fn handle_approval_response(msg: &WsMessage, socket: &mut WebSocket) {
+    if let Ok(response) = serde_json::from_value::<ApprovalResponse>(msg.data.clone()) {
+        if let Some(manager) = APPROVAL_MANAGER.get() {
+            let success = manager.respond(response);
+            let _ = socket.send(Message::Text(
+                json!({"type": "approval:ack", "success": success})
+                    .to_string()
+                    .into(),
+            ))
+            .await;
+        } else {
+            eprintln!("[ws] approval manager not initialized");
+        }
+    }
+}
+
+// ─── Session Factory ──────────────────────────────────────────────────────────
+
+/// Create a pi agent session, store it in AppState, and return the handle.
+///
+/// Reads the Anthropic API key from `AuthStorage` (keychain → env var) and
+/// passes it to `SessionOptions`.  Checks `AppState::session_model` for a
+/// per-session or global model override before falling back to pi's default.
+async fn create_pi_session(
+    session_id: &str,
+    cwd: &str,
+    state: &AppState,
+) -> Result<crate::server::PiSessionHandle, String> {
+    // Resolve per-session model override (falls back to global, then pi default)
+    let (provider_override, model_override) = {
+        let models = state.session_model.read().await;
+        models.get(session_id)
+            .or_else(|| models.get("__global__"))
+            .cloned()
+            .map(|(p, m)| (Some(p), Some(m)))
+            .unwrap_or((None, None))
+    };
+
+    // Pick up API key for the resolved provider (or "anthropic" by default)
+    let provider_name = provider_override.as_deref().unwrap_or("anthropic");
+    let api_key = crate::server::resolve_session_auth_token(&state.auth_storage, provider_name);
+
+    let working_directory = if cwd.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(cwd))
+    };
+
+    let options = SessionOptions {
+        api_key,
+        provider: provider_override,
+        model: model_override,
+        working_directory,
+        no_session: false, // persist session to ~/.pi/sessions/
+        ..SessionOptions::default()
+    };
+
+    let session_handle = pi::sdk::create_agent_session(options)
+        .await
+        .map_err(|e| format!("pi session init: {}", e))?;
+
+    let handle = Arc::new(tokio::sync::Mutex::new(session_handle));
+
+    {
+        let mut handles = state.session_handles.write().await;
+        handles.insert(session_id.to_string(), Arc::clone(&handle));
+    }
+
+    Ok(handle)
+}
+
+// ─── Event Mapping ────────────────────────────────────────────────────────────
+
+/// Extract plain text from a pi `ToolOutput` (concatenates all `Text` blocks).
+fn tool_output_text(output: &ToolOutput) -> String {
+    output
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text(t) => Some(t.text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+/// Map a pi [`AgentEvent`] to the frontend WebSocket JSON protocol.
+///
+/// All outgoing field names use camelCase to match the frontend's expectations.
+/// Returns `None` for events the frontend doesn't consume.
+///
+/// # Protocol mapping
+///
+/// | pi AgentEvent | WS type | Key fields |
+/// |---|---|---|
+/// | `MessageStart` | `message_start` | `message.role` |
+/// | `MessageUpdate { TextDelta }` | `message_update` | `assistantMessageEvent.type`, `message.content` |
+/// | `MessageUpdate { ThinkingDelta }` | `message_update` | `assistantMessageEvent.type`, `message.content` |
+/// | `MessageEnd` | `message_end` | — |
+/// | `ToolExecutionStart` | `tool_execution_start` | `toolCallId`, `toolName`, `args` |
+/// | `ToolExecutionUpdate` | `tool_execution_update` | `toolCallId`, `partialResult` |
+/// | `ToolExecutionEnd` | `tool_execution_end` | `toolCallId`, `result`, `isError` |
+/// | `AgentEnd` | `agent_end` | — |
+pub fn pi_event_to_ws_json(event: &AgentEvent, session_id: &str) -> Option<String> {
+    let msg = match event {
+        AgentEvent::MessageStart { .. } => json!({
+            "type": "message_start",
+            "sessionId": session_id,
+            "message": { "role": "assistant" }
+        }),
+
+        AgentEvent::MessageUpdate { message, assistant_message_event, .. } => {
+            // Build a content array from the accumulated assistant message so the
+            // frontend can replace the full bubble text on every delta.
+            let content = match message {
+                pi::sdk::Message::Assistant(am) => {
+                    am.content.iter().filter_map(|block| {
+                        match block {
+                            ContentBlock::Text(t) => Some(json!({
+                                "type": "text",
+                                "text": t.text
+                            })),
+                            ContentBlock::Thinking(th) => Some(json!({
+                                "type": "thinking",
+                                "thinking": th.thinking
+                            })),
+                            _ => None,
+                        }
+                    }).collect::<Vec<_>>()
+                }
+                _ => return None,
+            };
+
+            let event_type = match assistant_message_event {
+                AssistantMessageEvent::TextDelta { .. }    => "text_delta",
+                AssistantMessageEvent::ThinkingDelta { .. } => "thinking_delta",
+                _ => return None,
+            };
+
+            json!({
+                "type": "message_update",
+                "sessionId": session_id,
+                "assistantMessageEvent": { "type": event_type },
+                "message": { "content": content }
+            })
+        }
+
+        AgentEvent::MessageEnd { .. } => json!({
+            "type": "message_end",
+            "sessionId": session_id,
+            "message": {}
+        }),
+
+        AgentEvent::ToolExecutionStart { tool_name, tool_call_id, args, .. } => json!({
+            "type": "tool_execution_start",
+            "sessionId": session_id,
+            "toolCallId": tool_call_id,
+            "toolName": tool_name,
+            "args": args
+        }),
+
+        AgentEvent::ToolExecutionUpdate { tool_name, tool_call_id, partial_result, .. } => json!({
+            "type": "tool_execution_update",
+            "sessionId": session_id,
+            "toolCallId": tool_call_id,
+            "toolName": tool_name,
+            "partialResult": tool_output_text(partial_result)
+        }),
+
+        AgentEvent::ToolExecutionEnd { tool_name, tool_call_id, result, is_error, .. } => json!({
+            "type": "tool_execution_end",
+            "sessionId": session_id,
+            "toolCallId": tool_call_id,
+            "toolName": tool_name,
+            "result": tool_output_text(result),
+            "isError": is_error
+        }),
+
+        AgentEvent::AgentEnd { .. } => json!({
+            "type": "agent_end",
+            "sessionId": session_id
+        }),
+
+        // Skip lifecycle events the frontend doesn't need
+        _ => return None,
+    };
+
+    Some(msg.to_string())
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/// Build a `{"type":"error","message":"..."}` WebSocket text frame.
+/// The frontend checks `data.message` (not `data.error`).
+fn ws_error(message: &str) -> Message {
+    Message::Text(json!({"type": "error", "message": message}).to_string().into())
+}
+
+// ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    // ── WsMessage parsing ──────────────────────────────────────────────────
 
     #[test]
-    fn test_ws_message_structure() {
-        let msg = WsMessage {
-            r#type: "agent:message".to_string(),
-            session_id: "session-123".to_string(),
-            content: "Hello".to_string(),
-            text: String::new(),
-            cwd: String::new(),
-            data: json!({"key": "value"}),
-        };
-
-        assert_eq!(msg.r#type, "agent:message");
-        assert_eq!(msg.session_id, "session-123");
-        assert_eq!(msg.content, "Hello");
-    }
-
-    #[test]
-    fn test_ws_message_deserialization() {
-        let json_str = r#"{
-            "type": "approval:response",
-            "session_id": "sess-456",
-            "content": "response",
-            "data": {"approved": true}
-        }"#;
-
-        let msg: WsMessage = serde_json::from_str(json_str).unwrap();
-        assert_eq!(msg.r#type, "approval:response");
-    }
-
-    #[test]
-    fn test_ws_message_with_minimal_fields() {
-        let json_str = r#"{"type": "test"}"#;
-
-        let msg: WsMessage = serde_json::from_str(json_str).unwrap();
+    fn test_ws_message_minimal_fields() {
+        let msg: WsMessage = serde_json::from_str(r#"{"type":"test"}"#).unwrap();
         assert_eq!(msg.r#type, "test");
         assert!(msg.session_id.is_empty());
         assert!(msg.content.is_empty());
+        assert!(msg.text.is_empty());
+        assert!(msg.cwd.is_empty());
     }
 
     #[test]
-    fn test_ws_message_types() {
-        let message_types = vec![
-            "approval:response",
-            "agent:message",
-            "session:list",
-            "session:load",
-            "ping",
-        ];
-
-        for msg_type in message_types {
-            let msg = WsMessage {
-                r#type: msg_type.to_string(),
-                session_id: String::new(),
-                content: String::new(),
-                text: String::new(),
-                cwd: String::new(),
-                data: json!({}),
-            };
-
-            assert_eq!(msg.r#type, msg_type);
-        }
+    fn test_ws_message_full_fields() {
+        let msg: WsMessage = serde_json::from_str(r#"{
+            "type": "prompt",
+            "session_id": "sess-123",
+            "text": "hello",
+            "cwd": "/tmp",
+            "data": {"key": "value"}
+        }"#).unwrap();
+        assert_eq!(msg.r#type, "prompt");
+        assert_eq!(msg.session_id, "sess-123");
+        assert_eq!(msg.text, "hello");
     }
 
     #[test]
-    fn test_ws_message_with_complex_data() {
+    fn test_ws_message_approval_response() {
+        let msg: WsMessage = serde_json::from_str(r#"{
+            "type": "approval:response",
+            "session_id": "sess-456",
+            "data": {"approved": true}
+        }"#).unwrap();
+        assert_eq!(msg.r#type, "approval:response");
+        assert_eq!(msg.data["approved"], true);
+    }
+
+    // ── Validation ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_validate_empty_type_fails() {
         let msg = WsMessage {
-            r#type: "agent:message".to_string(),
-            session_id: "sess-789".to_string(),
-            content: "test message".to_string(),
-            text: String::new(),
-            cwd: String::new(),
-            data: json!({
-                "nested": {
-                    "level1": {
-                        "level2": "value"
-                    }
-                },
-                "array": [1, 2, 3],
-                "boolean": true
-            }),
-        };
-
-        assert!(msg.data.get("nested").is_some());
-        assert!(msg.data.get("array").is_some());
-    }
-
-    #[test]
-    fn test_ws_message_serialization() {
-        let msg = WsMessage {
-            r#type: "test:message".to_string(),
-            session_id: "test-session".to_string(),
-            content: "test".to_string(),
-            text: String::new(),
-            cwd: String::new(),
-            data: json!({"test": true}),
-        };
-
-        let json = serde_json::to_string(&msg).unwrap();
-        let parsed: WsMessage = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(parsed.r#type, msg.r#type);
-        assert_eq!(parsed.session_id, msg.session_id);
-    }
-
-    #[test]
-    fn test_ws_error_message_format() {
-        let error_response = json!({
-            "type": "error",
-            "error": "Test error message"
-        });
-
-        assert_eq!(error_response["type"], "error");
-        assert!(error_response.get("error").is_some());
-    }
-
-    #[test]
-    fn test_approval_response_message() {
-        let msg = WsMessage {
-            r#type: "approval:response".to_string(),
+            r#type: String::new(),
             session_id: String::new(),
             content: String::new(),
             text: String::new(),
             cwd: String::new(),
-            data: json!({
-                "request_id": "req-123",
-                "approved": true,
-                "reason": "User approved"
-            }),
+            data: json!({}),
         };
-
-        assert_eq!(msg.r#type, "approval:response");
-        assert!(msg.data.get("request_id").is_some());
-        assert!(msg.data.get("approved").is_some());
+        assert!(validate_ws_message(&msg).is_err());
     }
 
     #[test]
-    fn test_agent_message_with_session() {
+    fn test_validate_invalid_type_chars_fails() {
         let msg = WsMessage {
-            r#type: "agent:message".to_string(),
-            session_id: "agent-sess-001".to_string(),
-            content: "Process this request".to_string(),
+            r#type: "bad type!".to_string(),
+            ..default_msg()
+        };
+        assert!(validate_ws_message(&msg).is_err());
+    }
+
+    #[test]
+    fn test_validate_session_id_too_long_fails() {
+        let msg = WsMessage {
+            r#type: "ping".to_string(),
+            session_id: "x".repeat(65),
+            ..default_msg()
+        };
+        assert!(validate_ws_message(&msg).is_err());
+    }
+
+    #[test]
+    fn test_validate_valid_message_passes() {
+        let msg = WsMessage {
+            r#type: "prompt".to_string(),
+            session_id: "abc-123".to_string(),
+            text: "hello".to_string(),
+            ..default_msg()
+        };
+        assert!(validate_ws_message(&msg).is_ok());
+    }
+
+    // ── pi_event_to_ws_json mapping ────────────────────────────────────────
+
+    #[test]
+    fn test_message_start_event() {
+        use pi::model::{AssistantMessage, Message};
+        let event = AgentEvent::MessageStart {
+            message: Message::Assistant(std::sync::Arc::new(AssistantMessage::default())),
+        };
+        let json = pi_event_to_ws_json(&event, "sid").unwrap();
+        let v: Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["type"], "message_start");
+        assert_eq!(v["sessionId"], "sid");
+        assert_eq!(v["message"]["role"], "assistant");
+    }
+
+    #[test]
+    fn test_message_update_text_delta() {
+        use pi::model::{AssistantMessage, ContentBlock, TextContent};
+
+        let partial = std::sync::Arc::new(AssistantMessage {
+            content: vec![ContentBlock::Text(TextContent::new("Hello"))],
+            ..AssistantMessage::default()
+        });
+
+        let event = AgentEvent::MessageUpdate {
+            message: pi::sdk::Message::Assistant(partial.clone()),
+            assistant_message_event: AssistantMessageEvent::TextDelta {
+                content_index: 0,
+                delta: "world".to_string(),
+                partial,
+            },
+        };
+
+        let json = pi_event_to_ws_json(&event, "sid").unwrap();
+        let v: Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["type"], "message_update");
+        assert_eq!(v["assistantMessageEvent"]["type"], "text_delta");
+        // message.content[0] should be { type: "text", text: "Hello" }
+        assert_eq!(v["message"]["content"][0]["type"], "text");
+        assert_eq!(v["message"]["content"][0]["text"], "Hello");
+    }
+
+    #[test]
+    fn test_message_end_event() {
+        use pi::model::AssistantMessage;
+
+        let event = AgentEvent::MessageEnd {
+            message: pi::sdk::Message::Assistant(std::sync::Arc::new(
+                AssistantMessage::default(),
+            )),
+        };
+        let json = pi_event_to_ws_json(&event, "sid").unwrap();
+        let v: Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["type"], "message_end");
+    }
+
+    #[test]
+    fn test_tool_execution_start_event() {
+        let event = AgentEvent::ToolExecutionStart {
+            tool_call_id: "tc-1".to_string(),
+            tool_name: "bash".to_string(),
+            args: json!({"command": "ls"}),
+        };
+        let json = pi_event_to_ws_json(&event, "sid").unwrap();
+        let v: Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["type"], "tool_execution_start");
+        assert_eq!(v["toolName"], "bash");
+        assert_eq!(v["toolCallId"], "tc-1");
+    }
+
+    #[test]
+    fn test_tool_execution_end_event() {
+        use pi::model::ContentBlock;
+        use pi::model::TextContent;
+        use pi::tools::ToolOutput;
+
+        let result = ToolOutput {
+            content: vec![ContentBlock::Text(TextContent::new("file.txt"))],
+            details: None,
+            is_error: false,
+        };
+        let event = AgentEvent::ToolExecutionEnd {
+            tool_call_id: "tc-1".to_string(),
+            tool_name: "ls".to_string(),
+            result,
+            is_error: false,
+        };
+        let json = pi_event_to_ws_json(&event, "sid").unwrap();
+        let v: Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["type"], "tool_execution_end");
+        assert_eq!(v["result"], "file.txt");
+        assert_eq!(v["isError"], false);
+    }
+
+    #[test]
+    fn test_agent_end_extracts_final_response() {
+        use pi::model::{AssistantMessage, ContentBlock, TextContent};
+        use pi::sdk::Message;
+
+        let am = AssistantMessage {
+            content: vec![ContentBlock::Text(TextContent::new("done"))],
+            ..AssistantMessage::default()
+        };
+        let event = AgentEvent::AgentEnd {
+            session_id: "sid".into(),
+            messages: vec![Message::Assistant(std::sync::Arc::new(am))],
+            error: None,
+        };
+        let json = pi_event_to_ws_json(&event, "sid").unwrap();
+        let v: Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["type"], "agent_end");
+        assert_eq!(v["sessionId"], "sid");
+        // final_response and error fields are not emitted in simplified agent_end
+    }
+
+    #[test]
+    fn test_turn_start_is_filtered() {
+        // TurnStart should return None — frontend doesn't need it
+        let event = AgentEvent::TurnStart {
+            session_id: "sid".into(),
+            turn_index: 0,
+            timestamp: 0,
+        };
+        assert!(pi_event_to_ws_json(&event, "sid").is_none());
+    }
+
+    #[test]
+    fn test_tool_output_text_extraction() {
+        use pi::model::{ContentBlock, TextContent};
+        use pi::tools::ToolOutput;
+
+        let output = ToolOutput {
+            content: vec![
+                ContentBlock::Text(TextContent::new("line1\n")),
+                ContentBlock::Text(TextContent::new("line2")),
+            ],
+            details: None,
+            is_error: false,
+        };
+        assert_eq!(tool_output_text(&output), "line1\nline2");
+    }
+
+    #[test]
+    fn test_ws_error_format() {
+        let frame = ws_error("something bad");
+        if let Message::Text(t) = frame {
+            let v: Value = serde_json::from_str(&t).unwrap();
+            assert_eq!(v["type"], "error");
+            assert_eq!(v["message"], "something bad");
+        } else {
+            panic!("expected Text frame");
+        }
+    }
+
+    // ─── helpers ───────────────────────────────────────────────────────────
+
+    fn default_msg() -> WsMessage {
+        WsMessage {
+            r#type: "ping".to_string(),
+            session_id: String::new(),
+            content: String::new(),
             text: String::new(),
             cwd: String::new(),
-            data: json!({"prompt": "What is 2+2?"}),
-        };
-
-        assert_eq!(msg.r#type, "agent:message");
-        assert!(!msg.session_id.is_empty());
-        assert!(!msg.content.is_empty());
-    }
-
-    #[test]
-    fn test_phase3_prompt_message() {
-        let json_str = r#"{
-            "type": "prompt",
-            "session_id": "sess-123",
-            "text": "List files in current directory"
-        }"#;
-
-        let msg: WsMessage = serde_json::from_str(json_str).unwrap();
-        assert_eq!(msg.r#type, "prompt");
-        assert_eq!(msg.session_id, "sess-123");
-        assert_eq!(msg.text, "List files in current directory");
-    }
-
-    #[test]
-    fn test_phase3_new_chat_message() {
-        let json_str = r#"{
-            "type": "new_chat",
-            "cwd": "/home/user/project"
-        }"#;
-
-        let msg: WsMessage = serde_json::from_str(json_str).unwrap();
-        assert_eq!(msg.r#type, "new_chat");
-        assert_eq!(msg.cwd, "/home/user/project");
-    }
-
-    #[test]
-    fn test_phase3_join_message() {
-        let json_str = r#"{
-            "type": "join",
-            "session_id": "sess-456"
-        }"#;
-
-        let msg: WsMessage = serde_json::from_str(json_str).unwrap();
-        assert_eq!(msg.r#type, "join");
-        assert_eq!(msg.session_id, "sess-456");
-    }
-
-    #[test]
-    fn test_agent_event_to_ws_message_start() {
-        let msg = agent_event_to_ws_message(&AgentEvent::MessageStart, "sess-123");
-        let json: Value = serde_json::from_str(&msg).unwrap();
-        assert_eq!(json["type"], "message_start");
-        assert_eq!(json["session_id"], "sess-123");
-    }
-
-    #[test]
-    fn test_agent_event_to_ws_message_delta() {
-        let event = AgentEvent::MessageDelta {
-            text: "Hello world".to_string(),
-        };
-        let msg = agent_event_to_ws_message(&event, "sess-123");
-        let json: Value = serde_json::from_str(&msg).unwrap();
-        assert_eq!(json["type"], "message_update");
-        assert_eq!(json["text"], "Hello world");
-    }
-
-    #[test]
-    fn test_agent_event_to_ws_message_tool_start() {
-        let event = AgentEvent::ToolExecutionStart {
-            tool_name: "bash".to_string(),
-            tool_id: "tool_1".to_string(),
-        };
-        let msg = agent_event_to_ws_message(&event, "sess-123");
-        let json: Value = serde_json::from_str(&msg).unwrap();
-        assert_eq!(json["type"], "tool_execution_start");
-        assert_eq!(json["tool_name"], "bash");
-        assert_eq!(json["tool_id"], "tool_1");
-    }
-
-    #[test]
-    fn test_agent_event_to_ws_message_end() {
-        let event = AgentEvent::AgentEnd {
-            final_response: "Done!".to_string(),
-        };
-        let msg = agent_event_to_ws_message(&event, "sess-123");
-        let json: Value = serde_json::from_str(&msg).unwrap();
-        assert_eq!(json["type"], "agent_end");
-        assert_eq!(json["final_response"], "Done!");
-    }
-
-    #[test]
-    fn test_agent_event_to_ws_message_error() {
-        let event = AgentEvent::Error {
-            message: "API key not found".to_string(),
-        };
-        let msg = agent_event_to_ws_message(&event, "sess-123");
-        let json: Value = serde_json::from_str(&msg).unwrap();
-        assert_eq!(json["type"], "error");
-        assert_eq!(json["error"], "API key not found");
+            data: json!({}),
+        }
     }
 }

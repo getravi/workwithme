@@ -1,0 +1,2156 @@
+//! Interactive TUI mode using charmed_rust (bubbletea/lipgloss/bubbles/glamour).
+//!
+//! This module provides the full interactive terminal interface for Pi,
+//! implementing the Elm Architecture for state management.
+//!
+//! ## Features
+//!
+//! - **Multi-line editor**: Full text area with line wrapping and history
+//! - **Viewport scrolling**: Scrollable conversation history with keyboard navigation
+//! - **Slash commands**: Built-in commands like /help, /clear, /model, /exit
+//! - **Token tracking**: Real-time cost and token usage display
+//! - **Markdown rendering**: Assistant responses rendered with syntax highlighting
+
+use asupersync::Cx;
+use asupersync::channel::mpsc;
+use asupersync::runtime::RuntimeHandle;
+use asupersync::sync::Mutex;
+use async_trait::async_trait;
+use bubbles::spinner::{SpinnerModel, TickMsg as SpinnerTickMsg, spinners};
+use bubbles::textarea::TextArea;
+use bubbles::viewport::Viewport;
+use bubbletea::{
+    Cmd, KeyMsg, KeyType, Message, Model as BubbleteaModel, Program, WindowSizeMsg, batch, quit,
+};
+use chrono::Utc;
+use crossterm::{cursor, terminal};
+use futures::future::BoxFuture;
+use glamour::StyleConfig as GlamourStyleConfig;
+use glob::Pattern;
+use serde_json::{Value, json};
+
+use std::collections::{HashMap, VecDeque};
+use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use crate::agent::{AbortHandle, Agent, AgentEvent, QueueMode};
+use crate::autocomplete::{AutocompleteCatalog, AutocompleteItem, AutocompleteItemKind};
+use crate::config::{Config, SettingsScope, parse_queue_mode_or_default};
+use crate::extension_events::{InputEventOutcome, apply_input_event_response};
+use crate::extensions::{
+    EXTENSION_EVENT_TIMEOUT_MS, ExtensionDeliverAs, ExtensionEventName, ExtensionHostActions,
+    ExtensionManager, ExtensionSendMessage, ExtensionSendUserMessage, ExtensionSession,
+    ExtensionUiRequest, ExtensionUiResponse,
+};
+use crate::keybindings::{AppAction, KeyBinding, KeyBindings};
+use crate::model::{
+    AssistantMessageEvent, ContentBlock, CustomMessage, ImageContent, Message as ModelMessage,
+    StopReason, TextContent, ThinkingLevel, Usage, UserContent, UserMessage,
+};
+use crate::models::{ModelEntry, ModelRegistry, default_models_path};
+use crate::package_manager::PackageManager;
+use crate::providers;
+use crate::resources::{DiagnosticKind, ResourceCliOptions, ResourceDiagnostic, ResourceLoader};
+use crate::session::{Session, SessionEntry, SessionMessage, bash_execution_to_text};
+use crate::theme::{Theme, TuiStyles};
+use crate::tools::{process_file_arguments, resolve_read_path};
+
+#[cfg(all(feature = "clipboard", feature = "image-resize"))]
+use arboard::Clipboard as ArboardClipboard;
+
+mod agent;
+mod commands;
+mod conversation;
+mod ext_session;
+mod file_refs;
+mod keybindings;
+mod model_selector_ui;
+mod perf;
+mod share;
+mod state;
+mod text_utils;
+mod tool_render;
+mod tree;
+mod tree_ui;
+mod view;
+
+use self::agent::{build_user_message, extension_commands_for_catalog};
+pub use self::commands::{
+    SlashCommand, model_entry_matches, parse_scoped_model_patterns, resolve_scoped_model_entries,
+    strip_thinking_level_suffix,
+};
+#[cfg(test)]
+use self::commands::{
+    api_key_login_prompt, format_login_provider_listing, format_resource_diagnostics, kind_rank,
+    normalize_api_key_input, normalize_auth_provider_input, remove_provider_credentials,
+    save_provider_credential,
+};
+use self::commands::{
+    format_startup_oauth_hint, parse_bash_command, parse_extension_command,
+    should_show_startup_oauth_hint,
+};
+use self::conversation::conversation_from_session;
+#[cfg(test)]
+use self::conversation::{
+    assistant_content_to_text, build_content_blocks_for_input, content_blocks_to_text,
+    split_content_blocks_for_input, tool_content_blocks_to_text, user_content_to_text,
+};
+use self::ext_session::{InteractiveExtensionHostActions, InteractiveExtensionSession};
+pub use self::ext_session::{format_extension_ui_prompt, parse_extension_ui_response};
+use self::file_refs::{
+    file_url_to_path, format_file_ref, is_file_ref_boundary, next_non_whitespace_token,
+    parse_quoted_file_ref, path_for_display, split_trailing_punct, strip_wrapping_quotes,
+    unescape_dragged_path,
+};
+use self::perf::{
+    CRITICAL_KEEP_MESSAGES, FrameTimingStats, MemoryLevel, MemoryMonitor, MessageRenderCache,
+    RenderBuffers, micros_as_u64,
+};
+#[cfg(test)]
+use self::state::TOOL_AUTO_COLLAPSE_THRESHOLD;
+pub use self::state::{AgentState, InputMode, PendingInput};
+use self::state::{
+    AutocompleteState, BranchPickerOverlay, CapabilityAction, CapabilityPromptOverlay, HistoryList,
+    InjectedMessageQueue, InteractiveMessageQueue, PendingLoginKind, PendingOAuth,
+    QueuedMessageKind, SessionPickerOverlay, SettingsUiEntry, SettingsUiState,
+    TOOL_COLLAPSE_PREVIEW_LINES, ThemePickerItem, ThemePickerOverlay, ToolProgress, format_count,
+};
+pub use self::state::{ConversationMessage, MessageRole};
+#[cfg(test)]
+use self::text_utils::push_line;
+use self::text_utils::{queued_message_preview, truncate};
+use self::tool_render::{format_tool_output, render_tool_message};
+#[cfg(test)]
+use self::tool_render::{pretty_json, split_diff_prefix};
+use self::tree::{
+    PendingTreeNavigation, TreeCustomPromptState, TreeSelectorState, TreeSummaryChoice,
+    TreeSummaryPromptState, TreeUiState, collect_tree_branch_entries,
+    resolve_tree_selector_initial_id, view_tree_ui,
+};
+
+// ============================================================================
+// Slash Commands
+// ============================================================================
+
+impl PiApp {
+    /// Returns true when the viewport is currently anchored to the tail of the
+    /// conversation content (i.e. the user has not scrolled away from the bottom).
+    fn is_at_bottom(&self) -> bool {
+        let content = self.build_conversation_content();
+        let trimmed = content.trim_end();
+        let line_count = trimmed.lines().count();
+        let visible_rows = self.view_effective_conversation_height().max(1);
+        if line_count <= visible_rows {
+            return true;
+        }
+        let max_offset = line_count.saturating_sub(visible_rows);
+        self.conversation_viewport.y_offset() >= max_offset
+    }
+
+    /// Rebuild viewport content after conversation state changes.
+    /// If `follow_tail` is true the viewport is scrolled to the very bottom;
+    /// otherwise the current scroll position is preserved.
+    fn refresh_conversation_viewport(&mut self, follow_tail: bool) {
+        let vp_start = if self.frame_timing.enabled {
+            Some(std::time::Instant::now())
+        } else {
+            None
+        };
+
+        // Capture scroll state before update if we aren't following tail.
+        // We want to maintain the distance from the bottom to keep the view stable
+        // if content is appended while the user is scrolled up.
+        let dist_from_bottom = if follow_tail {
+            None
+        } else {
+            let current_content_height = self.conversation_viewport.total_line_count();
+            let current_y_offset = self.conversation_viewport.y_offset();
+            Some(current_content_height.saturating_sub(current_y_offset))
+        };
+
+        let content = self.build_conversation_content();
+        let trimmed = content.trim_end();
+        let effective = self.view_effective_conversation_height().max(1);
+        self.conversation_viewport.height = effective;
+        self.conversation_viewport.set_content(trimmed);
+
+        if follow_tail {
+            self.conversation_viewport.goto_bottom();
+            self.follow_stream_tail = true;
+        } else if let Some(dist) = dist_from_bottom {
+            // Restore scroll position relative to the new bottom.
+            let new_content_height = trimmed.lines().count();
+            let new_y_offset = new_content_height.saturating_sub(dist);
+            self.conversation_viewport.set_y_offset(new_y_offset);
+        }
+
+        if let Some(start) = vp_start {
+            self.frame_timing
+                .record_viewport_sync(micros_as_u64(start.elapsed().as_micros()));
+        }
+    }
+
+    /// Scroll the conversation viewport to the bottom.
+    fn scroll_to_bottom(&mut self) {
+        self.refresh_conversation_viewport(true);
+    }
+
+    fn scroll_to_last_match(&mut self, needle: &str) {
+        let content = self.build_conversation_content();
+        let trimmed = content.trim_end();
+        let effective = self.view_effective_conversation_height().max(1);
+        self.conversation_viewport.height = effective;
+        self.conversation_viewport.set_content(trimmed);
+
+        let mut last_index = None;
+        for (idx, line) in trimmed.lines().enumerate() {
+            if line.contains(needle) {
+                last_index = Some(idx);
+            }
+        }
+
+        if let Some(idx) = last_index {
+            self.conversation_viewport.set_y_offset(idx);
+            self.follow_stream_tail = false;
+        } else {
+            self.conversation_viewport.goto_bottom();
+            self.follow_stream_tail = true;
+        }
+    }
+
+    fn apply_theme(&mut self, theme: Theme) {
+        self.theme = theme;
+        self.styles = self.theme.tui_styles();
+        self.markdown_style = self.theme.glamour_style_config();
+        if let Some(indent) = self
+            .config
+            .markdown
+            .as_ref()
+            .and_then(|m| m.code_block_indent)
+        {
+            self.markdown_style.code_block.block.margin = Some(indent as usize);
+        }
+        self.spinner =
+            SpinnerModel::with_spinner(spinners::dot()).style(self.styles.accent.clone());
+
+        self.message_render_cache.invalidate_all();
+        let content = self.build_conversation_content();
+        let effective = self.view_effective_conversation_height().max(1);
+        self.conversation_viewport.height = effective;
+        self.conversation_viewport.set_content(content.trim_end());
+    }
+
+    fn persist_project_theme(&self, theme_name: &str) -> crate::error::Result<()> {
+        let settings_path = self.cwd.join(Config::project_dir()).join("settings.json");
+        let mut settings = if settings_path.exists() {
+            let content = std::fs::read_to_string(&settings_path)?;
+            serde_json::from_str::<Value>(&content)?
+        } else {
+            json!({})
+        };
+
+        let obj = settings.as_object_mut().ok_or_else(|| {
+            crate::error::Error::config(format!(
+                "Settings file is not a JSON object: {}",
+                settings_path.display()
+            ))
+        })?;
+        obj.insert("theme".to_string(), Value::String(theme_name.to_string()));
+
+        if let Some(parent) = settings_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(settings_path, serde_json::to_string_pretty(&settings)?)?;
+        Ok(())
+    }
+
+    fn apply_queue_modes(&self, steering_mode: QueueMode, follow_up_mode: QueueMode) {
+        if let Ok(mut queue) = self.message_queue.lock() {
+            queue.set_modes(steering_mode, follow_up_mode);
+        }
+
+        if let Ok(mut agent_guard) = self.agent.try_lock() {
+            agent_guard.set_queue_modes(steering_mode, follow_up_mode);
+            return;
+        }
+
+        let agent = Arc::clone(&self.agent);
+        let runtime_handle = self.runtime_handle.clone();
+        runtime_handle.spawn(async move {
+            let cx = Cx::for_request();
+            if let Ok(mut agent_guard) = agent.lock(&cx).await {
+                agent_guard.set_queue_modes(steering_mode, follow_up_mode);
+            }
+        });
+    }
+
+    fn toggle_queue_mode_setting(&mut self, entry: SettingsUiEntry) {
+        let (key, current) = match entry {
+            SettingsUiEntry::SteeringMode => ("steeringMode", self.config.steering_queue_mode()),
+            SettingsUiEntry::FollowUpMode => ("followUpMode", self.config.follow_up_queue_mode()),
+            _ => return,
+        };
+
+        let next = match current {
+            QueueMode::All => QueueMode::OneAtATime,
+            QueueMode::OneAtATime => QueueMode::All,
+        };
+
+        let patch = match entry {
+            SettingsUiEntry::SteeringMode => json!({ "steeringMode": next.as_str() }),
+            SettingsUiEntry::FollowUpMode => json!({ "followUpMode": next.as_str() }),
+            _ => json!({}),
+        };
+
+        let global_dir = Config::global_dir();
+        if let Err(err) =
+            Config::patch_settings_with_roots(SettingsScope::Project, &global_dir, &self.cwd, patch)
+        {
+            self.status_message = Some(format!("Failed to update {key}: {err}"));
+            return;
+        }
+
+        match entry {
+            SettingsUiEntry::SteeringMode => {
+                self.config.steering_mode = Some(next.as_str().to_string());
+            }
+            SettingsUiEntry::FollowUpMode => {
+                self.config.follow_up_mode = Some(next.as_str().to_string());
+            }
+            _ => {}
+        }
+
+        let steering_mode = self.config.steering_queue_mode();
+        let follow_up_mode = self.config.follow_up_queue_mode();
+        self.apply_queue_modes(steering_mode, follow_up_mode);
+        self.status_message = Some(format!("Updated {key}: {}", next.as_str()));
+    }
+
+    fn persist_project_settings_patch(&mut self, key: &str, patch: Value) -> bool {
+        let global_dir = Config::global_dir();
+        if let Err(err) =
+            Config::patch_settings_with_roots(SettingsScope::Project, &global_dir, &self.cwd, patch)
+        {
+            self.status_message = Some(format!("Failed to update {key}: {err}"));
+            return false;
+        }
+        true
+    }
+
+    fn effective_show_hardware_cursor(&self) -> bool {
+        self.config.show_hardware_cursor.unwrap_or_else(|| {
+            std::env::var("PI_HARDWARE_CURSOR")
+                .ok()
+                .is_some_and(|val| val == "1")
+        })
+    }
+
+    fn apply_hardware_cursor(show: bool) {
+        let mut stdout = std::io::stdout();
+        if show {
+            let _ = crossterm::execute!(stdout, cursor::Show);
+        } else {
+            let _ = crossterm::execute!(stdout, cursor::Hide);
+        }
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn toggle_settings_entry(&mut self, entry: SettingsUiEntry) {
+        match entry {
+            SettingsUiEntry::SteeringMode | SettingsUiEntry::FollowUpMode => {
+                self.toggle_queue_mode_setting(entry);
+            }
+            SettingsUiEntry::QuietStartup => {
+                let next = !self.config.quiet_startup.unwrap_or(false);
+                if self.persist_project_settings_patch(
+                    "quietStartup",
+                    json!({ "quiet_startup": next }),
+                ) {
+                    self.config.quiet_startup = Some(next);
+                    self.status_message =
+                        Some(format!("Updated quietStartup: {}", bool_label(next)));
+                }
+            }
+            SettingsUiEntry::CollapseChangelog => {
+                let next = !self.config.collapse_changelog.unwrap_or(false);
+                if self.persist_project_settings_patch(
+                    "collapseChangelog",
+                    json!({ "collapse_changelog": next }),
+                ) {
+                    self.config.collapse_changelog = Some(next);
+                    self.status_message =
+                        Some(format!("Updated collapseChangelog: {}", bool_label(next)));
+                }
+            }
+            SettingsUiEntry::HideThinkingBlock => {
+                let next = !self.config.hide_thinking_block.unwrap_or(false);
+                if self.persist_project_settings_patch(
+                    "hideThinkingBlock",
+                    json!({ "hide_thinking_block": next }),
+                ) {
+                    self.config.hide_thinking_block = Some(next);
+                    self.thinking_visible = !next;
+                    self.message_render_cache.invalidate_all();
+                    self.scroll_to_bottom();
+                    self.status_message =
+                        Some(format!("Updated hideThinkingBlock: {}", bool_label(next)));
+                }
+            }
+            SettingsUiEntry::ShowHardwareCursor => {
+                let next = !self.effective_show_hardware_cursor();
+                if self.persist_project_settings_patch(
+                    "showHardwareCursor",
+                    json!({ "show_hardware_cursor": next }),
+                ) {
+                    self.config.show_hardware_cursor = Some(next);
+                    Self::apply_hardware_cursor(next);
+                    self.status_message =
+                        Some(format!("Updated showHardwareCursor: {}", bool_label(next)));
+                }
+            }
+            SettingsUiEntry::DoubleEscapeAction => {
+                let current = self
+                    .config
+                    .double_escape_action
+                    .as_deref()
+                    .unwrap_or("tree");
+                let next = if current.eq_ignore_ascii_case("tree") {
+                    "fork"
+                } else {
+                    "tree"
+                };
+                if self.persist_project_settings_patch(
+                    "doubleEscapeAction",
+                    json!({ "double_escape_action": next }),
+                ) {
+                    self.config.double_escape_action = Some(next.to_string());
+                    self.status_message = Some(format!("Updated doubleEscapeAction: {next}"));
+                }
+            }
+            SettingsUiEntry::EditorPaddingX => {
+                let current = self.editor_padding_x.min(3);
+                let next = match current {
+                    0 => 1,
+                    1 => 2,
+                    2 => 3,
+                    _ => 0,
+                };
+                if self.persist_project_settings_patch(
+                    "editorPaddingX",
+                    json!({ "editor_padding_x": next }),
+                ) {
+                    self.config.editor_padding_x = u32::try_from(next).ok();
+                    self.editor_padding_x = next;
+                    self.input
+                        .set_width(self.term_width.saturating_sub(4 + self.editor_padding_x));
+                    self.scroll_to_bottom();
+                    self.status_message = Some(format!("Updated editorPaddingX: {next}"));
+                }
+            }
+            SettingsUiEntry::AutocompleteMaxVisible => {
+                let cycle = [3usize, 5, 8, 10, 12, 15, 20];
+                let current = self.autocomplete.max_visible;
+                let next = cycle
+                    .iter()
+                    .position(|value| *value == current)
+                    .map_or(cycle[0], |idx| cycle[(idx + 1) % cycle.len()]);
+                if self.persist_project_settings_patch(
+                    "autocompleteMaxVisible",
+                    json!({ "autocomplete_max_visible": next }),
+                ) {
+                    self.config.autocomplete_max_visible = u32::try_from(next).ok();
+                    self.autocomplete.max_visible = next;
+                    self.status_message = Some(format!("Updated autocompleteMaxVisible: {next}"));
+                }
+            }
+            SettingsUiEntry::Theme => {
+                self.settings_ui = None;
+                self.theme_picker = Some(ThemePickerOverlay::new(&self.cwd));
+            }
+            SettingsUiEntry::Summary => {}
+        }
+    }
+
+    // ========================================================================
+    // Memory pressure actions (PERF-6)
+    // ========================================================================
+
+    /// Run memory pressure actions: progressive collapse (Pressure) and
+    /// conversation truncation (Critical). Called from update_inner().
+    fn run_memory_pressure_actions(&mut self) {
+        let level = self.memory_monitor.level;
+
+        // Progressive collapse: one tool output per second, oldest first.
+        if self.memory_monitor.collapsing
+            && self.memory_monitor.last_collapse.elapsed() >= std::time::Duration::from_secs(1)
+        {
+            if let Some(idx) = self.find_next_uncollapsed_tool_output() {
+                self.messages[idx].collapsed = true;
+                let placeholder = "[tool output collapsed due to memory pressure]".to_string();
+                self.messages[idx].content = placeholder;
+                self.messages[idx].thinking = None;
+                self.memory_monitor.next_collapse_index = idx + 1;
+                self.memory_monitor.last_collapse = std::time::Instant::now();
+                self.memory_monitor.resample_now();
+            } else {
+                self.memory_monitor.collapsing = false;
+            }
+        }
+
+        // Pressure level: remove thinking from messages older than last 10 turns.
+        if level == MemoryLevel::Pressure || level == MemoryLevel::Critical {
+            let msg_count = self.messages.len();
+            if msg_count > 10 {
+                for msg in &mut self.messages[..msg_count - 10] {
+                    if msg.thinking.is_some() {
+                        msg.thinking = None;
+                    }
+                }
+            }
+        }
+
+        // Critical: truncate old messages (keep last CRITICAL_KEEP_MESSAGES).
+        if level == MemoryLevel::Critical && !self.memory_monitor.truncated {
+            let msg_count = self.messages.len();
+            if msg_count > CRITICAL_KEEP_MESSAGES {
+                let remove_count = msg_count - CRITICAL_KEEP_MESSAGES;
+                self.messages.drain(..remove_count);
+                self.messages.insert(
+                    0,
+                    ConversationMessage::new(
+                        MessageRole::System,
+                        "[conversation history truncated due to memory pressure — see session file for full history]".to_string(),
+                        None,
+                    ),
+                );
+                self.memory_monitor.next_collapse_index = 0;
+                self.message_render_cache.clear();
+            }
+            self.memory_monitor.truncated = true;
+            self.memory_monitor.resample_now();
+        }
+    }
+
+    /// Find the next uncollapsed Tool message starting from `next_collapse_index`.
+    fn find_next_uncollapsed_tool_output(&self) -> Option<usize> {
+        let start = self.memory_monitor.next_collapse_index;
+        (start..self.messages.len())
+            .find(|&i| self.messages[i].role == MessageRole::Tool && !self.messages[i].collapsed)
+    }
+
+    fn format_settings_summary(&self) -> String {
+        let theme_setting = self
+            .config
+            .theme
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let theme_setting = if theme_setting.is_empty() {
+            "(default)".to_string()
+        } else {
+            theme_setting
+        };
+
+        let compaction_enabled = self.config.compaction_enabled();
+        let reserve_tokens = self.config.compaction_reserve_tokens();
+        let keep_recent = self.config.compaction_keep_recent_tokens();
+        let steering = self.config.steering_queue_mode();
+        let follow_up = self.config.follow_up_queue_mode();
+        let quiet_startup = self.config.quiet_startup.unwrap_or(false);
+        let collapse_changelog = self.config.collapse_changelog.unwrap_or(false);
+        let hide_thinking_block = self.config.hide_thinking_block.unwrap_or(false);
+        let show_hardware_cursor = self.effective_show_hardware_cursor();
+        let double_escape_action = self
+            .config
+            .double_escape_action
+            .as_deref()
+            .unwrap_or("tree");
+
+        let mut output = String::new();
+        let _ = writeln!(output, "Settings:");
+        let _ = writeln!(
+            output,
+            "  theme: {} (config: {})",
+            self.theme.name, theme_setting
+        );
+        let _ = writeln!(output, "  model: {}", self.model);
+        let _ = writeln!(
+            output,
+            "  compaction: {compaction_enabled} (reserve={reserve_tokens}, keepRecent={keep_recent})"
+        );
+        let _ = writeln!(output, "  steeringMode: {}", steering.as_str());
+        let _ = writeln!(output, "  followUpMode: {}", follow_up.as_str());
+        let _ = writeln!(output, "  quietStartup: {}", bool_label(quiet_startup));
+        let _ = writeln!(
+            output,
+            "  collapseChangelog: {}",
+            bool_label(collapse_changelog)
+        );
+        let _ = writeln!(
+            output,
+            "  hideThinkingBlock: {}",
+            bool_label(hide_thinking_block)
+        );
+        let _ = writeln!(
+            output,
+            "  showHardwareCursor: {}",
+            bool_label(show_hardware_cursor)
+        );
+        let _ = writeln!(output, "  doubleEscapeAction: {double_escape_action}");
+        let _ = writeln!(output, "  editorPaddingX: {}", self.editor_padding_x);
+        let _ = writeln!(
+            output,
+            "  autocompleteMaxVisible: {}",
+            self.autocomplete.max_visible
+        );
+        let _ = writeln!(
+            output,
+            "  skillCommands: {}",
+            if self.config.enable_skill_commands() {
+                "enabled"
+            } else {
+                "disabled"
+            }
+        );
+
+        let _ = writeln!(output, "\nResources:");
+        let _ = writeln!(output, "  skills: {}", self.resources.skills().len());
+        let _ = writeln!(output, "  prompts: {}", self.resources.prompts().len());
+        let _ = writeln!(output, "  themes: {}", self.resources.themes().len());
+
+        let skill_diags = self.resources.skill_diagnostics().len();
+        let prompt_diags = self.resources.prompt_diagnostics().len();
+        let theme_diags = self.resources.theme_diagnostics().len();
+        if skill_diags + prompt_diags + theme_diags > 0 {
+            let _ = writeln!(output, "\nDiagnostics:");
+            let _ = writeln!(output, "  skills: {skill_diags}");
+            let _ = writeln!(output, "  prompts: {prompt_diags}");
+            let _ = writeln!(output, "  themes: {theme_diags}");
+        }
+
+        output
+    }
+
+    fn default_export_path(&self, session: &Session) -> PathBuf {
+        if let Some(path) = session.path.as_ref() {
+            let stem = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("session");
+            return self.cwd.join(format!("pi-session-{stem}.html"));
+        }
+        let id = crate::session_picker::truncate_session_id(&session.header.id, 8);
+        self.cwd.join(format!("pi-session-unsaved-{id}.html"))
+    }
+
+    fn resolve_output_path(&self, raw: &str) -> PathBuf {
+        let raw = raw.trim();
+        if raw.is_empty() {
+            return self.cwd.join("pi-session.html");
+        }
+        let path = PathBuf::from(raw);
+        if path.is_absolute() {
+            path
+        } else {
+            self.cwd.join(path)
+        }
+    }
+
+    fn spawn_save_session(&self) {
+        if !self.save_enabled {
+            return;
+        }
+
+        let session = Arc::clone(&self.session);
+        let event_tx = self.event_tx.clone();
+        let runtime_handle = self.runtime_handle.clone();
+        runtime_handle.spawn(async move {
+            let cx = Cx::for_request();
+
+            let mut session_guard = match session.lock(&cx).await {
+                Ok(guard) => guard,
+                Err(err) => {
+                    let _ = event_tx
+                        .try_send(PiMsg::AgentError(format!("Failed to lock session: {err}")));
+                    return;
+                }
+            };
+
+            if let Err(err) = session_guard.save().await {
+                let _ =
+                    event_tx.try_send(PiMsg::AgentError(format!("Failed to save session: {err}")));
+            }
+        });
+    }
+
+    fn maybe_trigger_autocomplete(&mut self) {
+        if self.agent_state != AgentState::Idle
+            || self.session_picker.is_some()
+            || self.settings_ui.is_some()
+        {
+            self.autocomplete.close();
+            return;
+        }
+
+        let text = self.input.value();
+        if text.trim().is_empty() {
+            self.autocomplete.close();
+            return;
+        }
+
+        // Autocomplete provider expects a byte offset cursor.
+        let cursor = self.input.cursor_byte_offset();
+        let response = self.autocomplete.provider.suggest(&text, cursor);
+        // Path completion is Tab-triggered to avoid noisy dropdowns for URL-like tokens.
+        if response
+            .items
+            .iter()
+            .all(|item| item.kind == AutocompleteItemKind::Path)
+        {
+            self.autocomplete.close();
+            return;
+        }
+        self.autocomplete.open_with(response);
+    }
+
+    fn trigger_autocomplete(&mut self) {
+        self.maybe_trigger_autocomplete();
+    }
+
+    /// Compute the conversation viewport height based on the current UI chrome.
+    ///
+    /// This delegates to [`view_effective_conversation_height`] so viewport
+    /// scroll math stays aligned with the rows actually rendered in `view()`.
+    fn conversation_viewport_height(&self) -> usize {
+        self.view_effective_conversation_height()
+    }
+
+    /// Return whether the generic "Processing..." spinner row should be shown.
+    ///
+    /// Once provider text/thinking deltas are streaming, that output already
+    /// acts as progress feedback; suppressing the extra animated status row
+    /// reduces redraw churn and visible flicker.
+    fn show_processing_status_spinner(&self) -> bool {
+        if self.agent_state == AgentState::Idle || self.current_tool.is_some() {
+            return false;
+        }
+
+        let has_visible_stream_progress = !self.current_response.is_empty()
+            || (self.thinking_visible && !self.current_thinking.is_empty());
+        !has_visible_stream_progress
+    }
+
+    /// Return whether any spinner row is currently visible in `view()`.
+    ///
+    /// The spinner is rendered either for tool execution progress, or for the
+    /// generic processing state before visible stream output appears.
+    fn spinner_visible(&self) -> bool {
+        if self.agent_state == AgentState::Idle {
+            return false;
+        }
+        self.current_tool.is_some() || self.show_processing_status_spinner()
+    }
+
+    /// Compute the effective conversation viewport height for the current
+    /// render frame, accounting for conditional chrome (scroll indicator,
+    /// tool status, status message) that reduce available space.
+    ///
+    /// Used in [`view()`] for conversation line slicing so the total output
+    /// never exceeds `term_height` rows.  The stored
+    /// `conversation_viewport.height` still drives scroll-position management.
+    fn view_effective_conversation_height(&self) -> usize {
+        // Fixed chrome:
+        // header(4) = title/model + hints + resources + spacer line
+        // footer(2) = blank line + footer line
+        let mut chrome: usize = 4 + 2;
+
+        // Budget 1 row for the scroll indicator.  Slightly conservative
+        // when content is short, but prevents the off-by-one that triggers
+        // terminal scrolling.
+        chrome += 1;
+
+        // Tool status: "\n  spinner Running {tool} ...\n" = 2 rows.
+        if self.current_tool.is_some() {
+            chrome += 2;
+        }
+
+        // Status message: "\n  {status}\n" = 2 rows.
+        if self.status_message.is_some() {
+            chrome += 2;
+        }
+
+        // Capability prompt overlay: ~8 lines (title, ext name, desc, blank, buttons, timer, help, blank).
+        if self.capability_prompt.is_some() {
+            chrome += 8;
+        }
+
+        // Branch picker overlay: header + N visible branches + help line + padding.
+        if let Some(ref picker) = self.branch_picker {
+            let visible = picker.branches.len().min(picker.max_visible);
+            chrome += 3 + visible + 2; // title + header + separator + items + help + blank
+        }
+
+        // Input area vs processing spinner.
+        let show_input = self.agent_state == AgentState::Idle
+            && self.session_picker.is_none()
+            && self.settings_ui.is_none()
+            && self.theme_picker.is_none()
+            && self.capability_prompt.is_none()
+            && self.branch_picker.is_none()
+            && self.model_selector.is_none();
+
+        if show_input {
+            // render_input: "\n  header\n" (2 rows) + input.height() rows.
+            chrome += 2 + self.input.height();
+        } else if self.show_processing_status_spinner() {
+            // Processing spinner: "\n  spinner Processing...\n" = 2 rows.
+            chrome += 2;
+        }
+
+        self.term_height.saturating_sub(chrome)
+    }
+
+    /// Set the input area height and recalculate the conversation viewport
+    /// so the total layout fits the terminal.
+    fn set_input_height(&mut self, h: usize) {
+        self.input.set_height(h);
+        self.resize_conversation_viewport();
+    }
+
+    /// Rebuild the conversation viewport after a height change (terminal resize or
+    /// input area growth). Preserves mouse-wheel settings and scroll position.
+    fn resize_conversation_viewport(&mut self) {
+        let viewport_height = self.conversation_viewport_height();
+        let mut viewport = Viewport::new(self.term_width.saturating_sub(2), viewport_height);
+        viewport.mouse_wheel_enabled = true;
+        viewport.mouse_wheel_delta = 3;
+        self.conversation_viewport = viewport;
+        self.scroll_to_bottom();
+    }
+
+    pub fn set_terminal_size(&mut self, width: usize, height: usize) {
+        let test_mode = std::env::var_os("PI_TEST_MODE").is_some();
+        let previous_height = self.term_height;
+        self.term_width = width.max(1);
+        self.term_height = height.max(1);
+        self.input
+            .set_width(self.term_width.saturating_sub(4 + self.editor_padding_x));
+
+        if !test_mode
+            && self.term_height < previous_height
+            && self.config.terminal_clear_on_shrink()
+        {
+            let _ = crossterm::execute!(
+                std::io::stdout(),
+                terminal::Clear(terminal::ClearType::Purge)
+            );
+        }
+
+        self.message_render_cache.invalidate_all();
+        self.resize_conversation_viewport();
+    }
+
+    fn accept_autocomplete(&mut self, item: &AutocompleteItem) {
+        let text = self.input.value();
+        let range = self.autocomplete.replace_range.clone();
+
+        // Guard against stale range if editor content changed since autocomplete was triggered.
+        let mut start = range.start.min(text.len());
+        while start > 0 && !text.is_char_boundary(start) {
+            start -= 1;
+        }
+        let mut end = range.end.min(text.len()).max(start);
+        while end < text.len() && !text.is_char_boundary(end) {
+            end += 1;
+        }
+
+        let mut new_text = String::with_capacity(text.len().saturating_add(item.insert.len()));
+        new_text.push_str(&text[..start]);
+        new_text.push_str(&item.insert);
+        new_text.push_str(&text[end..]);
+
+        self.input.set_value(&new_text);
+        self.input.cursor_end();
+    }
+
+    fn extract_file_references(&mut self, message: &str) -> (String, Vec<String>) {
+        let mut cleaned = String::with_capacity(message.len());
+        let mut file_args = Vec::new();
+        let mut idx = 0usize;
+
+        while idx < message.len() {
+            let ch = message[idx..].chars().next().unwrap_or(' ');
+            if ch == '@' && is_file_ref_boundary(message, idx) {
+                let token_start = idx + ch.len_utf8();
+                let parsed = parse_quoted_file_ref(message, token_start);
+                let (path, trailing, token_end) = parsed.unwrap_or_else(|| {
+                    let (token, token_end) = next_non_whitespace_token(message, token_start);
+                    let (path, trailing) = split_trailing_punct(token);
+                    (path.to_string(), trailing.to_string(), token_end)
+                });
+
+                if !path.is_empty() {
+                    let resolved =
+                        self.autocomplete
+                            .provider
+                            .resolve_file_ref(&path)
+                            .or_else(|| {
+                                let resolved_path = resolve_read_path(&path, &self.cwd);
+                                resolved_path.exists().then(|| path.clone())
+                            });
+
+                    if let Some(resolved) = resolved {
+                        file_args.push(resolved);
+                        if !trailing.is_empty()
+                            && cleaned.chars().last().is_some_and(char::is_whitespace)
+                        {
+                            cleaned.pop();
+                        }
+                        cleaned.push_str(&trailing);
+                        idx = token_end;
+                        continue;
+                    }
+                }
+            }
+
+            cleaned.push(ch);
+            idx += ch.len_utf8();
+        }
+
+        (cleaned, file_args)
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn load_session_from_path(&mut self, path: &str) -> Option<Cmd> {
+        let path = path.to_string();
+        let session = Arc::clone(&self.session);
+        let agent = Arc::clone(&self.agent);
+        let extensions = self.extensions.clone();
+        let event_tx = self.event_tx.clone();
+        let runtime_handle = self.runtime_handle.clone();
+
+        let (session_dir, previous_session_file) = {
+            let Ok(guard) = self.session.try_lock() else {
+                self.status_message = Some("Session busy; try again".to_string());
+                return None;
+            };
+            (
+                guard.session_dir.clone(),
+                guard.path.as_ref().map(|p| p.display().to_string()),
+            )
+        };
+
+        runtime_handle.spawn(async move {
+            let cx = Cx::for_request();
+
+            if let Some(manager) = extensions.clone() {
+                let cancelled = manager
+                    .dispatch_cancellable_event(
+                        ExtensionEventName::SessionBeforeSwitch,
+                        Some(json!({
+                            "reason": "resume",
+                            "targetSessionFile": path.clone(),
+                        })),
+                        EXTENSION_EVENT_TIMEOUT_MS,
+                    )
+                    .await
+                    .unwrap_or(false);
+                if cancelled {
+                    let _ = event_tx.try_send(PiMsg::System(
+                        "Session switch cancelled by extension".to_string(),
+                    ));
+                    return;
+                }
+            }
+
+            let mut loaded_session = match Session::open(&path).await {
+                Ok(session) => session,
+                Err(err) => {
+                    let _ = event_tx
+                        .try_send(PiMsg::AgentError(format!("Failed to open session: {err}")));
+                    return;
+                }
+            };
+            let new_session_id = loaded_session.header.id.clone();
+            loaded_session.session_dir = session_dir;
+
+            let messages_for_agent = loaded_session.to_messages_for_current_path();
+
+            // Replace the session.
+            {
+                let mut session_guard = match session.lock(&cx).await {
+                    Ok(guard) => guard,
+                    Err(err) => {
+                        let _ = event_tx
+                            .try_send(PiMsg::AgentError(format!("Failed to lock session: {err}")));
+                        return;
+                    }
+                };
+                *session_guard = loaded_session;
+            }
+
+            // Update the agent messages.
+            {
+                let mut agent_guard = match agent.lock(&cx).await {
+                    Ok(guard) => guard,
+                    Err(err) => {
+                        let _ = event_tx
+                            .try_send(PiMsg::AgentError(format!("Failed to lock agent: {err}")));
+                        return;
+                    }
+                };
+                agent_guard.replace_messages(messages_for_agent);
+            }
+
+            let (messages, usage) = {
+                let session_guard = match session.lock(&cx).await {
+                    Ok(guard) => guard,
+                    Err(err) => {
+                        let _ = event_tx
+                            .try_send(PiMsg::AgentError(format!("Failed to lock session: {err}")));
+                        return;
+                    }
+                };
+                conversation_from_session(&session_guard)
+            };
+
+            let _ = event_tx.try_send(PiMsg::ConversationReset {
+                messages,
+                usage,
+                status: Some("Session resumed".to_string()),
+            });
+
+            if let Some(manager) = extensions {
+                let _ = manager
+                    .dispatch_event(
+                        ExtensionEventName::SessionSwitch,
+                        Some(json!({
+                            "reason": "resume",
+                            "previousSessionFile": previous_session_file,
+                            "targetSessionFile": path,
+                            "sessionId": new_session_id,
+                        })),
+                    )
+                    .await;
+            }
+        });
+
+        self.status_message = Some("Loading session...".to_string());
+        None
+    }
+}
+
+const fn bool_label(value: bool) -> &'static str {
+    if value { "on" } else { "off" }
+}
+
+/// Run the interactive mode.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_interactive(
+    agent: Agent,
+    session: Arc<Mutex<Session>>,
+    config: Config,
+    model_entry: ModelEntry,
+    model_scope: Vec<ModelEntry>,
+    available_models: Vec<ModelEntry>,
+    pending_inputs: Vec<PendingInput>,
+    save_enabled: bool,
+    resources: ResourceLoader,
+    resource_cli: ResourceCliOptions,
+    extensions: Option<ExtensionManager>,
+    cwd: PathBuf,
+    runtime_handle: RuntimeHandle,
+) -> anyhow::Result<()> {
+    let show_hardware_cursor = config.show_hardware_cursor.unwrap_or_else(|| {
+        std::env::var("PI_HARDWARE_CURSOR")
+            .ok()
+            .is_some_and(|val| val == "1")
+    });
+    let mut stdout = std::io::stdout();
+    if show_hardware_cursor {
+        let _ = crossterm::execute!(stdout, cursor::Show);
+    } else {
+        let _ = crossterm::execute!(stdout, cursor::Hide);
+    }
+
+    let (event_tx, mut event_rx) = mpsc::channel::<PiMsg>(1024);
+    let (ui_tx, ui_rx) = std::sync::mpsc::channel::<Message>();
+
+    runtime_handle.spawn(async move {
+        let cx = Cx::for_request();
+        while let Ok(msg) = event_rx.recv(&cx).await {
+            if matches!(msg, PiMsg::UiShutdown) {
+                break;
+            }
+            let _ = ui_tx.send(Message::new(msg));
+        }
+    });
+
+    let extensions = extensions;
+
+    if let Some(manager) = &extensions {
+        let (extension_ui_tx, mut extension_ui_rx) = mpsc::channel::<ExtensionUiRequest>(64);
+        manager.set_ui_sender(extension_ui_tx);
+
+        let extension_event_tx = event_tx.clone();
+        runtime_handle.spawn(async move {
+            let cx = Cx::for_request();
+            while let Ok(request) = extension_ui_rx.recv(&cx).await {
+                let _ = extension_event_tx.try_send(PiMsg::ExtensionUiRequest(request));
+            }
+        });
+    }
+
+    let (messages, usage) = {
+        let cx = Cx::for_request();
+        let guard = session
+            .lock(&cx)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to lock session: {e}"))?;
+        conversation_from_session(&guard)
+    };
+
+    let app = PiApp::new(
+        agent,
+        session,
+        config,
+        resources,
+        resource_cli,
+        cwd,
+        model_entry,
+        model_scope,
+        available_models,
+        pending_inputs,
+        event_tx,
+        runtime_handle,
+        save_enabled,
+        extensions,
+        None,
+        messages,
+        usage,
+    );
+
+    Program::new(app)
+        .with_alt_screen()
+        .with_input_receiver(ui_rx)
+        .run()?;
+
+    let _ = crossterm::execute!(std::io::stdout(), cursor::Show);
+    println!("Goodbye!");
+    Ok(())
+}
+
+/// Custom message types for async agent events.
+#[derive(Debug, Clone)]
+pub enum PiMsg {
+    /// Agent started processing.
+    AgentStart,
+    /// Trigger processing of the next queued input (CLI startup messages).
+    RunPending,
+    /// Enqueue a pending input (extensions may inject while idle).
+    EnqueuePendingInput(PendingInput),
+    /// Internal: shut down the async→UI message bridge (used for clean exit).
+    UiShutdown,
+    /// Text delta from assistant.
+    TextDelta(String),
+    /// Thinking delta from assistant.
+    ThinkingDelta(String),
+    /// Tool execution started.
+    ToolStart { name: String, tool_id: String },
+    /// Tool execution update (streaming output).
+    ToolUpdate {
+        name: String,
+        tool_id: String,
+        content: Vec<ContentBlock>,
+        details: Option<Value>,
+    },
+    /// Tool execution ended.
+    ToolEnd {
+        name: String,
+        tool_id: String,
+        is_error: bool,
+    },
+    /// Agent finished with final message.
+    AgentDone {
+        usage: Option<Usage>,
+        stop_reason: StopReason,
+        error_message: Option<String>,
+    },
+    /// Agent error.
+    AgentError(String),
+    /// Credentials changed for a provider; refresh in-memory provider auth state.
+    CredentialUpdated { provider: String },
+    /// Non-error system message.
+    System(String),
+    /// System note that does not mutate agent state (safe during streaming).
+    SystemNote(String),
+    /// Update last user message content (input transform/redaction).
+    UpdateLastUserMessage(String),
+    /// Bash command result (non-agent).
+    BashResult {
+        display: String,
+        content_for_agent: Option<Vec<ContentBlock>>,
+    },
+    /// Replace conversation state from session (compaction/fork).
+    ConversationReset {
+        messages: Vec<ConversationMessage>,
+        usage: Usage,
+        status: Option<String>,
+    },
+    /// Set the editor contents (used by /tree selection of user/custom messages).
+    SetEditorText(String),
+    /// Reloaded skills/prompts/themes/extensions.
+    ResourcesReloaded {
+        resources: ResourceLoader,
+        status: String,
+        diagnostics: Option<String>,
+    },
+    /// Extension UI request (select/confirm/input/editor/notify).
+    ExtensionUiRequest(ExtensionUiRequest),
+    /// Extension command finished execution.
+    ExtensionCommandDone {
+        command: String,
+        display: String,
+        is_error: bool,
+    },
+}
+
+/// Read the current git branch from `.git/HEAD` in the given directory.
+///
+/// Returns `Some("branch-name")` for a normal branch,
+/// `Some("abc1234")` (7-char short SHA) for detached HEAD,
+/// or `None` if not in a git repo or `.git/HEAD` is unreadable.
+fn read_git_branch(cwd: &Path) -> Option<String> {
+    let git_head = cwd.join(".git/HEAD");
+    let content = std::fs::read_to_string(&git_head).ok()?;
+    let content = content.trim();
+    content.strip_prefix("ref: refs/heads/").map_or_else(
+        || {
+            // Detached HEAD — show short SHA
+            (content.len() >= 7 && content.chars().all(|c| c.is_ascii_hexdigit()))
+                .then(|| content[..7].to_string())
+        },
+        |ref_path| Some(ref_path.to_string()),
+    )
+}
+
+fn build_startup_welcome_message(config: &Config) -> String {
+    if config.quiet_startup.unwrap_or(false) {
+        return String::new();
+    }
+
+    let mut message = String::from("  Welcome to Pi!\n");
+    message.push_str("  Type a message to begin, or /help for commands.\n");
+
+    let auth_path = Config::auth_path();
+    if let Ok(auth) = crate::auth::AuthStorage::load(auth_path) {
+        if should_show_startup_oauth_hint(&auth) {
+            message.push('\n');
+            message.push_str(&format_startup_oauth_hint(&auth));
+        }
+    }
+
+    message
+}
+
+/// The main interactive TUI application model.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(bubbletea::Model)]
+pub struct PiApp {
+    // Input state
+    input: TextArea,
+    history: HistoryList,
+    input_mode: InputMode,
+    pending_inputs: VecDeque<PendingInput>,
+    message_queue: Arc<StdMutex<InteractiveMessageQueue>>,
+
+    // Display state - viewport for scrollable conversation
+    pub conversation_viewport: Viewport,
+    /// When true, the viewport auto-scrolls to the bottom on new content.
+    /// Set to false when the user manually scrolls up; re-enabled when they
+    /// scroll back to the bottom or a new user message is submitted.
+    follow_stream_tail: bool,
+    spinner: SpinnerModel,
+    agent_state: AgentState,
+
+    // Terminal dimensions
+    term_width: usize,
+    term_height: usize,
+    editor_padding_x: usize,
+
+    // Conversation state
+    messages: Vec<ConversationMessage>,
+    current_response: String,
+    current_thinking: String,
+    thinking_visible: bool,
+    tools_expanded: bool,
+    current_tool: Option<String>,
+    tool_progress: Option<ToolProgress>,
+    pending_tool_output: Option<String>,
+
+    // Session and config
+    session: Arc<Mutex<Session>>,
+    config: Config,
+    theme: Theme,
+    styles: TuiStyles,
+    markdown_style: GlamourStyleConfig,
+    resources: ResourceLoader,
+    resource_cli: ResourceCliOptions,
+    cwd: PathBuf,
+    model_entry: ModelEntry,
+    model_entry_shared: Arc<StdMutex<ModelEntry>>,
+    model_scope: Vec<ModelEntry>,
+    available_models: Vec<ModelEntry>,
+    model: String,
+    agent: Arc<Mutex<Agent>>,
+    save_enabled: bool,
+    abort_handle: Option<AbortHandle>,
+    bash_running: bool,
+
+    // Token tracking
+    total_usage: Usage,
+
+    // Async channel for agent events
+    event_tx: mpsc::Sender<PiMsg>,
+    runtime_handle: RuntimeHandle,
+
+    // Extension session state
+    extension_streaming: Arc<AtomicBool>,
+    extension_compacting: Arc<AtomicBool>,
+    extension_ui_queue: VecDeque<ExtensionUiRequest>,
+    active_extension_ui: Option<ExtensionUiRequest>,
+
+    // Status message (for slash command feedback)
+    status_message: Option<String>,
+
+    // Login flow state (awaiting sensitive credential input)
+    pending_oauth: Option<PendingOAuth>,
+
+    // Extension system
+    extensions: Option<ExtensionManager>,
+
+    // Keybindings for action dispatch
+    keybindings: crate::keybindings::KeyBindings,
+
+    // Track last Ctrl+C time for double-tap quit detection
+    last_ctrlc_time: Option<std::time::Instant>,
+    // Track last Escape time for double-tap tree/fork
+    last_escape_time: Option<std::time::Instant>,
+
+    // Autocomplete state
+    autocomplete: AutocompleteState,
+
+    // Session picker overlay for /resume
+    session_picker: Option<SessionPickerOverlay>,
+
+    // Settings UI overlay for /settings
+    settings_ui: Option<SettingsUiState>,
+
+    // Theme picker overlay
+    theme_picker: Option<ThemePickerOverlay>,
+
+    // Tree navigation UI state (for /tree command)
+    tree_ui: Option<TreeUiState>,
+
+    // Capability prompt overlay (extension permission request)
+    capability_prompt: Option<CapabilityPromptOverlay>,
+
+    // Branch picker overlay (Ctrl+B quick branch switching)
+    branch_picker: Option<BranchPickerOverlay>,
+
+    // Model selector overlay (Ctrl+L)
+    model_selector: Option<crate::model_selector::ModelSelectorOverlay>,
+
+    // Frame timing telemetry (PERF-3)
+    frame_timing: FrameTimingStats,
+
+    // Memory pressure monitoring (PERF-6)
+    memory_monitor: MemoryMonitor,
+
+    // Per-message render cache (PERF-1)
+    message_render_cache: MessageRenderCache,
+
+    // Pre-allocated reusable buffers for view() hot path (PERF-7)
+    render_buffers: RenderBuffers,
+
+    // Current git branch name (refreshed on startup + after each agent turn)
+    git_branch: Option<String>,
+    // Startup banner shown in an empty conversation.
+    startup_welcome: String,
+}
+
+impl PiApp {
+    /// Create a new Pi application.
+    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_lines)]
+    pub fn new(
+        agent: Agent,
+        session: Arc<Mutex<Session>>,
+        config: Config,
+        resources: ResourceLoader,
+        resource_cli: ResourceCliOptions,
+        cwd: PathBuf,
+        model_entry: ModelEntry,
+        model_scope: Vec<ModelEntry>,
+        available_models: Vec<ModelEntry>,
+        pending_inputs: Vec<PendingInput>,
+        event_tx: mpsc::Sender<PiMsg>,
+        runtime_handle: RuntimeHandle,
+        save_enabled: bool,
+        extensions: Option<ExtensionManager>,
+        keybindings_override: Option<KeyBindings>,
+        messages: Vec<ConversationMessage>,
+        total_usage: Usage,
+    ) -> Self {
+        // Get terminal size
+        let (term_width, term_height) =
+            terminal::size().map_or((80, 24), |(w, h)| (w as usize, h as usize));
+
+        let theme = Theme::resolve(&config, &cwd);
+        let styles = theme.tui_styles();
+        let mut markdown_style = theme.glamour_style_config();
+        if let Some(indent) = config.markdown.as_ref().and_then(|m| m.code_block_indent) {
+            markdown_style.code_block.block.margin = Some(indent as usize);
+        }
+        let editor_padding_x = config.editor_padding_x.unwrap_or(0).min(3) as usize;
+        let autocomplete_max_visible =
+            config.autocomplete_max_visible.unwrap_or(5).clamp(3, 20) as usize;
+        let thinking_visible = !config.hide_thinking_block.unwrap_or(false);
+
+        // Configure text area for input
+        let mut input = TextArea::new();
+        input.placeholder = "Type a message... (/help, /exit)".to_string();
+        input.show_line_numbers = false;
+        input.prompt = "> ".to_string();
+        input.set_height(3); // Start with 3 lines
+        input.set_width(term_width.saturating_sub(4 + editor_padding_x));
+        input.max_height = 10; // Allow expansion up to 10 lines
+        input.focus();
+
+        let spinner = SpinnerModel::with_spinner(spinners::dot()).style(styles.accent.clone());
+
+        // Configure viewport for conversation history.
+        // Height budget at startup (idle):
+        // header(4) + scroll-indicator reserve(1) + input_decoration(2) + input_lines + footer(2).
+        let chrome = 4 + 1 + 2 + 2;
+        let viewport_height = term_height.saturating_sub(chrome + input.height());
+        let mut conversation_viewport =
+            Viewport::new(term_width.saturating_sub(2), viewport_height);
+        conversation_viewport.mouse_wheel_enabled = true;
+        conversation_viewport.mouse_wheel_delta = 3;
+
+        let model = format!(
+            "{}/{}",
+            model_entry.model.provider.as_str(),
+            model_entry.model.id.as_str()
+        );
+
+        let model_entry_shared = Arc::new(StdMutex::new(model_entry.clone()));
+        let extension_streaming = Arc::new(AtomicBool::new(false));
+        let extension_compacting = Arc::new(AtomicBool::new(false));
+        let steering_mode = parse_queue_mode_or_default(config.steering_mode.as_deref());
+        let follow_up_mode = parse_queue_mode_or_default(config.follow_up_mode.as_deref());
+        let message_queue = Arc::new(StdMutex::new(InteractiveMessageQueue::new(
+            steering_mode,
+            follow_up_mode,
+        )));
+        let injected_queue = Arc::new(StdMutex::new(InjectedMessageQueue::new(
+            steering_mode,
+            follow_up_mode,
+        )));
+
+        let mut agent = agent;
+        agent.set_queue_modes(steering_mode, follow_up_mode);
+        {
+            let steering_queue = Arc::clone(&message_queue);
+            let follow_up_queue = Arc::clone(&message_queue);
+            let injected_steering_queue = Arc::clone(&injected_queue);
+            let injected_follow_up_queue = Arc::clone(&injected_queue);
+            let steering_fetcher = move || -> BoxFuture<'static, Vec<ModelMessage>> {
+                let steering_queue = Arc::clone(&steering_queue);
+                let injected_steering_queue = Arc::clone(&injected_steering_queue);
+                Box::pin(async move {
+                    let mut out = Vec::new();
+                    if let Ok(mut queue) = steering_queue.lock() {
+                        out.extend(queue.pop_steering().into_iter().map(build_user_message));
+                    }
+                    if let Ok(mut queue) = injected_steering_queue.lock() {
+                        out.extend(queue.pop_steering());
+                    }
+                    out
+                })
+            };
+            let follow_up_fetcher = move || -> BoxFuture<'static, Vec<ModelMessage>> {
+                let follow_up_queue = Arc::clone(&follow_up_queue);
+                let injected_follow_up_queue = Arc::clone(&injected_follow_up_queue);
+                Box::pin(async move {
+                    let mut out = Vec::new();
+                    if let Ok(mut queue) = follow_up_queue.lock() {
+                        out.extend(queue.pop_follow_up().into_iter().map(build_user_message));
+                    }
+                    if let Ok(mut queue) = injected_follow_up_queue.lock() {
+                        out.extend(queue.pop_follow_up());
+                    }
+                    out
+                })
+            };
+            agent.register_message_fetchers(
+                Some(Arc::new(steering_fetcher)),
+                Some(Arc::new(follow_up_fetcher)),
+            );
+        }
+
+        let keybindings = keybindings_override.unwrap_or_else(|| {
+            // Load keybindings from user config (with defaults as fallback).
+            let keybindings_result = KeyBindings::load_from_user_config();
+            if keybindings_result.has_warnings() {
+                tracing::warn!(
+                    "Keybindings warnings: {}",
+                    keybindings_result.format_warnings()
+                );
+            }
+            keybindings_result.bindings
+        });
+
+        // Initialize autocomplete with catalog from resources
+        let mut autocomplete_catalog = AutocompleteCatalog::from_resources(&resources);
+        if let Some(manager) = &extensions {
+            autocomplete_catalog.extension_commands = extension_commands_for_catalog(manager);
+        }
+        let mut autocomplete = AutocompleteState::new(cwd.clone(), autocomplete_catalog);
+        autocomplete.max_visible = autocomplete_max_visible;
+
+        let git_branch = read_git_branch(&cwd);
+        let startup_welcome = build_startup_welcome_message(&config);
+
+        let mut app = Self {
+            input,
+            history: HistoryList::new(),
+            input_mode: InputMode::SingleLine,
+            pending_inputs: VecDeque::from(pending_inputs),
+            message_queue,
+            conversation_viewport,
+            follow_stream_tail: true,
+            spinner,
+            agent_state: AgentState::Idle,
+            term_width,
+            term_height,
+            editor_padding_x,
+            messages,
+            current_response: String::new(),
+            current_thinking: String::new(),
+            thinking_visible,
+            tools_expanded: true,
+            current_tool: None,
+            tool_progress: None,
+            pending_tool_output: None,
+            session,
+            config,
+            theme,
+            styles,
+            markdown_style,
+            resources,
+            resource_cli,
+            cwd,
+            model_entry,
+            model_entry_shared: model_entry_shared.clone(),
+            model_scope,
+            available_models,
+            model,
+            agent: Arc::new(Mutex::new(agent)),
+            total_usage,
+            event_tx,
+            runtime_handle,
+            extension_streaming: extension_streaming.clone(),
+            extension_compacting: extension_compacting.clone(),
+            extension_ui_queue: VecDeque::new(),
+            active_extension_ui: None,
+            status_message: None,
+            save_enabled,
+            abort_handle: None,
+            bash_running: false,
+            pending_oauth: None,
+            extensions,
+            keybindings,
+            last_ctrlc_time: None,
+            last_escape_time: None,
+            autocomplete,
+            session_picker: None,
+            settings_ui: None,
+            theme_picker: None,
+            tree_ui: None,
+            capability_prompt: None,
+            branch_picker: None,
+            model_selector: None,
+            frame_timing: FrameTimingStats::new(),
+            memory_monitor: MemoryMonitor::new_default(),
+            message_render_cache: MessageRenderCache::new(),
+            render_buffers: RenderBuffers::new(),
+            git_branch,
+            startup_welcome,
+        };
+
+        if let Some(manager) = app.extensions.clone() {
+            let session_handle = Arc::new(InteractiveExtensionSession {
+                session: Arc::clone(&app.session),
+                model_entry: model_entry_shared,
+                is_streaming: extension_streaming,
+                is_compacting: extension_compacting,
+                config: app.config.clone(),
+                save_enabled: app.save_enabled,
+            });
+            manager.set_session(session_handle);
+
+            manager.set_host_actions(Arc::new(InteractiveExtensionHostActions {
+                session: Arc::clone(&app.session),
+                agent: Arc::clone(&app.agent),
+                event_tx: app.event_tx.clone(),
+                extension_streaming: Arc::clone(&app.extension_streaming),
+                user_queue: Arc::clone(&app.message_queue),
+                injected_queue,
+            }));
+        }
+
+        app.scroll_to_bottom();
+
+        // Version update check (non-blocking, cache-only on startup)
+        if app.config.should_check_for_updates() {
+            if let crate::version_check::VersionCheckResult::UpdateAvailable { latest } =
+                crate::version_check::check_cached()
+            {
+                app.status_message = Some(format!(
+                    "New version {latest} available (current: {})",
+                    crate::version_check::CURRENT_VERSION
+                ));
+            }
+        }
+
+        app
+    }
+
+    #[must_use]
+    pub fn session_handle(&self) -> Arc<Mutex<Session>> {
+        Arc::clone(&self.session)
+    }
+
+    /// Get the current status message (for testing).
+    pub fn status_message(&self) -> Option<&str> {
+        self.status_message.as_deref()
+    }
+
+    /// Snapshot the in-memory conversation buffer (integration test helper).
+    pub fn conversation_messages_for_test(&self) -> &[ConversationMessage] {
+        &self.messages
+    }
+
+    /// Return the memory summary string (integration test helper).
+    pub fn memory_summary_for_test(&self) -> String {
+        self.memory_monitor.summary()
+    }
+
+    /// Install a deterministic RSS sampler for integration tests.
+    ///
+    /// This replaces `/proc/self` RSS sampling with a caller-provided function
+    /// and enables immediate sampling cadence (`sample_interval = 0`).
+    pub fn install_memory_rss_reader_for_test(
+        &mut self,
+        read_fn: Box<dyn Fn() -> Option<usize> + Send>,
+    ) {
+        let mut monitor = MemoryMonitor::new_with_reader_fn(read_fn);
+        monitor.sample_interval = std::time::Duration::ZERO;
+        monitor.last_collapse = std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_secs(1))
+            .unwrap_or_else(std::time::Instant::now);
+        self.memory_monitor = monitor;
+    }
+
+    /// Force a memory monitor sample + action pass (integration test helper).
+    pub fn force_memory_cycle_for_test(&mut self) {
+        self.memory_monitor.maybe_sample();
+        self.run_memory_pressure_actions();
+    }
+
+    /// Force progressive-collapse timing eligibility (integration test helper).
+    pub fn force_memory_collapse_tick_for_test(&mut self) {
+        self.memory_monitor.last_collapse = std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_secs(1))
+            .unwrap_or_else(std::time::Instant::now);
+    }
+
+    /// Get a reference to the model selector overlay (for testing).
+    pub const fn model_selector(&self) -> Option<&crate::model_selector::ModelSelectorOverlay> {
+        self.model_selector.as_ref()
+    }
+
+    /// Check if the branch picker is currently open (for testing).
+    pub const fn has_branch_picker(&self) -> bool {
+        self.branch_picker.is_some()
+    }
+
+    /// Return whether the conversation prefix cache is currently valid for
+    /// the current message count (integration test helper for PERF-2).
+    pub fn prefix_cache_valid_for_test(&self) -> bool {
+        self.message_render_cache.prefix_valid(self.messages.len())
+    }
+
+    /// Return the length of the cached conversation prefix
+    /// (integration test helper for PERF-2).
+    pub fn prefix_cache_len_for_test(&self) -> usize {
+        self.message_render_cache.prefix_get().len()
+    }
+
+    /// Return the current view capacity hint from render buffers
+    /// (integration test helper for PERF-7).
+    pub fn render_buffer_capacity_hint_for_test(&self) -> usize {
+        self.render_buffers.view_capacity_hint()
+    }
+
+    /// Initialize the application.
+    fn init(&self) -> Option<Cmd> {
+        // Start text input cursor blink.
+        // Spinner ticks are started lazily when we transition idle -> busy.
+        let test_mode = std::env::var_os("PI_TEST_MODE").is_some();
+        let input_cmd = if test_mode {
+            None
+        } else {
+            BubbleteaModel::init(&self.input)
+        };
+        let pending_cmd = if self.pending_inputs.is_empty() {
+            None
+        } else {
+            Some(Cmd::new(|| Message::new(PiMsg::RunPending)))
+        };
+
+        // Batch commands
+        batch(vec![input_cmd, pending_cmd])
+    }
+
+    fn spinner_init_cmd(&self) -> Option<Cmd> {
+        if std::env::var_os("PI_TEST_MODE").is_some() {
+            None
+        } else {
+            BubbleteaModel::init(&self.spinner)
+        }
+    }
+
+    /// Handle messages (keyboard input, async events, etc.).
+    #[allow(clippy::too_many_lines)]
+    fn update(&mut self, msg: Message) -> Option<Cmd> {
+        let update_start = if self.frame_timing.enabled {
+            Some(std::time::Instant::now())
+        } else {
+            None
+        };
+        let was_busy = self.agent_state != AgentState::Idle;
+        let was_spinner_visible = self.spinner_visible();
+        let result = self.update_inner(msg);
+        let became_busy = !was_busy && self.agent_state != AgentState::Idle;
+        let spinner_became_visible = !was_spinner_visible && self.spinner_visible();
+        let result = if became_busy || spinner_became_visible {
+            batch(vec![result, self.spinner_init_cmd()])
+        } else {
+            result
+        };
+        if let Some(start) = update_start {
+            self.frame_timing
+                .record_update(micros_as_u64(start.elapsed().as_micros()));
+        }
+        result
+    }
+
+    /// Inner update handler (extracted for frame timing instrumentation).
+    #[allow(clippy::too_many_lines)]
+    fn update_inner(&mut self, msg: Message) -> Option<Cmd> {
+        // Memory pressure sampling + progressive collapse (PERF-6)
+        self.memory_monitor.maybe_sample();
+        self.run_memory_pressure_actions();
+
+        // Handle our custom Pi messages (take ownership to avoid per-token clone).
+        // NOTE: We check with `is()` first, then `downcast().unwrap()` to consume
+        // the message only when we know it will succeed. This avoids needing the
+        // `try_downcast` method that only exists in the unpublished local
+        // charmed-bubbletea (see Cargo.toml TODO for issue #5).
+        if msg.is::<PiMsg>() {
+            return self.handle_pi_message(msg.downcast::<PiMsg>().unwrap());
+        }
+
+        if let Some(size) = msg.downcast_ref::<WindowSizeMsg>() {
+            self.set_terminal_size(size.width as usize, size.height as usize);
+            return None;
+        }
+
+        // Ignore spinner ticks when no spinner row is visible so old tick
+        // chains naturally stop and do not trigger hidden redraw churn.
+        if msg.downcast_ref::<SpinnerTickMsg>().is_some() && !self.spinner_visible() {
+            return None;
+        }
+
+        // Handle keyboard input via keybindings layer
+        if let Some(key) = msg.downcast_ref::<KeyMsg>() {
+            // Clear status message on any key press
+            self.status_message = None;
+            if key.key_type != KeyType::Esc {
+                self.last_escape_time = None;
+            }
+
+            // /tree modal captures all input while active.
+            if self.tree_ui.is_some() {
+                return self.handle_tree_ui_key(key);
+            }
+
+            // Capability prompt modal captures all input while active.
+            if self.capability_prompt.is_some() {
+                return self.handle_capability_prompt_key(key);
+            }
+
+            // Branch picker modal captures all input while active.
+            if self.branch_picker.is_some() {
+                return self.handle_branch_picker_key(key);
+            }
+
+            // Model selector modal captures all input while active.
+            if self.model_selector.is_some() {
+                return self.handle_model_selector_key(key);
+            }
+
+            // Theme picker modal captures all input while active.
+            if self.theme_picker.is_some() {
+                let mut picker = self
+                    .theme_picker
+                    .take()
+                    .expect("checked theme_picker is_some");
+                match key.key_type {
+                    KeyType::Up => picker.select_prev(),
+                    KeyType::Down => picker.select_next(),
+                    KeyType::Runes if key.runes == ['k'] => picker.select_prev(),
+                    KeyType::Runes if key.runes == ['j'] => picker.select_next(),
+                    KeyType::Enter => {
+                        if let Some(item) = picker.selected_item() {
+                            let loaded = match item {
+                                ThemePickerItem::BuiltIn(name) => Ok(match *name {
+                                    "light" => Theme::light(),
+                                    "solarized" => Theme::solarized(),
+                                    _ => Theme::dark(),
+                                }),
+                                ThemePickerItem::File(path) => Theme::load(path),
+                            };
+
+                            match loaded {
+                                Ok(theme) => {
+                                    let theme_name = theme.name.clone();
+                                    self.apply_theme(theme);
+                                    self.config.theme = Some(theme_name.clone());
+                                    if let Err(e) = self.persist_project_theme(&theme_name) {
+                                        self.status_message =
+                                            Some(format!("Failed to persist theme: {e}"));
+                                    } else {
+                                        self.status_message =
+                                            Some(format!("Switched to theme: {theme_name}"));
+                                    }
+                                }
+                                Err(e) => {
+                                    self.status_message =
+                                        Some(format!("Failed to load selected theme: {e}"));
+                                }
+                            }
+                        }
+                        self.theme_picker = None;
+                        return None;
+                    }
+                    KeyType::Esc => {
+                        self.theme_picker = None;
+                        self.settings_ui = Some(SettingsUiState::new());
+                        return None;
+                    }
+                    KeyType::Runes if key.runes == ['q'] => {
+                        self.theme_picker = None;
+                        self.settings_ui = Some(SettingsUiState::new());
+                        return None;
+                    }
+                    _ => {}
+                }
+                self.theme_picker = Some(picker);
+                return None;
+            }
+
+            // /settings modal captures all input while active.
+            if self.settings_ui.is_some() {
+                let mut settings_ui = self
+                    .settings_ui
+                    .take()
+                    .expect("checked settings_ui is_some");
+                match key.key_type {
+                    KeyType::Up => {
+                        settings_ui.select_prev();
+                        self.settings_ui = Some(settings_ui);
+                        return None;
+                    }
+                    KeyType::Down => {
+                        settings_ui.select_next();
+                        self.settings_ui = Some(settings_ui);
+                        return None;
+                    }
+                    KeyType::Runes if key.runes == ['k'] => {
+                        settings_ui.select_prev();
+                        self.settings_ui = Some(settings_ui);
+                        return None;
+                    }
+                    KeyType::Runes if key.runes == ['j'] => {
+                        settings_ui.select_next();
+                        self.settings_ui = Some(settings_ui);
+                        return None;
+                    }
+                    KeyType::Enter => {
+                        if let Some(selected) = settings_ui.selected_entry() {
+                            match selected {
+                                SettingsUiEntry::Summary => {
+                                    self.messages.push(ConversationMessage {
+                                        role: MessageRole::System,
+                                        content: self.format_settings_summary(),
+                                        thinking: None,
+                                        collapsed: false,
+                                    });
+                                    self.scroll_to_bottom();
+                                    self.status_message =
+                                        Some("Selected setting: Summary".to_string());
+                                }
+                                _ => {
+                                    self.toggle_settings_entry(selected);
+                                }
+                            }
+                        }
+                        self.settings_ui = None;
+                        return None;
+                    }
+                    KeyType::Esc => {
+                        self.settings_ui = None;
+                        self.status_message = Some("Settings cancelled".to_string());
+                        return None;
+                    }
+                    KeyType::Runes if key.runes == ['q'] => {
+                        self.settings_ui = None;
+                        self.status_message = Some("Settings cancelled".to_string());
+                        return None;
+                    }
+                    _ => {
+                        self.settings_ui = Some(settings_ui);
+                        return None;
+                    }
+                }
+            }
+
+            // Handle session picker navigation when overlay is open
+            if let Some(ref mut picker) = self.session_picker {
+                // If in delete confirmation mode, handle y/n/Esc/Enter
+                if picker.confirm_delete {
+                    match key.key_type {
+                        KeyType::Runes if key.runes == ['y'] || key.runes == ['Y'] => {
+                            picker.confirm_delete = false;
+                            match picker.delete_selected() {
+                                Ok(()) => {
+                                    if picker.all_sessions.is_empty() {
+                                        self.session_picker = None;
+                                        self.status_message =
+                                            Some("No sessions found for this project".to_string());
+                                    } else if picker.sessions.is_empty() {
+                                        picker.status_message =
+                                            Some("No sessions match current filter.".to_string());
+                                    } else {
+                                        picker.status_message =
+                                            Some("Session deleted.".to_string());
+                                    }
+                                }
+                                Err(err) => {
+                                    picker.status_message = Some(err.to_string());
+                                }
+                            }
+                            return None;
+                        }
+                        KeyType::Runes if key.runes == ['n'] || key.runes == ['N'] => {
+                            // Cancel delete
+                            picker.confirm_delete = false;
+                            picker.status_message = None;
+                            return None;
+                        }
+                        KeyType::Esc => {
+                            // Cancel delete
+                            picker.confirm_delete = false;
+                            picker.status_message = None;
+                            return None;
+                        }
+                        _ => {
+                            // Ignore other keys in confirmation mode
+                            return None;
+                        }
+                    }
+                }
+
+                // Normal picker mode
+                match key.key_type {
+                    KeyType::Up => {
+                        picker.select_prev();
+                        return None;
+                    }
+                    KeyType::Down => {
+                        picker.select_next();
+                        return None;
+                    }
+                    KeyType::Runes if key.runes == ['k'] && !picker.has_query() => {
+                        picker.select_prev();
+                        return None;
+                    }
+                    KeyType::Runes if key.runes == ['j'] && !picker.has_query() => {
+                        picker.select_next();
+                        return None;
+                    }
+                    KeyType::Backspace => {
+                        picker.pop_char();
+                        return None;
+                    }
+                    KeyType::Enter => {
+                        // Load the selected session
+                        if let Some(session_meta) = picker.selected_session().cloned() {
+                            self.session_picker = None;
+                            return self.load_session_from_path(&session_meta.path);
+                        }
+                        return None;
+                    }
+                    KeyType::CtrlD => {
+                        picker.confirm_delete = true;
+                        picker.status_message =
+                            Some("Delete session? Press y/n to confirm.".to_string());
+                        return None;
+                    }
+                    KeyType::Esc => {
+                        self.session_picker = None;
+                        return None;
+                    }
+                    KeyType::Runes if key.runes == ['q'] && !picker.has_query() => {
+                        self.session_picker = None;
+                        return None;
+                    }
+                    KeyType::Runes => {
+                        picker.push_chars(key.runes.iter().copied());
+                        return None;
+                    }
+                    _ => {
+                        // Ignore other keys while picker is open
+                        return None;
+                    }
+                }
+            }
+
+            // Handle autocomplete navigation when dropdown is open.
+            //
+            // IMPORTANT: Enter submits the current editor contents; Tab accepts autocomplete.
+            if self.autocomplete.open {
+                match key.key_type {
+                    KeyType::Up => {
+                        self.autocomplete.select_prev();
+                        return None;
+                    }
+                    KeyType::Down => {
+                        self.autocomplete.select_next();
+                        return None;
+                    }
+                    KeyType::Tab => {
+                        // Accept the selected item
+                        if let Some(item) = self.autocomplete.selected_item().cloned() {
+                            self.accept_autocomplete(&item);
+                        }
+                        self.autocomplete.close();
+                        return None;
+                    }
+                    KeyType::Enter => {
+                        // Close autocomplete and allow Enter to submit.
+                        self.autocomplete.close();
+                    }
+                    KeyType::Esc => {
+                        self.autocomplete.close();
+                        return None;
+                    }
+                    _ => {
+                        // Close autocomplete on other keys, then process normally
+                        self.autocomplete.close();
+                    }
+                }
+            }
+
+            // Handle bracketed paste (drag/drop paths, etc.) before keybindings.
+            if key.paste && self.handle_paste_event(key) {
+                return None;
+            }
+
+            // Convert KeyMsg to KeyBinding and resolve action
+            if let Some(binding) = KeyBinding::from_bubbletea_key(key) {
+                let candidates = self.keybindings.matching_actions(&binding);
+                if let Some(action) = self.resolve_action(&candidates) {
+                    // Dispatch action based on current state
+                    if let Some(cmd) = self.handle_action(action, key) {
+                        return Some(cmd);
+                    }
+                    // Action was handled but returned None (no command needed)
+                    // Check if we should suppress forwarding to text area
+                    if self.should_consume_action(action) {
+                        return None;
+                    }
+                }
+
+                // Extension shortcuts: check if unhandled key matches an extension shortcut
+                if self.agent_state == AgentState::Idle {
+                    let key_id = binding.to_string().to_lowercase();
+                    if let Some(manager) = &self.extensions {
+                        if manager.has_shortcut(&key_id) {
+                            return self.dispatch_extension_shortcut(&key_id);
+                        }
+                    }
+                }
+            }
+
+            // Handle raw keys that don't map to actions but need special behavior
+            // (e.g., text input handled by TextArea)
+        }
+
+        // Forward to appropriate component based on state
+        if self.agent_state == AgentState::Idle {
+            let old_height = self.input.height();
+
+            if let Some(key) = msg.downcast_ref::<KeyMsg>() {
+                if key.key_type == KeyType::Space {
+                    let mut key = key.clone();
+                    key.key_type = KeyType::Runes;
+                    key.runes = vec![' '];
+
+                    let result = BubbleteaModel::update(&mut self.input, Message::new(key));
+
+                    if self.input.height() != old_height {
+                        self.refresh_conversation_viewport(self.follow_stream_tail);
+                    }
+
+                    self.maybe_trigger_autocomplete();
+                    return result;
+                }
+            }
+            let result = BubbleteaModel::update(&mut self.input, msg);
+
+            if self.input.height() != old_height {
+                self.refresh_conversation_viewport(self.follow_stream_tail);
+            }
+
+            // After text area update, check if we should trigger autocomplete
+            self.maybe_trigger_autocomplete();
+
+            result
+        } else {
+            // While processing, forward to spinner
+            self.spinner.update(msg)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests;
