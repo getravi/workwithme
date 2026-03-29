@@ -171,7 +171,44 @@ pub fn resample_to_16k(samples: &[f32], from_rate: u32) -> Vec<f32> {
         .collect()
 }
 
-pub fn type_text(_text: &str) {} // filled in Task 7
+use enigo::{Enigo, Keyboard, Settings};
+
+/// Type `text` into the currently focused application.
+/// Falls back to clipboard + Cmd+V if enigo fails.
+pub fn type_text(text: &str) {
+    let trimmed = text.trim();
+    if trimmed.is_empty() { return; }
+
+    match Enigo::new(&Settings::default()) {
+        Ok(mut enigo) => {
+            // Append a space so consecutive utterances don't run together
+            let with_space = format!("{trimmed} ");
+            if let Err(e) = enigo.text(&with_space) {
+                eprintln!("[transcription] enigo error: {e}, falling back to clipboard");
+                clipboard_paste(trimmed);
+            }
+        }
+        Err(e) => {
+            eprintln!("[transcription] enigo init error: {e}, falling back to clipboard");
+            clipboard_paste(trimmed);
+        }
+    }
+}
+
+fn clipboard_paste(text: &str) {
+    if arboard::Clipboard::new()
+        .and_then(|mut c| c.set_text(text))
+        .is_ok()
+    {
+        // Simulate Cmd+V
+        if let Ok(mut enigo) = Enigo::new(&Settings::default()) {
+            use enigo::Key;
+            let _ = enigo.key(Key::Meta, enigo::Direction::Press);
+            let _ = enigo.key(Key::Unicode('v'), enigo::Direction::Click);
+            let _ = enigo.key(Key::Meta, enigo::Direction::Release);
+        }
+    }
+}
 
 // ── tests ─────────────────────────────────────────────────────────────────────
 #[cfg(test)]
