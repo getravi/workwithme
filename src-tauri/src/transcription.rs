@@ -98,14 +98,80 @@ fn rms(samples: &[f32]) -> f32 {
     (sum_sq / samples.len() as f32).sqrt()
 }
 
-// ── placeholder stubs (filled in Tasks 6 & 7) ────────────────────────────────
-pub struct WhisperEngine;
-impl WhisperEngine {
-    pub fn new(_path: &std::path::Path) -> anyhow::Result<Self> { Ok(Self) }
-    pub fn transcribe(&self, _audio: &[f32]) -> anyhow::Result<String> { Ok(String::new()) }
+// ── WhisperEngine ─────────────────────────────────────────────────────────────
+use whisper_rs::{WhisperContext, WhisperContextParameters, FullParams, SamplingStrategy};
+use std::path::Path;
+
+pub struct WhisperEngine {
+    ctx: WhisperContext,
 }
-pub fn resample_to_16k(samples: &[f32], _from_rate: u32) -> Vec<f32> { samples.to_vec() }
-pub fn type_text(_text: &str) {}
+
+impl WhisperEngine {
+    pub fn new(model_path: &Path) -> anyhow::Result<Self> {
+        let params = WhisperContextParameters::default();
+        let ctx = WhisperContext::new_with_params(
+            model_path.to_str().ok_or_else(|| anyhow::anyhow!("invalid model path"))?,
+            params,
+        ).map_err(|e| anyhow::anyhow!("Failed to load whisper model: {e:?}"))?;
+        Ok(Self { ctx })
+    }
+
+    /// Transcribe 16kHz mono f32 audio. Returns trimmed text or empty string.
+    pub fn transcribe(&self, audio: &[f32]) -> anyhow::Result<String> {
+        if audio.len() < 1600 {
+            return Ok(String::new()); // too short
+        }
+        let mut state = self.ctx.create_state()
+            .map_err(|e| anyhow::anyhow!("whisper state error: {e:?}"))?;
+
+        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+        params.set_language(Some("en"));
+        params.set_print_special(false);
+        params.set_print_progress(false);
+        params.set_print_realtime(false);
+        params.set_print_timestamps(false);
+        params.set_suppress_blank(true);
+        params.set_suppress_nst(true);
+
+        state.full(params, audio)
+            .map_err(|e| anyhow::anyhow!("whisper inference error: {e:?}"))?;
+
+        let n = state.full_n_segments()
+            .map_err(|e| anyhow::anyhow!("segment count error: {e:?}"))?;
+
+        let mut text = String::new();
+        for i in 0..n {
+            if let Ok(seg) = state.full_get_segment_text(i) {
+                let t = seg.trim();
+                if !t.is_empty() && t != "[BLANK_AUDIO]" {
+                    if !text.is_empty() { text.push(' '); }
+                    text.push_str(t);
+                }
+            }
+        }
+        Ok(text)
+    }
+}
+
+/// Resample from `from_rate` Hz to 16000 Hz using linear interpolation.
+pub fn resample_to_16k(samples: &[f32], from_rate: u32) -> Vec<f32> {
+    const TARGET: u32 = 16000;
+    if from_rate == TARGET { return samples.to_vec(); }
+    let ratio = from_rate as f64 / TARGET as f64;
+    let out_len = (samples.len() as f64 / ratio) as usize;
+    (0..out_len)
+        .map(|i| {
+            let src = i as f64 * ratio;
+            let idx = src as usize;
+            let frac = (src - idx as f64) as f32;
+            let a = samples.get(idx).copied().unwrap_or(0.0);
+            let b = samples.get(idx + 1).copied().unwrap_or(a);
+            a + (b - a) * frac
+        })
+        .collect()
+}
+
+pub fn type_text(_text: &str) {} // filled in Task 7
 
 // ── tests ─────────────────────────────────────────────────────────────────────
 #[cfg(test)]
@@ -176,5 +242,19 @@ mod tests {
         let mut d = make_detector();
         d.push(&speech(3200)); // 200ms only
         assert_eq!(d.flush(), None);
+    }
+
+    #[test]
+    #[ignore]
+    fn load_model() {
+        let path = std::path::PathBuf::from("resources/ggml-small.en-q8_0.bin");
+        if !path.exists() {
+            println!("model not found at {:?}, skipping", path);
+            return;
+        }
+        let engine = WhisperEngine::new(&path).expect("model load failed");
+        let result = engine.transcribe(&vec![0.0f32; 1600]);
+        assert!(result.is_ok());
+        println!("transcribe result: {:?}", result.unwrap());
     }
 }
