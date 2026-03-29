@@ -68,7 +68,10 @@ impl Sandbox {
         match self.profile {
             SandboxProfile::ReadOnly => {
                 // Use bwrap (bubblewrap) for sandboxing
-                self.execute_with_bwrap(command, vec!["--ro-bind", "/", "/"])
+                self.execute_with_bwrap(
+                    command,
+                    vec!["--ro-bind".to_string(), "/".to_string(), "/".to_string()],
+                )
             }
             SandboxProfile::WriteHome => {
                 // Allow writes to home, but not system directories
@@ -97,7 +100,7 @@ impl Sandbox {
     fn execute_with_bwrap(
         &self,
         command: &str,
-        bind_args: Vec<&str>,
+        bind_args: Vec<String>,
     ) -> Result<std::process::Output, std::io::Error> {
         // Check if bwrap is available
         if !self.is_bwrap_available() {
