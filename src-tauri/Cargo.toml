@@ -26,10 +26,10 @@ tauri-plugin-dialog = "2.6.0"
 tauri-plugin-fs = "2.4.5"
 
 # Voice transcription
-tauri-plugin-global-shortcut = "2"
-cpal = "0.15"
-whisper-rs = { version = "0.14", features = ["metal"] }
-enigo = "0.2"
+tauri-plugin-global-shortcut = "2.3.1"
+cpal = "0.15.3"
+whisper-rs = { version = "0.14.4", features = ["metal"] }
+enigo = "0.2.1"
 
 # HTTP server and async runtime
 axum = { version = "0.8", features = ["ws", "json", "macros"] }
