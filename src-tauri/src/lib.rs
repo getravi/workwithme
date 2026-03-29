@@ -158,6 +158,26 @@ pub fn run() {
                 }
             });
 
+            // Polling thread: feeds mic samples to SilenceDetector every 20ms for streaming transcription
+            let dictation_poll = dictation.clone();
+            std::thread::spawn(move || {
+                loop {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                    let mut d = dictation_poll.lock().unwrap();
+                    if !d.is_recording {
+                        continue;
+                    }
+                    let samples = d.recorder.drain();
+                    if samples.is_empty() {
+                        continue;
+                    }
+                    let native_rate = d.recorder.native_sample_rate;
+                    if let Some(chunk) = d.detector.push(&samples) {
+                        let _ = d.chunk_tx.try_send((chunk, native_rate));
+                    }
+                }
+            });
+
             Ok(())
         })
         .run(tauri::generate_context!())
