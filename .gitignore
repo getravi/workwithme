@@ -71,3 +71,6 @@ workwithme/
 
 # Legacy vendored runtime dumps — current patches live under patches/
 vendor/
+
+# Whisper model — large binary, download via setup script
+src-tauri/resources/*.bin
