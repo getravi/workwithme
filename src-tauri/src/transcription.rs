@@ -185,28 +185,28 @@ pub fn type_text(text: &str) {
             let with_space = format!("{trimmed} ");
             if let Err(e) = enigo.text(&with_space) {
                 eprintln!("[transcription] enigo error: {e}, falling back to clipboard");
-                clipboard_paste(trimmed);
+                clipboard_paste(&format!("{trimmed} "));
             }
         }
         Err(e) => {
             eprintln!("[transcription] enigo init error: {e}, falling back to clipboard");
-            clipboard_paste(trimmed);
+            clipboard_paste(&format!("{trimmed} "));
         }
     }
 }
 
 fn clipboard_paste(text: &str) {
-    if arboard::Clipboard::new()
-        .and_then(|mut c| c.set_text(text))
-        .is_ok()
-    {
-        // Simulate Cmd+V
-        if let Ok(mut enigo) = Enigo::new(&Settings::default()) {
-            use enigo::Key;
-            let _ = enigo.key(Key::Meta, enigo::Direction::Press);
-            let _ = enigo.key(Key::Unicode('v'), enigo::Direction::Click);
-            let _ = enigo.key(Key::Meta, enigo::Direction::Release);
+    match arboard::Clipboard::new().and_then(|mut c| c.set_text(text)) {
+        Ok(()) => {
+            if let Ok(mut enigo) = Enigo::new(&Settings::default()) {
+                use enigo::Key;
+                let _ = enigo.key(Key::Meta, enigo::Direction::Press);
+                let _ = enigo.key(Key::Unicode('v'), enigo::Direction::Press);
+                let _ = enigo.key(Key::Unicode('v'), enigo::Direction::Release);
+                let _ = enigo.key(Key::Meta, enigo::Direction::Release);
+            }
         }
+        Err(e) => eprintln!("[transcription] clipboard write failed: {e}"),
     }
 }
 
