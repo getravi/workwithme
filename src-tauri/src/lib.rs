@@ -3,6 +3,7 @@ mod audio;
 mod transcription;
 
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::Manager;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState, Modifiers, Code};
 
@@ -26,7 +27,7 @@ pub fn run() {
         chunk_tx,
     }));
 
-    let recording_flag = Arc::new(Mutex::new(false));
+    let recording_flag = Arc::new(AtomicBool::new(false));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
@@ -60,7 +61,7 @@ pub fn run() {
                                 let mut d = dictation.lock().unwrap();
                                 d.detector = transcription::SilenceDetector::new(native_rate, 0.01, 300, 300, 10000);
                                 d.is_recording = true;
-                                *recording_flag.lock().unwrap() = true;
+                                recording_flag.store(true, Ordering::Relaxed);
                                 set_tray_recording(app, true);
                             } else {
                                 // ── Stop recording + queue transcription ───────
@@ -69,16 +70,33 @@ pub fn run() {
                                     let rec = recorder.lock().unwrap();
                                     (rec.drain(), rec.native_sample_rate)
                                 };
-                                if let Some(chunk) = d.detector.push(&remaining).or_else(|| d.detector.flush()) {
-                                    let _ = d.chunk_tx.try_send((chunk, native_rate));
-                                    show_overlay(app);
-                                }
-                                drop(d);
-                                recorder.lock().unwrap().stop();
-                                let mut d = dictation.lock().unwrap();
+                                let chunk_to_send = d.detector.push(&remaining)
+                                    .or_else(|| d.detector.flush());
+
+                                // Mark stopped WHILE holding dictation so the polling thread
+                                // immediately sees is_recording=false on its next tick and
+                                // won't drain after the recorder is stopped.
                                 d.is_recording = false;
-                                *recording_flag.lock().unwrap() = false;
+                                recording_flag.store(false, Ordering::Relaxed);
+                                let chunk_tx = d.chunk_tx.clone();
+                                drop(d); // release dictation — no further dictation lock needed
+
+                                // Stop recorder only after dictation is released and is_recording
+                                // is already false, so the poll thread cannot race here.
+                                recorder.lock().unwrap().stop();
                                 set_tray_recording(app, false);
+
+                                // Use blocking send — ensures no silent drops when channel is busy.
+                                // Worker processes chunks quickly (1-3s) so this rarely blocks.
+                                if let Some(chunk) = chunk_to_send {
+                                    show_overlay(app);
+                                    if chunk_tx.send((chunk, native_rate)).is_err() {
+                                        // Worker thread died (model load failure); hide overlay
+                                        if let Some(w) = app.get_webview_window("transcribing") {
+                                            let _ = w.hide();
+                                        }
+                                    }
+                                }
                             }
                         }
                         ShortcutState::Released => {
@@ -160,6 +178,9 @@ pub fn run() {
                     Err(e) => {
                         eprintln!("[dictation] failed to load model: {e}");
                         eprintln!("[dictation] voice dictation disabled");
+                        if let Some(tray) = app_handle_worker.tray_by_id("dictation") {
+                            let _ = tray.set_tooltip(Some("Work With Me — voice dictation unavailable (model not found)"));
+                        }
                     }
                 }
             });
@@ -178,7 +199,7 @@ pub fn run() {
                 let mut frame = 0usize;
                 loop {
                     std::thread::sleep(std::time::Duration::from_millis(400));
-                    if *recording_flag_anim.lock().unwrap() {
+                    if recording_flag_anim.load(Ordering::Relaxed) {
                         if let Some(tray) = handle.tray_by_id("dictation") {
                             let icon_name = frames[frame % frames.len()];
                             if let Ok(path) = handle.path().resource_dir()
@@ -210,7 +231,9 @@ pub fn run() {
                     };
                     if samples.is_empty() { continue; }
                     if let Some(chunk) = d.detector.push(&samples) {
-                        let _ = d.chunk_tx.try_send((chunk, native_rate));
+                        if let Err(e) = d.chunk_tx.try_send((chunk, native_rate)) {
+                            eprintln!("[dictation] poll chunk dropped (channel full): {e}");
+                        }
                     }
                 }
             });
