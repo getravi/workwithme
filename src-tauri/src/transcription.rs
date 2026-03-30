@@ -184,29 +184,14 @@ pub fn type_text(text: &str) {
             // Append a space so consecutive utterances don't run together
             let with_space = format!("{trimmed} ");
             if let Err(e) = enigo.text(&with_space) {
-                eprintln!("[transcription] enigo error: {e}, falling back to clipboard");
-                clipboard_paste(&format!("{trimmed} "));
+                eprintln!("[transcription] enigo error: {e}");
+                eprintln!("[transcription] ensure Accessibility permission is granted in System Settings → Privacy & Security → Accessibility");
             }
         }
         Err(e) => {
-            eprintln!("[transcription] enigo init error: {e}, falling back to clipboard");
-            clipboard_paste(&format!("{trimmed} "));
+            eprintln!("[transcription] enigo init error: {e}");
+            eprintln!("[transcription] ensure Accessibility permission is granted in System Settings → Privacy & Security → Accessibility");
         }
-    }
-}
-
-fn clipboard_paste(text: &str) {
-    match arboard::Clipboard::new().and_then(|mut c| c.set_text(text)) {
-        Ok(()) => {
-            if let Ok(mut enigo) = Enigo::new(&Settings::default()) {
-                use enigo::Key;
-                let _ = enigo.key(Key::Meta, enigo::Direction::Press);
-                let _ = enigo.key(Key::Unicode('v'), enigo::Direction::Press);
-                let _ = enigo.key(Key::Unicode('v'), enigo::Direction::Release);
-                let _ = enigo.key(Key::Meta, enigo::Direction::Release);
-            }
-        }
-        Err(e) => eprintln!("[transcription] clipboard write failed: {e}"),
     }
 }
 
