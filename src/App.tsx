@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import { Send, Terminal, Loader2, Bot, Sidebar as SidebarIcon, Plus, MessageSquare, PanelRightOpen, Paperclip, ChevronDown, FolderOpen, PanelRightClose, Settings, Maximize2, Minimize2, X, CircleStop, Zap, Archive, ArchiveRestore, Bell, Mic, MicOff, ClipboardPaste } from "lucide-react";
+import { Send, Terminal, Loader2, Bot, Sidebar as SidebarIcon, Plus, MessageSquare, PanelRightOpen, Paperclip, ChevronDown, FolderOpen, PanelRightClose, Settings, Maximize2, Minimize2, X, CircleStop, Zap, Archive, ArchiveRestore, Bell, Mic, MicOff } from "lucide-react";
 import { MarkdownMessage } from "./MarkdownMessage";
 import { API_BASE } from "./config";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -1131,14 +1131,7 @@ function App() {
                  >
                    {isRecording ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
                  </button>
-                 <button
-                   type="button"
-                   onClick={handlePasteFromClipboard}
-                   className="p-1.5 text-gray-400 hover:text-white rounded-lg hover:bg-[#374151] transition-colors"
-                   title="Paste from clipboard"
-                 >
-                   <ClipboardPaste className="w-4 h-4" />
-                 </button>
+
                  <button
                    type="button"
                    onClick={handleSelectProject}
