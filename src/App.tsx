@@ -1125,20 +1125,19 @@ function App() {
                  </button>
                  <button
                    type="button"
-                   onClick={handleVoiceInput}
-                   className={`p-1.5 rounded-lg hover:bg-[#374151] transition-colors ${isRecording ? "text-red-400 animate-pulse" : "text-gray-400 hover:text-white"}`}
-                   title={isRecording ? "Stop recording" : "Voice input"}
-                 >
-                   {isRecording ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
-                 </button>
-
-                 <button
-                   type="button"
                    onClick={handleSelectProject}
                    className="p-1.5 text-gray-400 hover:text-[#c5f016] rounded-lg hover:bg-[#374151] transition-colors"
                    title="Select Project Folder"
                  >
                    <FolderOpen className="w-4 h-4" />
+                 </button>
+                 <button
+                   type="button"
+                   onClick={handleVoiceInput}
+                   className={`p-1.5 rounded-lg hover:bg-[#374151] transition-colors ${isRecording ? "text-red-400 animate-pulse" : "text-gray-400 hover:text-white"}`}
+                   title={isRecording ? "Stop recording" : "Voice input"}
+                 >
+                   {isRecording ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
                  </button>
               </div>
               
