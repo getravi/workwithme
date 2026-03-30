@@ -75,12 +75,13 @@ impl SilenceDetector {
 
     /// Flush any remaining buffered audio (call on hotkey release).
     pub fn flush(&mut self) -> Option<Vec<f32>> {
-        if self.buffer.len() >= self.min_chunk_samples {
+        if self.speech_samples >= self.min_chunk_samples {
             Some(self.take_buffer())
         } else {
             self.buffer.clear();
             self.cursor = 0;
             self.speech_samples = 0;
+            self.silent_frames = 0;
             None
         }
     }
@@ -94,8 +95,30 @@ impl SilenceDetector {
 }
 
 fn rms(samples: &[f32]) -> f32 {
+    if samples.is_empty() { return 0.0; }
     let sum_sq: f32 = samples.iter().map(|s| s * s).sum();
     (sum_sq / samples.len() as f32).sqrt()
+}
+
+fn is_hallucination(text: &str) -> bool {
+    let t = text.trim().to_lowercase();
+    // Whisper annotation tokens are always wrapped in [] or ()
+    if (t.starts_with('[') && t.ends_with(']'))
+        || (t.starts_with('(') && t.ends_with(')'))
+    {
+        return true;
+    }
+    // Common spurious phrases emitted on near-silence
+    matches!(
+        t.as_str(),
+        "thank you."
+            | "thanks for watching."
+            | "thanks for watching!"
+            | "you"
+            | "bye."
+            | "bye!"
+            | "goodbye."
+    )
 }
 
 // ── WhisperEngine ─────────────────────────────────────────────────────────────
@@ -143,7 +166,7 @@ impl WhisperEngine {
         for i in 0..n {
             if let Ok(seg) = state.full_get_segment_text(i) {
                 let t = seg.trim();
-                if !t.is_empty() && t != "[BLANK_AUDIO]" {
+                if !t.is_empty() && !is_hallucination(t) {
                     if !text.is_empty() { text.push(' '); }
                     text.push_str(t);
                 }
@@ -158,15 +181,63 @@ pub fn resample_to_16k(samples: &[f32], from_rate: u32) -> Vec<f32> {
     const TARGET: u32 = 16000;
     if from_rate == TARGET { return samples.to_vec(); }
     let ratio = from_rate as f64 / TARGET as f64;
-    let out_len = (samples.len() as f64 / ratio) as usize;
+    // Apply anti-aliasing filter before downsampling to prevent aliasing of
+    // high-frequency content (sibilants) into the speech band.
+    let filtered = if ratio > 1.0 {
+        let cutoff = TARGET as f64 / (2.0 * from_rate as f64);
+        low_pass_filter(samples, cutoff)
+    } else {
+        samples.to_vec()
+    };
+    let out_len = (filtered.len() as f64 / ratio) as usize;
     (0..out_len)
         .map(|i| {
             let src = i as f64 * ratio;
             let idx = src as usize;
             let frac = (src - idx as f64) as f32;
-            let a = samples.get(idx).copied().unwrap_or(0.0);
-            let b = samples.get(idx + 1).copied().unwrap_or(a);
+            let a = filtered.get(idx).copied().unwrap_or(0.0);
+            let b = filtered.get(idx + 1).copied().unwrap_or(a);
             a + (b - a) * frac
+        })
+        .collect()
+}
+
+/// 63-tap windowed-sinc FIR low-pass filter (Blackman window).
+/// `cutoff` is normalised: 0.0–1.0, where 1.0 = Nyquist of the input.
+fn low_pass_filter(samples: &[f32], cutoff: f64) -> Vec<f32> {
+    const TAPS: usize = 63;
+    let half = TAPS / 2;
+    let mut kernel = [0.0f64; TAPS];
+    for i in 0..TAPS {
+        let n = i as f64 - half as f64;
+        let sinc = if n == 0.0 {
+            2.0 * cutoff
+        } else {
+            (2.0 * cutoff * std::f64::consts::PI * n).sin() / (std::f64::consts::PI * n)
+        };
+        let window = 0.42
+            - 0.5 * (2.0 * std::f64::consts::PI * i as f64 / (TAPS - 1) as f64).cos()
+            + 0.08 * (4.0 * std::f64::consts::PI * i as f64 / (TAPS - 1) as f64).cos();
+        kernel[i] = sinc * window;
+    }
+    let sum: f64 = kernel.iter().sum();
+    let kernel: Vec<f32> = kernel.iter().map(|&k| (k / sum) as f32).collect();
+    samples
+        .iter()
+        .enumerate()
+        .map(|(i, _)| {
+            kernel
+                .iter()
+                .enumerate()
+                .map(|(j, &k)| {
+                    let idx = i as isize + j as isize - half as isize;
+                    if idx >= 0 && (idx as usize) < samples.len() {
+                        samples[idx as usize] * k
+                    } else {
+                        0.0
+                    }
+                })
+                .sum()
         })
         .collect()
 }
