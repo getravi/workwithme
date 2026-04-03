@@ -308,8 +308,6 @@ async fn handle_new_chat(msg: &WsMessage, socket: &mut WebSocket, state: Arc<App
 /// is stored in `AppState::abort_handles` and removed after the prompt finishes,
 /// so POST /api/stop can cancel it mid-run.
 async fn handle_prompt(msg: &WsMessage, socket: &mut WebSocket, state: Arc<AppState>) {
-    eprintln!("[ws] handle_prompt called with session_id: {}, text length: {}", msg.session_id, msg.text.len() + msg.content.len());
-    
     let session_id = msg.session_id.clone();
     let user_text = if !msg.text.is_empty() {
         msg.text.clone()
@@ -317,8 +315,6 @@ async fn handle_prompt(msg: &WsMessage, socket: &mut WebSocket, state: Arc<AppSt
         msg.content.clone()
     };
     
-    eprintln!("[ws] user_text: {}", user_text.chars().take(100).collect::<String>());
-
     if user_text.is_empty() {
         let _ = socket
             .send(ws_error("prompt requires non-empty text"))
@@ -395,19 +391,12 @@ async fn handle_prompt(msg: &WsMessage, socket: &mut WebSocket, state: Arc<AppSt
         // tx drops here, closing the channel and ending the rx loop below
     });
 
-    eprintln!("[ws] starting to forward events for session {}", session_id);
-    
     // Forward pi AgentEvents as WebSocket messages
     while let Some(event) = rx.recv().await {
-        let event_name = format!("{:?}", event).split('{').next().unwrap_or("?").trim().to_string();
-        eprintln!("[ws] agent event: {}", event_name);
         if let Some(ws_msg) = pi_event_to_ws_json(&event, &session_id) {
-            eprintln!("[ws] sending: {}", ws_msg);
             if socket.send(Message::Text(ws_msg.into())).await.is_err() {
                 break; // Client disconnected
             }
-        } else {
-            eprintln!("[ws] filtered: {:?}", event);
         }
     }
 
