@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Key, Save, AlertCircle, CheckCircle2, Keyboard, Zap, Network, Link2 } from "lucide-react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { API_BASE } from "./config";
 
 export type SettingsTab = "connections" | "shortcuts" | "skills" | "connectors";
@@ -341,14 +342,12 @@ function ConnectionsTab({ isConnected }: { isConnected: boolean }) {
                 <p className="text-[12px] text-gray-400">
                   1. Open this link and sign in:
                 </p>
-                <a
-                  href={oauthInstructions.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="block text-[12px] text-[#c5f016] hover:underline break-all"
+                <button
+                  onClick={() => openUrl(oauthInstructions.url)}
+                  className="block text-left text-[12px] text-[#c5f016] hover:underline break-all"
                 >
                   {oauthInstructions.url}
-                </a>
+                </button>
                 {pendingOAuthFlow.kind === "oauth" && (
                   <p className="text-[12px] text-gray-400">
                     2. After sign-in your browser will redirect to a <code className="text-gray-300">localhost:4242</code> URL — copy and paste the full URL below.
