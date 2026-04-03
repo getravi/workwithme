@@ -4,6 +4,8 @@ import { MarkdownMessage } from "./MarkdownMessage";
 import { API_BASE } from "./config";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { Message, Model, Session, ToolExecution, AttachedFile, PromptPayload, WS_EVENTS } from "./types";
 import { InboxPage } from "./InboxPage";
 import { SettingsTabBar, SettingsContent, SettingsTab } from "./SettingsPage";
@@ -61,6 +63,16 @@ async function fetchWithTimeout(input: RequestInfo, init?: RequestInit, timeoutM
   }
 }
 
+/** Find the last streaming assistant message and apply an update to it. */
+function updateLastStreamingMsg(msgs: Message[], update: (m: Message) => Message): Message[] {
+  let idx = -1;
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i].role === "assistant" && msgs[i].isStreaming) { idx = i; break; }
+  }
+  if (idx === -1) return msgs;
+  return msgs.map((m, i) => i === idx ? update(m) : m);
+}
+
 function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [toolExecutions, setToolExecutions] = useState<ToolExecution[]>([]);
@@ -91,7 +103,8 @@ function App() {
   const activeSessions = useMemo(() => sessions.filter((session) => !session.archived), [sessions]);
   const archivedSessions = useMemo(() => sessions.filter((session) => session.archived), [sessions]);
   const groupedActiveSessions = useMemo(() => groupSessionsByProject(activeSessions), [activeSessions]);
-  const groupedArchivedSessions = useMemo(() => groupSessionsByProject(archivedSessions), [archivedSessions]);
+
+const groupedArchivedSessions = useMemo(() => groupSessionsByProject(archivedSessions), [archivedSessions]);
 
   const [sandboxStatus, setSandboxStatus] = useState<SandboxStatus | null>(null);
   const [sandboxBannerDismissed, setSandboxBannerDismissed] = useState(false);
@@ -105,7 +118,6 @@ function App() {
   const chatEndRef = useRef<HTMLDivElement>(null);
   const reconnectAttemptsRef = useRef(0);
   const [isRecording, setIsRecording] = useState(false);
-  const recognitionRef = useRef<any | null>(null);
 
   const handleSidebarResizeStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -180,10 +192,13 @@ function App() {
       const res = await fetchWithTimeout(url.toString());
       const data = await res.json();
       setAvailableModels(data.models || []);
+      // Only set a model if the user hasn't already chosen one.
+      // Using a functional update avoids adding selectedModel to the dep array
+      // (which would cause this effect to re-run on every model change).
       if (data.currentModel) {
-        setSelectedModel(data.currentModel);
+        setSelectedModel(prev => prev ?? data.currentModel);
       } else if (data.models && data.models.length > 0) {
-        setSelectedModel(data.models[0]);
+        setSelectedModel(prev => prev ?? data.models[0]);
       }
     } catch(e) {
       console.error("Failed to fetch models", e);
@@ -204,6 +219,7 @@ function App() {
       const ws = new WebSocket("ws://localhost:4242");
       
       ws.onopen = () => {
+        console.log('[WS] connected');
         setIsConnected(true);
         reconnectAttemptsRef.current = 0;
         setError(null);
@@ -219,8 +235,10 @@ function App() {
       };
 
       ws.onmessage = (event) => {
+        console.log('[WS] received raw:', event.data.substring(0, 500));
         try {
           const data = JSON.parse(event.data);
+          console.log('[WS]', data.type, data);
           
           if (data.type === WS_EVENTS.CHAT_CLEARED) {
             setCurrentSessionId(data.sessionId);
@@ -248,46 +266,24 @@ function App() {
               return [...prev, { id: newId, role: "assistant" as const, content: "", isStreaming: true, timestamp: Date.now() }];
             });
           }
-          else if (data.type === WS_EVENTS.MESSAGE_UPDATE) {
-             const asstEvent = data.assistantMessageEvent;
-             // Some updates only contain message structure without deltas
-             if (asstEvent && (asstEvent.type === "text_delta" || asstEvent.type === "thinking_delta" || data.message)) {
-                // Extract full text idempotently from the backend message structure
-                let fullText = "";
-                if (data.message && Array.isArray(data.message.content)) {
-                   fullText = data.message.content
-                     .map((c: any) => {
-                       if (c.type === 'text') return c.text;
-                       if (c.type === 'thinking') {
-                          // Format thinking blocks for the custom Markdown renderer
-                          const t = (c.thinking ?? "").trim();
-                          return t ? `\`\`\`thinking\n${t}\n\`\`\`\n\n` : "";
-                       }
-                       return "";
-                     })
-                     .join("");
-                } else if (data.message && typeof data.message.content === 'string') {
-                   fullText = data.message.content;
-                }
+            else if (data.type === WS_EVENTS.MESSAGE_UPDATE) {
+              const eventType: string = data.eventType ?? data.assistantMessageEvent?.type ?? "";
+              const delta = data.delta;
+              if (!delta) return;
 
-                if (fullText) {
-                  setMessages((prev) => {
-                    const msgId = data.message?.id;
-                    // Try to find by ID first
-                    if (msgId && prev.some(m => m.id === msgId)) {
-                       return prev.map(m => m.id === msgId ? { ...m, content: fullText, isStreaming: true } : m);
-                    }
-                    // Fallback to updating the last streaming assistant message
-                    return prev.map((msg, idx) => {
-                      if (msg.role === "assistant" && msg.isStreaming && idx === prev.length - 1) {
-                        return { ...msg, content: fullText };
-                      }
-                      return msg;
-                    });
-                  });
-                }
-             }
-          }
+              if (eventType === "text_delta" && typeof delta.text === "string") {
+                setMessages((prev) => updateLastStreamingMsg(prev, (m) => ({
+                  ...m,
+                  content: m.content + delta.text,
+                })));
+              } else if (eventType === "thinking_delta" && typeof delta.thinking === "string") {
+                setMessages((prev) => updateLastStreamingMsg(prev, (m) => ({
+                  ...m,
+                  thinkingContent: (m.thinkingContent ?? "") + delta.thinking,
+                })));
+              }
+              // toolcall_delta/toolcall_end: tool display is driven by tool_execution_* events (unchanged)
+            }
           else if (data.type === WS_EVENTS.MESSAGE_END) {
              setMessages((prev) => {
                const msgId = data.message?.id;
@@ -308,27 +304,39 @@ function App() {
              setIsSteering(false);
              fetchSessions(); // Refresh list to get smart session names
           }
+          else if (data.type === WS_EVENTS.AGENT_STATUS) {
+             // Agent emits a status message - attach to the last streaming message
+             setMessages(prev => updateLastStreamingMsg(prev, msg => ({
+               ...msg, statusMessage: data.message,
+             })));
+          }
           else if (data.type === WS_EVENTS.TOOL_EXECUTION_START) {
-             setToolExecutions(prev => [
-                ...prev, 
-                { id: data.toolCallId, name: data.toolName, args: data.args, status: "running" }
-             ]);
+             const step = { id: data.toolCallId, name: data.toolName, args: data.args, status: "running" as const };
+             setToolExecutions(prev => [...prev, step]);
+             setMessages(prev => updateLastStreamingMsg(prev, msg => ({
+               ...msg, toolSteps: [...(msg.toolSteps ?? []), step],
+             })));
           }
           else if (data.type === WS_EVENTS.TOOL_EXECUTION_UPDATE) {
-             setToolExecutions(prev => prev.map(t => {
-                if (t.id === data.toolCallId) {
-                   return { ...t, args: data.args, result: data.partialResult };
-                }
-                return t;
-             }));
+             setToolExecutions(prev => prev.map(t =>
+               t.id === data.toolCallId ? { ...t, args: data.args, result: data.partialResult } : t
+             ));
+             setMessages(prev => updateLastStreamingMsg(prev, msg => ({
+               ...msg,
+               toolSteps: (msg.toolSteps ?? []).map(t =>
+                 t.id === data.toolCallId ? { ...t, args: data.args, result: data.partialResult } : t
+               ),
+             })));
           }
           else if (data.type === WS_EVENTS.TOOL_EXECUTION_END) {
-             setToolExecutions(prev => prev.map(t => {
-                if (t.id === data.toolCallId) {
-                   return { ...t, status: data.isError ? "error" : "done", result: data.result };
-                }
-                return t;
-             }));
+             const patchStep = (t: ToolExecution) =>
+               t.id === data.toolCallId
+                 ? { ...t, status: (data.isError ? "error" : "done") as ToolExecution["status"], result: data.result }
+                 : t;
+             setToolExecutions(prev => prev.map(patchStep));
+             setMessages(prev => updateLastStreamingMsg(prev, msg => ({
+               ...msg, toolSteps: (msg.toolSteps ?? []).map(patchStep),
+             })));
           }
           else if (data.type === WS_EVENTS.PROMPT_COMPLETE) {
              setIsProcessing(false);
@@ -360,6 +368,7 @@ function App() {
       };
 
       ws.onclose = () => {
+        console.log('[WS] disconnected');
         setIsConnected(false);
         const attempt = reconnectAttemptsRef.current;
         reconnectAttemptsRef.current += 1;
@@ -420,8 +429,8 @@ function App() {
     } catch(err) {
        console.error("Failed to set model", err);
        setError(err instanceof Error ? err.message : String(err));
-    }
-  };
+     }
+   };
 
   const handleAttachFile = async () => {
     try {
@@ -522,73 +531,24 @@ function App() {
     }
   };
 
-  const handleVoiceInput = () => {
-    const SpeechRecognition =
-      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      setError("Voice input is not supported in this browser.");
-      return;
-    }
+  // Listen for dictation results from the Rust backend (in-app mic button flow)
+  useEffect(() => {
+    const unlisten = listen<string>("dictation-result", (event) => {
+      setInput(prev => prev ? prev + " " + event.payload : event.payload);
+    });
+    return () => { unlisten.then(f => f()); };
+  }, []);
 
-    if (isRecording && recognitionRef.current) {
-      recognitionRef.current.stop();
-      return;
-    }
-
-    const recognition = new SpeechRecognition();
-    recognition.lang = "en-US";
-    recognition.interimResults = false;
-    recognition.maxAlternatives = 1;
-    recognitionRef.current = recognition;
-
-    recognition.onstart = () => setIsRecording(true);
-    recognition.onend = () => {
-      setIsRecording(false);
-      recognitionRef.current = null;
-    };
-    recognition.onerror = () => {
-      setIsRecording(false);
-      recognitionRef.current = null;
-    };
-    recognition.onresult = (event: any) => {
-      const transcript = event.results[0][0].transcript;
-      setInput(prev => (prev ? prev + " " + transcript : transcript));
-    };
-
-    recognition.start();
-  };
-
-  const handlePasteFromClipboard = async () => {
+  const handleVoiceInput = async () => {
     try {
-      const items = await navigator.clipboard.read();
-      for (const item of items) {
-        const imageType = item.types.find(t => t.startsWith("image/"));
-        if (imageType) {
-          const blob = await item.getType(imageType);
-          const ext = imageType.split("/")[1] ?? "png";
-          const name = `clipboard.${ext}`;
-          const data = new Uint8Array(await blob.arrayBuffer());
-          setAttachments(prev => [...prev, { name, path: "", data }]);
-          return;
-        }
-        if (item.types.includes("text/plain")) {
-          const blob = await item.getType("text/plain");
-          const text = await blob.text();
-          if (text.trim()) {
-            setInput(prev => (prev ? prev + "\n" + text : text));
-            return;
-          }
-        }
-      }
-    } catch {
-      try {
-        const text = await navigator.clipboard.readText();
-        if (text.trim()) setInput(prev => (prev ? prev + "\n" + text : text));
-      } catch {
-        setError("Clipboard access denied. Allow clipboard permissions and try again.");
-      }
+      await invoke("toggle_in_app_dictation");
+      setIsRecording(prev => !prev);
+    } catch (e) {
+      setIsRecording(false);
+      setError(`Voice input error: ${e}`);
     }
   };
+
 
   const handleTextareaPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const items = e.clipboardData?.items;
@@ -1056,9 +1016,17 @@ function App() {
                   </div>
                   
                   <div className={`flex-1 text-[13px] leading-6 relative ${msg.role === "user" ? "max-w-[78%]" : ""}`}>
-                     {msg.role === "assistant" ? (
-                       <MarkdownMessage content={msg.content} isStreaming={msg.isStreaming} />
-                     ) : (
+                      {msg.role === "assistant" ? (
+                        <MarkdownMessage
+                          content={
+                            (msg.thinkingContent
+                              ? `[THINKING]${msg.thinkingContent}[/THINKING]\n\n`
+                              : ""
+                            ) + msg.content
+                          }
+                          isStreaming={msg.isStreaming}
+                        />
+                      ) : (
                        <div className="bg-[#1f2937] px-4 py-2.5 rounded-xl rounded-tr-sm text-[#f3f4f6] whitespace-pre-wrap inline-block shadow-sm w-full text-right">
                          {msg.content}
                        </div>

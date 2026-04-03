@@ -4,8 +4,11 @@ export interface Message {
   id: string;
   role: "user" | "assistant";
   content: string;
+  thinkingContent?: string;
   isStreaming?: boolean;
   timestamp?: number;
+  toolSteps?: ToolStep[];
+  statusMessage?: string;
 }
 
 export interface Model {
@@ -33,6 +36,9 @@ export interface ToolExecution {
   status: "running" | "done" | "error";
   result?: unknown;
 }
+
+// Inline step attached to a Message (mirrors ToolExecution but lives on the message)
+export type ToolStep = ToolExecution;
 
 export interface AttachedFile {
   name: string;
@@ -63,6 +69,7 @@ export const WS_EVENTS = {
   TOOL_EXECUTION_START: "tool_execution_start",
   TOOL_EXECUTION_UPDATE: "tool_execution_update",
   TOOL_EXECUTION_END: "tool_execution_end",
+  AGENT_STATUS: "agent_status",
   PROMPT_COMPLETE: "prompt_complete",
   ERROR: "error",
   // Server → Client: backend requests user approval to run a command outside the sandbox
