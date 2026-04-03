@@ -379,7 +379,7 @@ function ConnectionsTab({ isConnected }: { isConnected: boolean }) {
                       <button
                         key={provider.id}
                         onClick={() => handleOAuthLogin(provider.id)}
-                        disabled={status === "oauth_loading" || connected}
+                        disabled={status === "oauth_loading"}
                         className={`relative flex items-center justify-between px-3 py-2 rounded-lg border text-[13px] font-medium transition-all disabled:opacity-50 ${
                           connected
                             ? "bg-[#c5f016]/10 border-[#c5f016]/45 text-[#e8ff9a] hover:bg-[#c5f016]/15"
@@ -405,7 +405,7 @@ function ConnectionsTab({ isConnected }: { isConnected: boolean }) {
                                   ? "text-[#d8f46a]"
                                   : "text-gray-500"
                             }`}>
-                              {connected ? "Active" : "Set up"}
+                              {connected ? "Reconnect" : "Set up"}
                             </span>
                           </span>
                         )}
