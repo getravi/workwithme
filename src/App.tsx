@@ -342,7 +342,13 @@ const groupedArchivedSessions = useMemo(() => groupSessionsByProject(archivedSes
              fetchSessions();
           }
           else if (data.type === WS_EVENTS.ERROR) {
-             setError(data.message);
+             const raw: string = data.message ?? "";
+             const isAuthError = /token_expired|401|unauthorized|authentication/i.test(raw);
+             const providerMatch = raw.match(/Provider error:\s*([\w-]+)/i);
+             const providerName = providerMatch ? providerMatch[1] : null;
+             setError(isAuthError
+               ? `Your ${providerName ?? "provider"} session has expired. Go to Settings → Connections to reconnect.`
+               : raw);
              setIsProcessing(false);
           }
           else if (data.type === WS_EVENTS.SANDBOX_APPROVAL_REQUEST) {
@@ -1046,8 +1052,16 @@ const groupedArchivedSessions = useMemo(() => groupSessionsByProject(archivedSes
                 </Fragment>
               ))}
               {error && (
-                <div className="p-3 bg-red-500/10 border border-red-500/50 rounded-xl text-red-400 text-[13px] flex items-center justify-center">
-                   {error}
+                <div className="p-3 bg-red-500/10 border border-red-500/50 rounded-xl text-red-400 text-[13px] flex items-center justify-between gap-3">
+                  <span>{error}</span>
+                  {/Connections to reconnect/.test(error) && (
+                    <button
+                      onClick={() => { setActiveView('settings'); setSettingsTab('connections'); setError(null); }}
+                      className="shrink-0 text-[#c5f016] underline hover:no-underline text-[12px]"
+                    >
+                      Reconnect
+                    </button>
+                  )}
                 </div>
               )}
               <div ref={chatEndRef} className="h-3" />
