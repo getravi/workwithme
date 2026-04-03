@@ -818,12 +818,9 @@ mod tests {
 
     #[test]
     fn test_message_update_text_delta() {
-        use pi::model::{AssistantMessage, ContentBlock, TextContent};
+        use pi::model::AssistantMessage;
 
-        let partial = std::sync::Arc::new(AssistantMessage {
-            content: vec![ContentBlock::Text(TextContent::new("Hello"))],
-            ..AssistantMessage::default()
-        });
+        let partial = std::sync::Arc::new(AssistantMessage::default());
 
         let event = AgentEvent::MessageUpdate {
             message: pi::sdk::Message::Assistant(partial.clone()),
@@ -837,10 +834,10 @@ mod tests {
         let json = pi_event_to_ws_json(&event, "sid").unwrap();
         let v: Value = serde_json::from_str(&json).unwrap();
         assert_eq!(v["type"], "message_update");
-        assert_eq!(v["assistantMessageEvent"]["type"], "text_delta");
-        // message.content[0] should be { type: "text", text: "Hello" }
-        assert_eq!(v["message"]["content"][0]["type"], "text");
-        assert_eq!(v["message"]["content"][0]["text"], "Hello");
+        assert_eq!(v["sessionId"], "sid");
+        assert_eq!(v["eventType"], "text_delta");
+        assert_eq!(v["delta"]["type"], "text");
+        assert_eq!(v["delta"]["text"], "world");
     }
 
     #[test]
