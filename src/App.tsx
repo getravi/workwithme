@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "react";
 import { Send, Terminal, Loader2, Bot, Sidebar as SidebarIcon, Plus, MessageSquare, PanelRightOpen, Paperclip, ChevronDown, FolderOpen, PanelRightClose, Settings, Maximize2, Minimize2, X, CircleStop, Zap, Archive, ArchiveRestore, Bell, Mic, MicOff } from "lucide-react";
 import { MarkdownMessage } from "./MarkdownMessage";
 import { API_BASE } from "./config";
@@ -992,44 +992,58 @@ const groupedArchivedSessions = useMemo(() => groupSessionsByProject(archivedSes
           ) : (
             <div className="max-w-4xl mx-auto space-y-5">
               {messages.map((msg) => (
-                <div 
-                  key={msg.id} 
-                  className={`flex gap-3 ${
-                    msg.role === "assistant" 
-                    ? "fade-in" 
-                    : "flex-row-reverse"
-                  }`}
-                >
-                  <div className="flex-shrink-0 mt-1">
-                    {msg.role === "assistant" ? (
-                      <div className="w-7 h-7 rounded-lg bg-[#182234] border border-[#1f2937] flex items-center justify-center flex-shrink-0">
-                         <Bot className="w-4 h-4 text-gray-400" />
+                <Fragment key={msg.id}>
+                  {/* Thinking bubble — separate row, only shown when thinking content exists */}
+                  {msg.role === "assistant" && msg.thinkingContent && (
+                    <div className="flex gap-3 fade-in">
+                      <div className="flex-shrink-0 mt-1">
+                        <div className="w-7 h-7 rounded-lg bg-[#182234] border border-[#1f2937] flex items-center justify-center flex-shrink-0">
+                          <Bot className="w-4 h-4 text-gray-400" />
+                        </div>
                       </div>
-                    ) : (
-                      <div className="w-7 h-7 rounded-lg bg-[#fde047] flex items-center justify-center flex-shrink-0 text-[#111827] text-[12px] font-bold shadow-md">
-                         U
-                      </div>
-                    )}
-                  </div>
-                  
-                  <div className={`flex-1 text-[13px] leading-6 relative ${msg.role === "user" ? "max-w-[78%]" : ""}`}>
-                      {msg.role === "assistant" ? (
+                      <div className="flex-1 text-[13px] leading-6 relative">
                         <MarkdownMessage
-                          content={
-                            (msg.thinkingContent
-                              ? `[THINKING]${msg.thinkingContent}[/THINKING]\n\n`
-                              : ""
-                            ) + msg.content
-                          }
-                          isStreaming={msg.isStreaming}
+                          content={`[THINKING]${msg.thinkingContent}[/THINKING]`}
+                          isStreaming={msg.isStreaming && !msg.content}
                         />
-                      ) : (
-                       <div className="bg-[#1f2937] px-4 py-2.5 rounded-xl rounded-tr-sm text-[#f3f4f6] whitespace-pre-wrap inline-block shadow-sm w-full text-right">
-                         {msg.content}
-                       </div>
-                     )}
-                  </div>
-                </div>
+                      </div>
+                    </div>
+                  )}
+                  {/* Response bubble — shown for user messages, or assistant text once it arrives */}
+                  {(msg.role === "user" || msg.content || (msg.isStreaming && !msg.thinkingContent)) && (
+                    <div
+                      className={`flex gap-3 ${
+                        msg.role === "assistant"
+                        ? "fade-in"
+                        : "flex-row-reverse"
+                      }`}
+                    >
+                      <div className="flex-shrink-0 mt-1">
+                        {msg.role === "assistant" ? (
+                          <div className="w-7 h-7 rounded-lg bg-[#182234] border border-[#1f2937] flex items-center justify-center flex-shrink-0">
+                            <Bot className="w-4 h-4 text-gray-400" />
+                          </div>
+                        ) : (
+                          <div className="w-7 h-7 rounded-lg bg-[#fde047] flex items-center justify-center flex-shrink-0 text-[#111827] text-[12px] font-bold shadow-md">
+                            U
+                          </div>
+                        )}
+                      </div>
+                      <div className={`flex-1 text-[13px] leading-6 relative ${msg.role === "user" ? "max-w-[78%]" : ""}`}>
+                        {msg.role === "assistant" ? (
+                          <MarkdownMessage
+                            content={msg.content}
+                            isStreaming={msg.isStreaming}
+                          />
+                        ) : (
+                          <div className="bg-[#1f2937] px-4 py-2.5 rounded-xl rounded-tr-sm text-[#f3f4f6] whitespace-pre-wrap inline-block shadow-sm w-full text-right">
+                            {msg.content}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </Fragment>
               ))}
               {error && (
                 <div className="p-3 bg-red-500/10 border border-red-500/50 rounded-xl text-red-400 text-[13px] flex items-center justify-center">
