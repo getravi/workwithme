@@ -219,7 +219,6 @@ const groupedArchivedSessions = useMemo(() => groupSessionsByProject(archivedSes
       const ws = new WebSocket("ws://localhost:4242");
       
       ws.onopen = () => {
-        console.log('[WS] connected');
         setIsConnected(true);
         reconnectAttemptsRef.current = 0;
         setError(null);
@@ -235,10 +234,8 @@ const groupedArchivedSessions = useMemo(() => groupSessionsByProject(archivedSes
       };
 
       ws.onmessage = (event) => {
-        console.log('[WS] received raw:', event.data.substring(0, 500));
         try {
           const data = JSON.parse(event.data);
-          console.log('[WS]', data.type, data);
           
           if (data.type === WS_EVENTS.CHAT_CLEARED) {
             setCurrentSessionId(data.sessionId);
@@ -267,7 +264,7 @@ const groupedArchivedSessions = useMemo(() => groupSessionsByProject(archivedSes
             });
           }
             else if (data.type === WS_EVENTS.MESSAGE_UPDATE) {
-              const eventType: string = data.eventType ?? data.assistantMessageEvent?.type ?? "";
+              const eventType: string = data.eventType ?? "";
               const delta = data.delta;
               if (!delta) return;
 
@@ -292,7 +289,7 @@ const groupedArchivedSessions = useMemo(() => groupSessionsByProject(archivedSes
                    ? { ...msg, isStreaming: false }
                    : msg;
                  // Clean up empty non-streaming bubbles
-                 if (updated.role === 'user' || updated.isStreaming || updated.content.trim() !== '') {
+                 if (updated.role === 'user' || updated.isStreaming || updated.content.trim() !== '' || !!updated.thinkingContent) {
                    acc.push(updated);
                  }
                  return acc;
