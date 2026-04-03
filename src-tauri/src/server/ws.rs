@@ -400,22 +400,34 @@ async fn handle_prompt(msg: &WsMessage, socket: &mut WebSocket, state: Arc<AppSt
         }
     }
 
-    // Surface any agent error to the frontend
+    // 1. Surface any agent error to the frontend
     if let Ok(err_msg) = err_rx.try_recv() {
         eprintln!("[ws] agent error for session {}: {}", session_id, err_msg);
         let _ = socket.send(ws_error(&format!("Agent error: {}", err_msg))).await;
     }
 
-    // Generate session label from first user message (best-effort, non-blocking to client)
+    // 2. Notify client immediately — do NOT block on label generation below
+    let _ = socket.send(Message::Text(
+        json!({"type": "prompt_complete", "session_id": session_id})
+            .to_string()
+            .into(),
+    ))
+    .await;
+
+    // 3. Clean up abort handle
+    {
+        let mut abort_handles = state.abort_handles.write().await;
+        abort_handles.remove(&session_id);
+    }
+
+    // 4. Generate session label (best-effort, fires after client is unblocked)
     {
         let api_key = state.auth_storage.get_key("anthropic");
         if let Some(key) = api_key {
             let sid = session_id.clone();
             let msg = user_text.clone();
             let label_result = crate::server::extensions::generate_session_label_with_fallback(&key, &msg).await;
-            // Save label into session metadata
             if let Ok(Some(mut session)) = crate::server::sessions::load_session(&sid) {
-                // Only set label if not already set
                 let already_labelled = session.get("metadata")
                     .and_then(|m| m.get("label"))
                     .and_then(|l| l.as_str())
@@ -428,7 +440,6 @@ async fn handle_prompt(msg: &WsMessage, socket: &mut WebSocket, state: Arc<AppSt
                         }
                     }
                     let _ = crate::server::sessions::update_session(&sid, session);
-                    // Broadcast so frontend knows to refresh the session list
                     let _ = socket.send(Message::Text(
                         serde_json::json!({
                             "type": "session_label_updated",
@@ -439,20 +450,6 @@ async fn handle_prompt(msg: &WsMessage, socket: &mut WebSocket, state: Arc<AppSt
                 }
             }
         }
-    }
-
-    // Notify client that the server-side prompt handling is complete
-    let _ = socket.send(Message::Text(
-        json!({"type": "prompt_complete", "session_id": session_id})
-            .to_string()
-            .into(),
-    ))
-    .await;
-
-    // Clean up abort handle
-    {
-        let mut abort_handles = state.abort_handles.write().await;
-        abort_handles.remove(&session_id);
     }
 }
 
