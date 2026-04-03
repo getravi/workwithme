@@ -308,12 +308,16 @@ async fn handle_new_chat(msg: &WsMessage, socket: &mut WebSocket, state: Arc<App
 /// is stored in `AppState::abort_handles` and removed after the prompt finishes,
 /// so POST /api/stop can cancel it mid-run.
 async fn handle_prompt(msg: &WsMessage, socket: &mut WebSocket, state: Arc<AppState>) {
+    eprintln!("[ws] handle_prompt called with session_id: {}, text length: {}", msg.session_id, msg.text.len() + msg.content.len());
+    
     let session_id = msg.session_id.clone();
     let user_text = if !msg.text.is_empty() {
         msg.text.clone()
     } else {
         msg.content.clone()
     };
+    
+    eprintln!("[ws] user_text: {}", user_text.chars().take(100).collect::<String>());
 
     if user_text.is_empty() {
         let _ = socket
@@ -391,12 +395,19 @@ async fn handle_prompt(msg: &WsMessage, socket: &mut WebSocket, state: Arc<AppSt
         // tx drops here, closing the channel and ending the rx loop below
     });
 
+    eprintln!("[ws] starting to forward events for session {}", session_id);
+    
     // Forward pi AgentEvents as WebSocket messages
     while let Some(event) = rx.recv().await {
+        let event_name = format!("{:?}", event).split('{').next().unwrap_or("?").trim().to_string();
+        eprintln!("[ws] agent event: {}", event_name);
         if let Some(ws_msg) = pi_event_to_ws_json(&event, &session_id) {
+            eprintln!("[ws] sending: {}", ws_msg);
             if socket.send(Message::Text(ws_msg.into())).await.is_err() {
                 break; // Client disconnected
             }
+        } else {
+            eprintln!("[ws] filtered: {:?}", event);
         }
     }
 
@@ -530,6 +541,42 @@ async fn create_pi_session(
 
 // ─── Event Mapping ────────────────────────────────────────────────────────────
 
+/// Derive a human-readable status message from a tool name.
+fn derive_status_from_tool(tool_name: &str) -> String {
+    let name_lower = tool_name.to_lowercase().replace('_', "-");
+    if name_lower.contains("read") || name_lower.contains("file") {
+        "Reading files...".to_string()
+    } else if name_lower.contains("glob") || name_lower.contains("find") {
+        "Finding files...".to_string()
+    } else if name_lower.contains("grep") || name_lower.contains("search") {
+        "Searching codebase...".to_string()
+    } else if name_lower.contains("web-search") || name_lower.contains("web_search") {
+        "Searching the web...".to_string()
+    } else if name_lower.contains("web-fetch") || name_lower.contains("web_fetch") {
+        "Fetching content...".to_string()
+    } else if name_lower.contains("bash") || name_lower.contains("shell") || name_lower.contains("exec") {
+        "Running commands...".to_string()
+    } else if name_lower.contains("write") || name_lower.contains("create") {
+        "Writing files...".to_string()
+    } else if name_lower.contains("edit") || name_lower.contains("patch") {
+        "Editing files...".to_string()
+    } else if name_lower.contains("mcp") {
+        if name_lower.contains("read") {
+            "Reading files...".to_string()
+        } else if name_lower.contains("write") {
+            "Writing files...".to_string()
+        } else if name_lower.contains("list") || name_lower.contains("dir") {
+            "Listing directory...".to_string()
+        } else if name_lower.contains("search") {
+            "Searching...".to_string()
+        } else {
+            "Working...".to_string()
+        }
+    } else {
+        "Working on your request...".to_string()
+    }
+}
+
 /// Extract plain text from a pi `ToolOutput` (concatenates all `Text` blocks).
 fn tool_output_text(output: &ToolOutput) -> String {
     output
@@ -553,8 +600,8 @@ fn tool_output_text(output: &ToolOutput) -> String {
 /// | pi AgentEvent | WS type | Key fields |
 /// |---|---|---|
 /// | `MessageStart` | `message_start` | `message.role` |
-/// | `MessageUpdate { TextDelta }` | `message_update` | `assistantMessageEvent.type`, `message.content` |
-/// | `MessageUpdate { ThinkingDelta }` | `message_update` | `assistantMessageEvent.type`, `message.content` |
+/// | `MessageUpdate { TextDelta }` | `message_update` | `eventType`, `delta` |
+/// | `MessageUpdate { ThinkingDelta }` | `message_update` | `eventType`, `delta` |
 /// | `MessageEnd` | `message_end` | — |
 /// | `ToolExecutionStart` | `tool_execution_start` | `toolCallId`, `toolName`, `args` |
 /// | `ToolExecutionUpdate` | `tool_execution_update` | `toolCallId`, `partialResult` |
@@ -568,39 +615,44 @@ pub fn pi_event_to_ws_json(event: &AgentEvent, session_id: &str) -> Option<Strin
             "message": { "role": "assistant" }
         }),
 
-        AgentEvent::MessageUpdate { message, assistant_message_event, .. } => {
-            // Build a content array from the accumulated assistant message so the
-            // frontend can replace the full bubble text on every delta.
-            let content = match message {
-                pi::sdk::Message::Assistant(am) => {
-                    am.content.iter().filter_map(|block| {
-                        match block {
-                            ContentBlock::Text(t) => Some(json!({
-                                "type": "text",
-                                "text": t.text
-                            })),
-                            ContentBlock::Thinking(th) => Some(json!({
-                                "type": "thinking",
-                                "thinking": th.thinking
-                            })),
-                            _ => None,
-                        }
-                    }).collect::<Vec<_>>()
+        AgentEvent::MessageUpdate { assistant_message_event, .. } => {
+            let (event_type, delta_payload) = match assistant_message_event {
+                AssistantMessageEvent::TextDelta { delta, .. } => (
+                    "text_delta",
+                    serde_json::json!({"type": "text", "text": delta}),
+                ),
+                AssistantMessageEvent::ThinkingDelta { delta, .. } => (
+                    "thinking_delta",
+                    serde_json::json!({"type": "thinking", "thinking": delta}),
+                ),
+                AssistantMessageEvent::ToolCallDelta { delta, .. } => (
+                    "toolcall_delta",
+                    serde_json::json!({"type": "tool_call_delta", "delta": delta}),
+                ),
+                AssistantMessageEvent::ToolCallEnd { tool_call, .. } => (
+                    "toolcall_end",
+                    serde_json::json!({
+                        "type": "tool_call",
+                        "toolCallId": tool_call.id,
+                        "toolName": tool_call.name,
+                        "input": tool_call.arguments
+                    }),
+                ),
+                // Start events carry no payload the frontend needs
+                AssistantMessageEvent::TextStart { .. }
+                | AssistantMessageEvent::ThinkingStart { .. }
+                | AssistantMessageEvent::ToolCallStart { .. } => return None,
+                other => {
+                    eprintln!("[ws] unhandled assistant event: {:?}", other);
+                    return None;
                 }
-                _ => return None,
-            };
-
-            let event_type = match assistant_message_event {
-                AssistantMessageEvent::TextDelta { .. }    => "text_delta",
-                AssistantMessageEvent::ThinkingDelta { .. } => "thinking_delta",
-                _ => return None,
             };
 
             json!({
                 "type": "message_update",
                 "sessionId": session_id,
-                "assistantMessageEvent": { "type": event_type },
-                "message": { "content": content }
+                "eventType": event_type,
+                "delta": delta_payload
             })
         }
 
@@ -610,13 +662,18 @@ pub fn pi_event_to_ws_json(event: &AgentEvent, session_id: &str) -> Option<Strin
             "message": {}
         }),
 
-        AgentEvent::ToolExecutionStart { tool_name, tool_call_id, args, .. } => json!({
-            "type": "tool_execution_start",
-            "sessionId": session_id,
-            "toolCallId": tool_call_id,
-            "toolName": tool_name,
-            "args": args
-        }),
+        AgentEvent::ToolExecutionStart { tool_name, tool_call_id, args, .. } => {
+            // Derive a human-readable status from the tool name
+            let status = derive_status_from_tool(tool_name);
+            json!({
+                "type": "tool_execution_start",
+                "sessionId": session_id,
+                "toolCallId": tool_call_id,
+                "toolName": tool_name,
+                "args": args,
+                "status": status
+            })
+        }
 
         AgentEvent::ToolExecutionUpdate { tool_name, tool_call_id, partial_result, .. } => json!({
             "type": "tool_execution_update",
