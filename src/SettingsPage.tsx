@@ -333,15 +333,38 @@ function ConnectionsTab({ isConnected }: { isConnected: boolean }) {
 
         {pendingOAuthFlow && status !== "success" && (
           <div className="mb-4 p-3 bg-[#111827] border border-[#374151] rounded-lg space-y-3">
+            {oauthInstructions && (
+              <div className="space-y-1.5">
+                {oauthInstructions.instructions && (
+                  <p className="text-[12px] text-gray-400">{oauthInstructions.instructions}</p>
+                )}
+                <p className="text-[12px] text-gray-400">
+                  1. Open this link and sign in:
+                </p>
+                <a
+                  href={oauthInstructions.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="block text-[12px] text-[#c5f016] hover:underline break-all"
+                >
+                  {oauthInstructions.url}
+                </a>
+                {pendingOAuthFlow.kind === "oauth" && (
+                  <p className="text-[12px] text-gray-400">
+                    2. After sign-in your browser will redirect to a <code className="text-gray-300">localhost:4242</code> URL — copy and paste the full URL below.
+                  </p>
+                )}
+              </div>
+            )}
             {pendingOAuthFlow.kind === "oauth" ? (
               <div className="space-y-2">
                 <label className="block text-[12px] font-medium text-gray-300">
-                  Paste callback URL or authorization code
+                  Callback URL or authorization code
                 </label>
                 <input
                   value={oauthCodeInput}
                   onChange={(e) => setOauthCodeInput(e.target.value)}
-                  placeholder="Paste callback URL or code"
+                  placeholder="http://localhost:4242/api/auth/callback?code=..."
                   className="w-full bg-[#0f1724] border border-[#374151] rounded-lg px-3 py-2 text-[13px] text-gray-100 focus:outline-none focus:border-[#c5f016]"
                 />
               </div>
