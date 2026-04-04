@@ -60,19 +60,59 @@ pub fn capture_region(
 /// Copy a base64-encoded PNG image to the system clipboard as image data.
 #[tauri::command]
 pub fn copy_image_to_clipboard(base64_png: String) -> Result<(), String> {
-    let _ = base64_png;
-    Err("not implemented".to_string())
+    use std::borrow::Cow;
+
+    let raw = base64::engine::general_purpose::STANDARD
+        .decode(&base64_png)
+        .map_err(|e| format!("base64 decode: {e}"))?;
+    let img = image::load_from_memory(&raw)
+        .map_err(|e| format!("image decode: {e}"))?
+        .to_rgba8();
+
+    let (width, height) = (img.width() as usize, img.height() as usize);
+    let bytes = img.into_raw();
+
+    let mut clipboard = arboard::Clipboard::new()
+        .map_err(|e| format!("clipboard: {e}"))?;
+    clipboard
+        .set_image(arboard::ImageData {
+            width,
+            height,
+            bytes: Cow::Owned(bytes),
+        })
+        .map_err(|e| format!("set_image: {e}"))?;
+
+    Ok(())
 }
 
 /// Show a save-file dialog and write the image as PNG or JPG.
 /// Returns the path the file was saved to.
 #[tauri::command]
 pub async fn save_image_to_file(
-    _app: AppHandle,
+    app: AppHandle,
     base64_png: String,
 ) -> Result<String, String> {
-    let _ = base64_png;
-    Err("not implemented".to_string())
+    use tauri_plugin_dialog::DialogExt;
+
+    let raw = base64::engine::general_purpose::STANDARD
+        .decode(&base64_png)
+        .map_err(|e| format!("base64 decode: {e}"))?;
+    let img = image::load_from_memory(&raw)
+        .map_err(|e| format!("image decode: {e}"))?;
+
+    let path = app
+        .dialog()
+        .file()
+        .add_filter("PNG Image", &["png"])
+        .add_filter("JPEG Image", &["jpg", "jpeg"])
+        .blocking_save_file()
+        .ok_or("Save cancelled")?;
+
+    let path_str = path.to_string();
+    img.save(&path_str)
+        .map_err(|e| format!("save failed: {e}"))?;
+
+    Ok(path_str)
 }
 
 /// Create the transparent fullscreen capture overlay window.
@@ -132,5 +172,46 @@ mod tests {
         let decoded_img = image::load_from_memory(&decoded).unwrap();
         assert_eq!(decoded_img.width(), 2);
         assert_eq!(decoded_img.height(), 2);
+    }
+
+    #[test]
+    fn test_decode_base64_png_to_rgba() {
+        // Encode a known image then decode via our logic
+        let rgba: Vec<u8> = vec![0, 128, 255, 255, 0, 128, 255, 255,
+                                  0, 128, 255, 255, 0, 128, 255, 255];
+        let img = image::RgbaImage::from_raw(2, 2, rgba.clone()).unwrap();
+        let dyn_img = image::DynamicImage::ImageRgba8(img);
+        let mut cursor = std::io::Cursor::new(Vec::new());
+        dyn_img.write_to(&mut cursor, image::ImageFormat::Png).unwrap();
+        let b64 = base64::engine::general_purpose::STANDARD.encode(cursor.into_inner());
+
+        // Now decode as our clipboard function would
+        let decoded_bytes = base64::engine::general_purpose::STANDARD.decode(&b64).unwrap();
+        let decoded = image::load_from_memory(&decoded_bytes).unwrap().to_rgba8();
+        assert_eq!(decoded.width(), 2);
+        assert_eq!(decoded.height(), 2);
+        assert_eq!(decoded.get_pixel(0, 0).0, [0, 128, 255, 255]);
+    }
+
+    #[test]
+    fn test_save_image_to_temp_file() {
+        // Build a minimal PNG in memory
+        let img = image::RgbaImage::from_raw(4, 4, vec![255u8; 64]).unwrap();
+        let dyn_img = image::DynamicImage::ImageRgba8(img);
+        let mut cursor = std::io::Cursor::new(Vec::new());
+        dyn_img.write_to(&mut cursor, image::ImageFormat::Png).unwrap();
+        let b64 = base64::engine::general_purpose::STANDARD.encode(cursor.into_inner());
+
+        // Write to a temp file the same way save_image_to_file would
+        let tmp = std::env::temp_dir().join("capture_test_output.png");
+        let raw = base64::engine::general_purpose::STANDARD.decode(&b64).unwrap();
+        let decoded_img = image::load_from_memory(&raw).unwrap();
+        decoded_img.save(&tmp).unwrap();
+
+        assert!(tmp.exists());
+        let reloaded = image::open(&tmp).unwrap();
+        assert_eq!(reloaded.width(), 4);
+        assert_eq!(reloaded.height(), 4);
+        std::fs::remove_file(tmp).ok();
     }
 }
