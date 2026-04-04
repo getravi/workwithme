@@ -18,7 +18,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri = { version = "2", features = ["macos-private-api", "tray-icon", "image-png"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -62,6 +62,8 @@ rust-embed = { version = "8", features = ["compression"] }
 
 # Phase 6 dependencies
 arboard = "3"
+screenshots = "0.8"
+image = "0.25"
 notify-rust = "4"
 dirs = "5"
 
