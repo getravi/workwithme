@@ -1,29 +1,99 @@
 mod server;
 mod audio;
 mod transcription;
+mod capture;
 
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
-use tauri::Manager;
+use tauri::{Manager, Emitter};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState, Modifiers, Code};
 
 /// Shared state for the dictation session.
 struct DictationState {
     detector: transcription::SilenceDetector,
     is_recording: bool,
-    chunk_tx: std::sync::mpsc::SyncSender<(Vec<f32>, u32)>,
+    /// true = in-app mic button; false = global hotkey
+    in_app_mode: bool,
+    /// emit_event=true → send Tauri event to frontend; false → type into active window
+    chunk_tx: std::sync::mpsc::SyncSender<(Vec<f32>, u32, bool)>,
+}
+
+/// Exposed to Tauri command handlers so the in-app mic button can drive the same pipeline.
+struct InAppDictationState {
+    dictation: Arc<Mutex<DictationState>>,
+    recorder: Arc<Mutex<audio::AudioRecorder>>,
+    recording_flag: Arc<AtomicBool>,
+}
+
+/// Toggle recording for the in-app mic button.
+/// Uses the same audio pipeline as the global hotkey but routes the transcript
+/// back to the frontend via a "dictation-result" Tauri event instead of typing it.
+#[tauri::command]
+fn toggle_in_app_dictation(
+    state: tauri::State<InAppDictationState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let is_recording = state.dictation.lock().unwrap().is_recording;
+
+    if !is_recording {
+        // ── Start recording ────────────────────────────────────────────────
+        let native_rate = {
+            let mut rec = state.recorder.lock().unwrap();
+            rec.start().map_err(|e| format!("mic error: {e}"))?;
+            rec.native_sample_rate
+        };
+        let mut d = state.dictation.lock().unwrap();
+        d.detector = transcription::SilenceDetector::new(native_rate, 0.01, 300, 300, 10000);
+        d.is_recording = true;
+        d.in_app_mode = true;
+        state.recording_flag.store(true, Ordering::Relaxed);
+        set_tray_recording(&app, true);
+        show_overlay_listening(&app);
+    } else {
+        // ── Stop recording + queue transcription ───────────────────────────
+        let mut d = state.dictation.lock().unwrap();
+        let (remaining, native_rate) = {
+            let rec = state.recorder.lock().unwrap();
+            (rec.drain(), rec.native_sample_rate)
+        };
+        let chunk_to_send = d.detector.push(&remaining).or_else(|| d.detector.flush());
+        d.is_recording = false;
+        state.recording_flag.store(false, Ordering::Relaxed);
+        let chunk_tx = d.chunk_tx.clone();
+        drop(d);
+        state.recorder.lock().unwrap().stop();
+        set_tray_recording(&app, false);
+
+        if let Some(chunk) = chunk_to_send {
+            show_overlay_transcribing(&app);
+            // emit_event=true: result goes back to frontend, not typed into active window
+            if chunk_tx.send((chunk, native_rate, true)).is_err() {
+                if let Some(w) = app.get_webview_window("transcribing") {
+                    let _ = w.hide();
+                }
+            }
+        } else {
+            // Nothing to transcribe; hide the listening overlay
+            if let Some(w) = app.get_webview_window("transcribing") {
+                let _ = w.hide();
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Channel: audio chunks (samples, native_rate) → transcription worker thread
-    let (chunk_tx, chunk_rx) = std::sync::mpsc::sync_channel::<(Vec<f32>, u32)>(8);
+    // Channel: (samples, native_rate, emit_event) → transcription worker thread
+    // emit_event=true → Tauri event (in-app mic); false → type_text (global hotkey)
+    let (chunk_tx, chunk_rx) = std::sync::mpsc::sync_channel::<(Vec<f32>, u32, bool)>(8);
 
     let recorder = Arc::new(Mutex::new(audio::AudioRecorder::new()));
 
     let dictation = Arc::new(Mutex::new(DictationState {
         detector: transcription::SilenceDetector::new(44100, 0.01, 300, 500, 10000),
         is_recording: false,
+        in_app_mode: false,
         chunk_tx,
     }));
 
@@ -61,8 +131,10 @@ pub fn run() {
                                 let mut d = dictation.lock().unwrap();
                                 d.detector = transcription::SilenceDetector::new(native_rate, 0.01, 300, 300, 10000);
                                 d.is_recording = true;
+                                d.in_app_mode = false;
                                 recording_flag.store(true, Ordering::Relaxed);
                                 set_tray_recording(app, true);
+                                show_overlay_listening(app);
                             } else {
                                 // ── Stop recording + queue transcription ───────
                                 let mut d = dictation.lock().unwrap();
@@ -89,12 +161,18 @@ pub fn run() {
                                 // Use blocking send — ensures no silent drops when channel is busy.
                                 // Worker processes chunks quickly (1-3s) so this rarely blocks.
                                 if let Some(chunk) = chunk_to_send {
-                                    show_overlay(app);
-                                    if chunk_tx.send((chunk, native_rate)).is_err() {
+                                    show_overlay_transcribing(app);
+                                    // emit_event=false: type text into the active (external) window
+                                    if chunk_tx.send((chunk, native_rate, false)).is_err() {
                                         // Worker thread died (model load failure); hide overlay
                                         if let Some(w) = app.get_webview_window("transcribing") {
                                             let _ = w.hide();
                                         }
+                                    }
+                                } else {
+                                    // Nothing to transcribe (too short / silence only); hide overlay
+                                    if let Some(w) = app.get_webview_window("transcribing") {
+                                        let _ = w.hide();
                                     }
                                 }
                             }
@@ -106,6 +184,21 @@ pub fn run() {
                 })
                 .build()
         })
+        .manage(InAppDictationState {
+            dictation: dictation.clone(),
+            recorder: recorder.clone(),
+            recording_flag: recording_flag.clone(),
+        })
+        .manage(capture::CaptureState::new())
+        .invoke_handler(tauri::generate_handler![
+            toggle_in_app_dictation,
+            capture::capture_region,
+            capture::copy_image_to_clipboard,
+            capture::save_image_to_file,
+            capture::open_capture_overlay,
+            capture::open_editor_window,
+            capture::get_captured_image,
+        ])
         .setup(move |app| {
             // Build tray icon
             let icon_path = app.path().resource_dir()
@@ -159,12 +252,18 @@ pub fn run() {
                     Ok(engine) => {
                         println!("[dictation] whisper model loaded");
                         let engine = Arc::new(engine);
-                        while let Ok((chunk, native_rate)) = chunk_rx.recv() {
+                        while let Ok((chunk, native_rate, emit_event)) = chunk_rx.recv() {
                             let resampled = transcription::resample_to_16k(&chunk, native_rate);
                             match engine.transcribe(&resampled) {
                                 Ok(text) if !text.trim().is_empty() => {
                                     println!("[dictation] → {text}");
-                                    transcription::type_text(&text);
+                                    if emit_event {
+                                        // In-app mic: send text back to the frontend via event
+                                        let _ = app_handle_worker.emit("dictation-result", text);
+                                    } else {
+                                        // Global hotkey: type text into the active window
+                                        transcription::type_text(&text);
+                                    }
                                 }
                                 Ok(_) => {}
                                 Err(e) => eprintln!("[dictation] transcription error: {e}"),
@@ -231,7 +330,8 @@ pub fn run() {
                     };
                     if samples.is_empty() { continue; }
                     if let Some(chunk) = d.detector.push(&samples) {
-                        if let Err(e) = d.chunk_tx.try_send((chunk, native_rate)) {
+                        let emit = d.in_app_mode;
+                        if let Err(e) = d.chunk_tx.try_send((chunk, native_rate, emit)) {
                             eprintln!("[dictation] poll chunk dropped (channel full): {e}");
                         }
                     }
@@ -244,10 +344,21 @@ pub fn run() {
         .expect("error while running tauri application");
 }
 
-fn show_overlay(app: &tauri::AppHandle) {
+/// Show the overlay in "Listening…" state (recording just started).
+fn show_overlay_listening(app: &tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("transcribing") {
         let _ = w.show();
     }
+    let _ = app.emit("overlay-state", "listening");
+}
+
+/// Switch overlay to "Transcribing…" state (recording stopped, Whisper running).
+/// The overlay is already visible from show_overlay_listening; this just updates the text.
+fn show_overlay_transcribing(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("transcribing") {
+        let _ = w.show(); // show in case we got here without a prior listening phase
+    }
+    let _ = app.emit("overlay-state", "transcribing");
 }
 
 fn set_tray_recording(app: &tauri::AppHandle, recording: bool) {
