@@ -11,34 +11,36 @@ export default defineConfig(async () => ({
 
   build: {
     rollupOptions: {
+      input: {
+        main: "index.html",
+        "capture-overlay": "capture-overlay.html",
+        editor: "editor.html",
+      },
       output: {
         manualChunks: {
-          'vendor-react': ['react', 'react-dom'],
-          'vendor-ui': ['lucide-react', 'react-markdown', 'react-syntax-highlighter', 'dompurify'],
+          "vendor-react": ["react", "react-dom"],
+          "vendor-ui": [
+            "lucide-react",
+            "react-markdown",
+            "react-syntax-highlighter",
+            "dompurify",
+          ],
+          "vendor-konva": ["konva", "react-konva"],
         },
       },
     },
     chunkSizeWarningLimit: 600,
   },
 
-  // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
-  //
-  // 1. prevent Vite from obscuring rust errors
   clearScreen: false,
-  // 2. tauri expects a fixed port, fail if that port is not available
   server: {
     port: 1420,
     strictPort: true,
     host: host || false,
     hmr: host
-      ? {
-          protocol: "ws",
-          host,
-          port: 1421,
-        }
+      ? { protocol: "ws", host, port: 1421 }
       : undefined,
     watch: {
-      // 3. tell Vite to ignore watching `src-tauri`
       ignored: ["**/src-tauri/**"],
     },
   },
