@@ -1,5 +1,5 @@
 use base64::Engine;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 /// Shared state: holds the base64 PNG captured from the screen
 /// until the editor window is ready to request it.
@@ -117,18 +117,61 @@ pub async fn save_image_to_file(
 
 /// Create the transparent fullscreen capture overlay window.
 #[tauri::command]
-pub fn open_capture_overlay(_app: AppHandle) -> Result<(), String> {
-    Err("not implemented".to_string())
+pub fn open_capture_overlay(app: AppHandle) -> Result<(), String> {
+    // Close any stale overlay from a previous capture
+    if let Some(w) = app.get_webview_window("capture-overlay") {
+        let _ = w.close();
+        // Give the window a moment to close before re-creating it
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    tauri::WebviewWindowBuilder::new(
+        &app,
+        "capture-overlay",
+        tauri::WebviewUrl::App("capture-overlay.html".into()),
+    )
+    .fullscreen(true)
+    .transparent(true)
+    .always_on_top(true)
+    .decorations(false)
+    .skip_taskbar(true)
+    .focused(true)
+    .build()
+    .map_err(|e| format!("failed to create overlay: {e}"))?;
+
+    Ok(())
 }
 
 /// Store the captured image and open the annotation editor window.
 #[tauri::command]
 pub fn open_editor_window(
-    _app: AppHandle,
+    app: AppHandle,
     base64_png: String,
 ) -> Result<(), String> {
-    let _ = base64_png;
-    Err("not implemented".to_string())
+    // Store image so the editor can retrieve it via get_captured_image
+    let state = app.state::<CaptureState>();
+    *state.pending_image.lock().unwrap() = Some(base64_png);
+
+    // Close any existing editor
+    if let Some(w) = app.get_webview_window("capture-editor") {
+        let _ = w.close();
+    }
+
+    tauri::WebviewWindowBuilder::new(
+        &app,
+        "capture-editor",
+        tauri::WebviewUrl::App("editor.html".into()),
+    )
+    .inner_size(1000.0, 700.0)
+    .min_inner_size(600.0, 400.0)
+    .always_on_top(true)
+    .decorations(true)
+    .resizable(true)
+    .title("Screenshot Editor")
+    .build()
+    .map_err(|e| format!("failed to create editor: {e}"))?;
+
+    Ok(())
 }
 
 /// Called by the editor frontend on mount to retrieve the pending captured image.
