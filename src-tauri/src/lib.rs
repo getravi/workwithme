@@ -109,76 +109,81 @@ pub fn run() {
             let recording_flag = recording_flag.clone();
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |app, shortcut, event| {
-                    if !shortcut.matches(Modifiers::SUPER | Modifiers::SHIFT, Code::Space) {
-                        return;
-                    }
-                    match event.state() {
-                        ShortcutState::Pressed => {
-                            let is_recording = dictation.lock().unwrap().is_recording;
-                            if !is_recording {
-                                // ── Start recording ────────────────────────────
-                                // Start recorder OUTSIDE dictation lock (mic permission dialog may block)
-                                let native_rate = {
-                                    let mut rec = recorder.lock().unwrap();
-                                    match rec.start() {
-                                        Ok(()) => rec.native_sample_rate,
-                                        Err(e) => {
-                                            eprintln!("[dictation] failed to start: {e}");
-                                            return;
+                    if shortcut.matches(Modifiers::SUPER | Modifiers::SHIFT, Code::Space) {
+                        match event.state() {
+                            ShortcutState::Pressed => {
+                                let is_recording = dictation.lock().unwrap().is_recording;
+                                if !is_recording {
+                                    // ── Start recording ────────────────────────────
+                                    // Start recorder OUTSIDE dictation lock (mic permission dialog may block)
+                                    let native_rate = {
+                                        let mut rec = recorder.lock().unwrap();
+                                        match rec.start() {
+                                            Ok(()) => rec.native_sample_rate,
+                                            Err(e) => {
+                                                eprintln!("[dictation] failed to start: {e}");
+                                                return;
+                                            }
                                         }
-                                    }
-                                };
-                                let mut d = dictation.lock().unwrap();
-                                d.detector = transcription::SilenceDetector::new(native_rate, 0.01, 300, 300, 10000);
-                                d.is_recording = true;
-                                d.in_app_mode = false;
-                                recording_flag.store(true, Ordering::Relaxed);
-                                set_tray_recording(app, true);
-                                show_overlay_listening(app);
-                            } else {
-                                // ── Stop recording + queue transcription ───────
-                                let mut d = dictation.lock().unwrap();
-                                let (remaining, native_rate) = {
-                                    let rec = recorder.lock().unwrap();
-                                    (rec.drain(), rec.native_sample_rate)
-                                };
-                                let chunk_to_send = d.detector.push(&remaining)
-                                    .or_else(|| d.detector.flush());
+                                    };
+                                    let mut d = dictation.lock().unwrap();
+                                    d.detector = transcription::SilenceDetector::new(native_rate, 0.01, 300, 300, 10000);
+                                    d.is_recording = true;
+                                    d.in_app_mode = false;
+                                    recording_flag.store(true, Ordering::Relaxed);
+                                    set_tray_recording(app, true);
+                                    show_overlay_listening(app);
+                                } else {
+                                    // ── Stop recording + queue transcription ───────
+                                    let mut d = dictation.lock().unwrap();
+                                    let (remaining, native_rate) = {
+                                        let rec = recorder.lock().unwrap();
+                                        (rec.drain(), rec.native_sample_rate)
+                                    };
+                                    let chunk_to_send = d.detector.push(&remaining)
+                                        .or_else(|| d.detector.flush());
 
-                                // Mark stopped WHILE holding dictation so the polling thread
-                                // immediately sees is_recording=false on its next tick and
-                                // won't drain after the recorder is stopped.
-                                d.is_recording = false;
-                                recording_flag.store(false, Ordering::Relaxed);
-                                let chunk_tx = d.chunk_tx.clone();
-                                drop(d); // release dictation — no further dictation lock needed
+                                    // Mark stopped WHILE holding dictation so the polling thread
+                                    // immediately sees is_recording=false on its next tick and
+                                    // won't drain after the recorder is stopped.
+                                    d.is_recording = false;
+                                    recording_flag.store(false, Ordering::Relaxed);
+                                    let chunk_tx = d.chunk_tx.clone();
+                                    drop(d); // release dictation — no further dictation lock needed
 
-                                // Stop recorder only after dictation is released and is_recording
-                                // is already false, so the poll thread cannot race here.
-                                recorder.lock().unwrap().stop();
-                                set_tray_recording(app, false);
+                                    // Stop recorder only after dictation is released and is_recording
+                                    // is already false, so the poll thread cannot race here.
+                                    recorder.lock().unwrap().stop();
+                                    set_tray_recording(app, false);
 
-                                // Use blocking send — ensures no silent drops when channel is busy.
-                                // Worker processes chunks quickly (1-3s) so this rarely blocks.
-                                if let Some(chunk) = chunk_to_send {
-                                    show_overlay_transcribing(app);
-                                    // emit_event=false: type text into the active (external) window
-                                    if chunk_tx.send((chunk, native_rate, false)).is_err() {
-                                        // Worker thread died (model load failure); hide overlay
+                                    // Use blocking send — ensures no silent drops when channel is busy.
+                                    // Worker processes chunks quickly (1-3s) so this rarely blocks.
+                                    if let Some(chunk) = chunk_to_send {
+                                        show_overlay_transcribing(app);
+                                        // emit_event=false: type text into the active (external) window
+                                        if chunk_tx.send((chunk, native_rate, false)).is_err() {
+                                            // Worker thread died (model load failure); hide overlay
+                                            if let Some(w) = app.get_webview_window("transcribing") {
+                                                let _ = w.hide();
+                                            }
+                                        }
+                                    } else {
+                                        // Nothing to transcribe (too short / silence only); hide overlay
                                         if let Some(w) = app.get_webview_window("transcribing") {
                                             let _ = w.hide();
                                         }
                                     }
-                                } else {
-                                    // Nothing to transcribe (too short / silence only); hide overlay
-                                    if let Some(w) = app.get_webview_window("transcribing") {
-                                        let _ = w.hide();
-                                    }
                                 }
                             }
+                            ShortcutState::Released => {
+                                // Toggle mode: release is ignored; stop happens on next key press
+                            }
                         }
-                        ShortcutState::Released => {
-                            // Toggle mode: release is ignored; stop happens on next key press
+                    } else if shortcut.matches(Modifiers::SUPER | Modifiers::SHIFT, Code::Digit4) {
+                        if event.state() == ShortcutState::Pressed {
+                            if let Err(e) = capture::open_capture_overlay(app.clone()) {
+                                eprintln!("[capture] failed to open overlay: {e}");
+                            }
                         }
                     }
                 })
@@ -204,15 +209,45 @@ pub fn run() {
             let icon_path = app.path().resource_dir()
                 .map(|p| p.join("icons/tray-mic.png"))
                 .unwrap_or_else(|_| std::path::PathBuf::from("src-tauri/icons/tray-mic.png"));
+            let capture_item = tauri::menu::MenuItem::with_id(
+                app,
+                "capture-screenshot",
+                "Capture Screenshot",
+                true,
+                Some("Super+Shift+4"),
+            )?;
+            let quit_item = tauri::menu::MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+            let tray_menu = tauri::menu::MenuBuilder::new(app)
+                .item(&capture_item)
+                .separator()
+                .item(&quit_item)
+                .build()?;
+
+            let app_handle_tray = app.handle().clone();
             let mut tray_builder = tauri::tray::TrayIconBuilder::with_id("dictation")
-                .tooltip("Work With Me — press Cmd+Shift+Space to start/stop dictation");
+                .tooltip("Work With Me — Cmd+Shift+Space: dictate | Cmd+Shift+4: capture")
+                .menu(&tray_menu)
+                .on_menu_event(move |_tray, event| {
+                    match event.id().as_ref() {
+                        "capture-screenshot" => {
+                            if let Err(e) = capture::open_capture_overlay(app_handle_tray.clone()) {
+                                eprintln!("[capture] tray trigger failed: {e}");
+                            }
+                        }
+                        "quit" => {
+                            app_handle_tray.exit(0);
+                        }
+                        _ => {}
+                    }
+                });
             if let Ok(img) = tauri::image::Image::from_path(&icon_path) {
                 tray_builder = tray_builder.icon(img);
             }
             tray_builder.build(app.handle())?;
 
-            // Register global shortcut
+            // Register global shortcuts
             app.global_shortcut().register("Super+Shift+Space")?;
+            app.global_shortcut().register("Super+Shift+4")?;
 
             // Transcribing overlay — small floating pill shown while Whisper is running
             let overlay = tauri::WebviewWindowBuilder::new(
