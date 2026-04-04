@@ -1,4 +1,5 @@
-use tauri::{AppHandle, Manager};
+use base64::Engine;
+use tauri::AppHandle;
 
 /// Shared state: holds the base64 PNG captured from the screen
 /// until the editor window is ready to request it.
@@ -16,43 +17,36 @@ impl CaptureState {
 
 /// Capture a rectangular region of the screen.
 /// Returns a base64-encoded PNG string.
-/// Coordinates are in logical pixels; Rust converts to physical using the scale factor.
+/// Coordinates are in logical pixels (points); the screenshots crate / CoreGraphics
+/// handles HiDPI internally — no manual scaling is needed from the caller.
 #[tauri::command]
 pub fn capture_region(
-    app: AppHandle,
+    _app: AppHandle,
     x: i32,
     y: i32,
     width: u32,
     height: u32,
 ) -> Result<String, String> {
-    use base64::Engine;
+    if width == 0 || height == 0 {
+        return Err("selection too small to capture".to_string());
+    }
 
-    // Get scale factor from the overlay window (or default to 1.0)
-    let scale = app
-        .get_webview_window("capture-overlay")
-        .and_then(|w: tauri::WebviewWindow| w.scale_factor().ok())
-        .unwrap_or(1.0);
-
-    let px = (x as f64 * scale) as i32;
-    let py = (y as f64 * scale) as i32;
-    let pw = (width as f64 * scale) as u32;
-    let ph = (height as f64 * scale) as u32;
-
-    // Find the screen containing the selection origin
-    let screen = screenshots::Screen::from_point(px, py)
+    // The screenshots crate operates in logical coordinates (CoreGraphics points on macOS).
+    // No manual HiDPI scaling is needed — the OS handles pixel density internally.
+    let screen = screenshots::Screen::from_point(x, y)
         .map_err(|e| format!("screen lookup failed: {e}"))?;
 
     let capture = screen
-        .capture_area(px, py, pw, ph)
+        .capture_area(x, y, width, height)
         .map_err(|e| format!("capture failed: {e}"))?;
 
-    // screenshots 0.8 uses image 0.24; re-wrap the raw bytes into image 0.25's RgbaImage
+    // Work around screenshots 0.8 bundling image 0.24 while project uses image 0.25:
+    // extract raw RGBA bytes and re-wrap into the project's image::RgbaImage.
     let (w, h) = (capture.width(), capture.height());
     let raw_bytes = capture.into_raw();
     let rgba_img = image::RgbaImage::from_raw(w, h, raw_bytes)
-        .ok_or_else(|| "failed to wrap capture buffer".to_string())?;
+        .ok_or("failed to wrap capture buffer")?;
 
-    // Encode to PNG → base64
     let dyn_img = image::DynamicImage::ImageRgba8(rgba_img);
     let mut cursor = std::io::Cursor::new(Vec::new());
     dyn_img
