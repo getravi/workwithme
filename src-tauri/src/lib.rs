@@ -198,6 +198,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             toggle_in_app_dictation,
             capture::capture_region,
+            capture::capture_fullscreen,
             capture::copy_image_to_clipboard,
             capture::save_image_to_file,
             capture::open_capture_overlay,
@@ -216,9 +217,17 @@ pub fn run() {
                 true,
                 Some("Super+Ctrl+4"),
             )?;
+            let capture_fullscreen_item = tauri::menu::MenuItem::with_id(
+                app,
+                "capture-fullscreen",
+                "Capture Full Screen",
+                true,
+                None::<&str>,
+            )?;
             let quit_item = tauri::menu::MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let tray_menu = tauri::menu::MenuBuilder::new(app)
                 .item(&capture_region_item)
+                .item(&capture_fullscreen_item)
                 .separator()
                 .item(&quit_item)
                 .build()?;
@@ -232,6 +241,11 @@ pub fn run() {
                         "capture-region" => {
                             if let Err(e) = capture::open_capture_overlay(app_handle_tray.clone()) {
                                 eprintln!("[capture] tray trigger failed: {e}");
+                            }
+                        }
+                        "capture-fullscreen" => {
+                            if let Err(e) = capture::capture_fullscreen(app_handle_tray.clone()) {
+                                eprintln!("[capture] fullscreen capture failed: {e}");
                             }
                         }
                         "quit" => {

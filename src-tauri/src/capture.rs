@@ -163,6 +163,32 @@ pub fn open_capture_overlay(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Capture the entire primary screen and open the annotation editor.
+#[tauri::command]
+pub fn capture_fullscreen(app: AppHandle) -> Result<(), String> {
+    let screens = screenshots::Screen::all().map_err(|e| format!("screen lookup: {e}"))?;
+    // Primary screen is the one at logical origin (0, 0)
+    let screen = screens
+        .iter()
+        .find(|s| s.display_info.x == 0 && s.display_info.y == 0)
+        .or_else(|| screens.first())
+        .ok_or("no screen found")?;
+
+    let capture = screen.capture().map_err(|e| format!("capture failed: {e}"))?;
+    let (w, h) = (capture.width(), capture.height());
+    let raw_bytes = capture.into_raw();
+    let rgba_img = image::RgbaImage::from_raw(w, h, raw_bytes)
+        .ok_or("failed to wrap capture buffer")?;
+    let dyn_img = image::DynamicImage::ImageRgba8(rgba_img);
+    let mut cursor = std::io::Cursor::new(Vec::new());
+    dyn_img
+        .write_to(&mut cursor, image::ImageFormat::Png)
+        .map_err(|e| format!("encode failed: {e}"))?;
+    let base64_png = base64::engine::general_purpose::STANDARD.encode(cursor.into_inner());
+
+    open_editor_window(app, base64_png)
+}
+
 /// Store the captured image and open the annotation editor window.
 #[tauri::command]
 pub fn open_editor_window(
