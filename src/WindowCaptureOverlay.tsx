@@ -49,7 +49,7 @@ function drawHighlight(
   // Blue border
   ctx.strokeStyle = "rgba(100, 180, 255, 0.9)";
   ctx.lineWidth = 2;
-  ctx.strokeRect(win.x, win.y, win.width, win.height);
+  ctx.strokeRect(win.x + 0.5, win.y + 0.5, win.width - 1, win.height - 1);
 }
 
 // Component ──────────────────────────────────────────────────────────────────

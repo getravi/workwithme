@@ -6,5 +6,7 @@
   <string>Workwithme uses the microphone for voice transcription.</string>
   <key>NSSpeechRecognitionUsageDescription</key>
   <string>Workwithme uses speech recognition to transcribe voice input into the chat.</string>
+  <key>NSScreenCaptureUsageDescription</key>
+  <string>Work With Me captures windows and screen regions for annotation and sharing.</string>
 </dict>
 </plist>

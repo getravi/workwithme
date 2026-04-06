@@ -36,9 +36,10 @@ Two Tauri commands:
   ```
 
 **`capture_window(app: AppHandle, window_id: u32) -> Result<(), String>`**
-- Calls `CGWindowListCreateImage(CGRectNull, kCGWindowListOptionIncludingWindow, window_id, kCGWindowImageBoundsIgnoreFraming)` — bare frame, no shadow
-- Converts CGImage → raw RGBA bytes → `image::RgbaImage` → encodes as PNG
+- Shells out to `screencapture -l <window_id> -o -x -t png <tmp_file>` — bare frame (no shadow), no sound
+- Reads the PNG from the temp file, removes it, base64-encodes the bytes
 - Calls `open_editor_window(app, base64_png)` to store the image and open the editor
+- Note: `CGWindowListCreateImage` was considered but `screencapture` CLI was chosen to avoid CGBitmapContext/CGImage conversion complexity in Rust
 
 Both commands are `#[cfg(target_os = "macos")]` only.
 
