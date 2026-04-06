@@ -116,13 +116,32 @@ pub async fn save_image_to_file(
 }
 
 /// Create the transparent fullscreen capture overlay window.
+/// We do NOT use .fullscreen(true) — that triggers macOS full-screen mode which
+/// creates a new Space. Instead we size the window to cover all monitors manually.
 #[tauri::command]
 pub fn open_capture_overlay(app: AppHandle) -> Result<(), String> {
     // Close any stale overlay from a previous capture
     if let Some(w) = app.get_webview_window("capture-overlay") {
         let _ = w.close();
-        // Give the window a moment to close before re-creating it
         std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    // Compute bounding box of all monitors in logical coordinates (points).
+    // display_info.{x,y} are already in logical coords on macOS;
+    // width/height are physical pixels so we divide by scale_factor.
+    let screens = screenshots::Screen::all().unwrap_or_default();
+    let (mut min_x, mut min_y, mut max_x, mut max_y) = (0i32, 0i32, 1920i32, 1080i32);
+    if !screens.is_empty() {
+        min_x = screens.iter().map(|s| s.display_info.x).min().unwrap_or(0);
+        min_y = screens.iter().map(|s| s.display_info.y).min().unwrap_or(0);
+        max_x = screens.iter().map(|s| {
+            let lw = (s.display_info.width as f64 / s.display_info.scale_factor as f64) as i32;
+            s.display_info.x + lw
+        }).max().unwrap_or(1920);
+        max_y = screens.iter().map(|s| {
+            let lh = (s.display_info.height as f64 / s.display_info.scale_factor as f64) as i32;
+            s.display_info.y + lh
+        }).max().unwrap_or(1080);
     }
 
     tauri::WebviewWindowBuilder::new(
@@ -130,12 +149,14 @@ pub fn open_capture_overlay(app: AppHandle) -> Result<(), String> {
         "capture-overlay",
         tauri::WebviewUrl::App("capture-overlay.html".into()),
     )
-    .fullscreen(true)
+    .inner_size((max_x - min_x) as f64, (max_y - min_y) as f64)
+    .position(min_x as f64, min_y as f64)
     .transparent(true)
     .always_on_top(true)
     .decorations(false)
     .skip_taskbar(true)
     .focused(true)
+    .resizable(false)
     .build()
     .map_err(|e| format!("failed to create overlay: {e}"))?;
 

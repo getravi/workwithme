@@ -179,7 +179,7 @@ pub fn run() {
                                 // Toggle mode: release is ignored; stop happens on next key press
                             }
                         }
-                    } else if shortcut.matches(Modifiers::SUPER | Modifiers::SHIFT, Code::Digit4) {
+                    } else if shortcut.matches(Modifiers::SUPER | Modifiers::CONTROL, Code::Digit4) {
                         if event.state() == ShortcutState::Pressed {
                             if let Err(e) = capture::open_capture_overlay(app.clone()) {
                                 eprintln!("[capture] failed to open overlay: {e}");
@@ -209,27 +209,27 @@ pub fn run() {
             let icon_path = app.path().resource_dir()
                 .map(|p| p.join("icons/tray-mic.png"))
                 .unwrap_or_else(|_| std::path::PathBuf::from("src-tauri/icons/tray-mic.png"));
-            let capture_item = tauri::menu::MenuItem::with_id(
+            let capture_region_item = tauri::menu::MenuItem::with_id(
                 app,
-                "capture-screenshot",
-                "Capture Screenshot",
+                "capture-region",
+                "Capture Region",
                 true,
-                Some("Super+Shift+4"),
+                Some("Super+Ctrl+4"),
             )?;
             let quit_item = tauri::menu::MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let tray_menu = tauri::menu::MenuBuilder::new(app)
-                .item(&capture_item)
+                .item(&capture_region_item)
                 .separator()
                 .item(&quit_item)
                 .build()?;
 
             let app_handle_tray = app.handle().clone();
             let mut tray_builder = tauri::tray::TrayIconBuilder::with_id("dictation")
-                .tooltip("Work With Me — Cmd+Shift+Space: dictate | Cmd+Shift+4: capture")
+                .tooltip("Work With Me — Cmd+Shift+Space: dictate | Cmd+Ctrl+4: capture region")
                 .menu(&tray_menu)
                 .on_menu_event(move |_tray, event| {
                     match event.id().as_ref() {
-                        "capture-screenshot" => {
+                        "capture-region" => {
                             if let Err(e) = capture::open_capture_overlay(app_handle_tray.clone()) {
                                 eprintln!("[capture] tray trigger failed: {e}");
                             }
@@ -247,7 +247,7 @@ pub fn run() {
 
             // Register global shortcuts
             app.global_shortcut().register("Super+Shift+Space")?;
-            app.global_shortcut().register("Super+Shift+4")?;
+            app.global_shortcut().register("Super+Ctrl+4")?;
 
             // Transcribing overlay — small floating pill shown while Whisper is running
             let overlay = tauri::WebviewWindowBuilder::new(
