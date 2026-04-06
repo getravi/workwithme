@@ -2,6 +2,8 @@ mod server;
 mod audio;
 mod transcription;
 mod capture;
+#[cfg(target_os = "macos")]
+mod window_capture;
 
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
