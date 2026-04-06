@@ -466,6 +466,7 @@ const SHORTCUTS: { keys: string[]; description: string; category: string }[] = [
   { category: "Navigation", keys: ["⌘", "\\"], description: "Toggle sidebar" },
   { category: "Input", keys: ["⌘", "V"], description: "Paste image or text from clipboard" },
   { category: "Screenshot", keys: ["⌘", "⌃", "4"], description: "Capture screen region" },
+  { category: "Screenshot", keys: ["⌘", "⌃", "5"], description: "Capture window" },
 ];
 
 function ShortcutsTab() {
