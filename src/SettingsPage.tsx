@@ -342,12 +342,24 @@ function ConnectionsTab({ isConnected }: { isConnected: boolean }) {
                 <p className="text-[12px] text-gray-400">
                   1. Open this link and sign in:
                 </p>
-                <button
-                  onClick={() => openUrl(oauthInstructions.url)}
-                  className="block text-left text-[12px] text-[#c5f016] hover:underline break-all"
-                >
-                  {oauthInstructions.url}
-                </button>
+                <div className="flex items-start gap-2">
+                  <button
+                    onClick={() => openUrl(oauthInstructions.url)}
+                    className="flex-1 text-left text-[12px] text-[#c5f016] hover:underline break-all"
+                    style={{ WebkitUserSelect: "text", userSelect: "text" }}
+                  >
+                    {oauthInstructions.url}
+                  </button>
+                  <button
+                    onClick={async () => {
+                      try { await navigator.clipboard.writeText(oauthInstructions.url); } catch { /* ignore */ }
+                    }}
+                    className="shrink-0 text-[11px] px-1.5 py-0.5 rounded bg-[#1f2937] text-gray-400 hover:text-white hover:bg-[#374151] transition-colors"
+                    title="Copy URL"
+                  >
+                    Copy
+                  </button>
+                </div>
                 {pendingOAuthFlow.kind === "oauth" && (
                   <p className="text-[12px] text-gray-400">
                     2. After sign-in your browser will redirect to a <code className="text-gray-300">localhost:4242</code> URL — copy and paste the full URL below.
@@ -453,6 +465,7 @@ const SHORTCUTS: { keys: string[]; description: string; category: string }[] = [
   { category: "Navigation", keys: ["⌘", ","], description: "Open settings" },
   { category: "Navigation", keys: ["⌘", "\\"], description: "Toggle sidebar" },
   { category: "Input", keys: ["⌘", "V"], description: "Paste image or text from clipboard" },
+  { category: "Screenshot", keys: ["⌘", "⇧", "4"], description: "Capture screen region" },
 ];
 
 function ShortcutsTab() {
