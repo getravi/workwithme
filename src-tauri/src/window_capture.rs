@@ -111,6 +111,9 @@ unsafe fn dict_get_string(dict: CFDictRef, key: CFTypeRef) -> Option<String> {
     cfstring_to_rust(v)
 }
 
+/// Creates a temporary CFString from a Rust string slice.
+/// # Panics
+/// Panics if `s` contains an interior NUL byte. Only call with known-safe string literals.
 unsafe fn make_cfstring(s: &str) -> CFTypeRef {
     let c = CString::new(s).unwrap();
     CFStringCreateWithCString(kCFAllocatorDefault, c.as_ptr(), CF_STRING_ENCODING_UTF8)
@@ -130,6 +133,12 @@ fn collect_windows() -> Vec<WindowInfo> {
         }
         let count = CFArrayGetCount(arr);
         let mut windows = Vec::new();
+
+        // Create bounds dict keys once before the loop
+        let xk = make_cfstring("X");
+        let yk = make_cfstring("Y");
+        let wk = make_cfstring("Width");
+        let hk = make_cfstring("Height");
 
         for i in 0..count {
             let dict = CFArrayGetValueAtIndex(arr, i);
@@ -163,20 +172,10 @@ fn collect_windows() -> Vec<WindowInfo> {
                 continue;
             }
 
-            let xk = make_cfstring("X");
-            let yk = make_cfstring("Y");
-            let wk = make_cfstring("Width");
-            let hk = make_cfstring("Height");
-
             let x = dict_get_f64(bounds_dict, xk);
             let y = dict_get_f64(bounds_dict, yk);
             let width = dict_get_f64(bounds_dict, wk);
             let height = dict_get_f64(bounds_dict, hk);
-
-            CFRelease(xk);
-            CFRelease(yk);
-            CFRelease(wk);
-            CFRelease(hk);
 
             let (x, y, width, height) = match (x, y, width, height) {
                 (Some(x), Some(y), Some(w), Some(h)) => (x, y, w, h),
@@ -194,6 +193,11 @@ fn collect_windows() -> Vec<WindowInfo> {
             windows.push(WindowInfo { id, app_name, title, x, y, width, height });
         }
 
+        // Release the bounds dict keys
+        CFRelease(xk);
+        CFRelease(yk);
+        CFRelease(wk);
+        CFRelease(hk);
         CFRelease(arr);
         windows
     }
