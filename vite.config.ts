@@ -15,6 +15,7 @@ export default defineConfig(async () => ({
         main: "index.html",
         "capture-overlay": "capture-overlay.html",
         editor: "editor.html",
+        "window-capture": "window-capture.html",
       },
       output: {
         manualChunks: {
