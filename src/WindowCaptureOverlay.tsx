@@ -59,6 +59,7 @@ export function WindowCaptureOverlay() {
   const [windows, setWindows] = useState<WindowInfo[]>([]);
   const [loaded, setLoaded] = useState(false);
   const hoveredRef = useRef<WindowInfo | null>(null);
+  const logicalSizeRef = useRef({ w: 0, h: 0 });
 
   // Load window list on mount
   useEffect(() => {
@@ -78,10 +79,17 @@ export function WindowCaptureOverlay() {
     if (!loaded) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = window.innerWidth;
+    const cssH = window.innerHeight;
+    canvas.width = cssW * dpr;
+    canvas.height = cssH * dpr;
+    canvas.style.width = `${cssW}px`;
+    canvas.style.height = `${cssH}px`;
     const ctx = canvas.getContext("2d")!;
-    drawDim(ctx, canvas.width, canvas.height);
+    ctx.scale(dpr, dpr);
+    logicalSizeRef.current = { w: cssW, h: cssH };
+    drawDim(ctx, cssW, cssH);
   }, [loaded]);
 
   // Escape key closes
@@ -98,14 +106,15 @@ export function WindowCaptureOverlay() {
   const handleMouseMove = (e: React.MouseEvent) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+    const { w, h } = logicalSizeRef.current;
     const found = findWindowAtPoint(windows, e.clientX, e.clientY);
     hoveredRef.current = found;
     const ctx = canvas.getContext("2d")!;
     if (found) {
-      drawHighlight(ctx, found, canvas.width, canvas.height);
+      drawHighlight(ctx, found, w, h);
     } else {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      drawDim(ctx, canvas.width, canvas.height);
+      ctx.clearRect(0, 0, w, h);
+      drawDim(ctx, w, h);
     }
   };
 
