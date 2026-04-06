@@ -94,6 +94,10 @@ pi_agent_rust = { path = "../patches/pi_agent_rust" }
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+core-graphics = "0.23"
+core-foundation = "0.9"
+
 [[bench]]
 name = "performance_benchmarks"
 harness = false
