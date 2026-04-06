@@ -210,6 +210,8 @@ pub fn run() {
             capture::open_capture_overlay,
             capture::open_editor_window,
             capture::get_captured_image,
+            // window_capture is cfg(target_os = "macos") — acceptable since this
+            // project is macOS-only.
             window_capture::get_window_list,
             window_capture::capture_window,
         ])
@@ -250,7 +252,7 @@ pub fn run() {
 
             let app_handle_tray = app.handle().clone();
             let mut tray_builder = tauri::tray::TrayIconBuilder::with_id("dictation")
-                .tooltip("Work With Me — Cmd+Shift+Space: dictate | Cmd+Ctrl+4: capture region")
+                .tooltip("Work With Me — Cmd+Shift+Space: dictate | Cmd+Ctrl+4: capture region | Cmd+Ctrl+5: capture window")
                 .menu(&tray_menu)
                 .on_menu_event(move |_tray, event| {
                     match event.id().as_ref() {
@@ -430,6 +432,8 @@ fn show_overlay_transcribing(app: &tauri::AppHandle) {
     let _ = app.emit("overlay-state", "transcribing");
 }
 
+// macOS-only: window_capture module is cfg(target_os = "macos") but this project
+// targets macOS exclusively, so no cfg guard is needed here.
 fn open_window_capture_overlay(app: &tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("window-capture-overlay") {
         let _ = w.close();
