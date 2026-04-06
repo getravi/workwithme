@@ -187,6 +187,10 @@ pub fn run() {
                                 eprintln!("[capture] failed to open overlay: {e}");
                             }
                         }
+                    } else if shortcut.matches(Modifiers::SUPER | Modifiers::CONTROL, Code::Digit5) {
+                        if event.state() == ShortcutState::Pressed {
+                            open_window_capture_overlay(app);
+                        }
                     }
                 })
                 .build()
@@ -206,6 +210,8 @@ pub fn run() {
             capture::open_capture_overlay,
             capture::open_editor_window,
             capture::get_captured_image,
+            window_capture::get_window_list,
+            window_capture::capture_window,
         ])
         .setup(move |app| {
             // Build tray icon
@@ -219,6 +225,13 @@ pub fn run() {
                 true,
                 Some("Super+Ctrl+4"),
             )?;
+            let capture_window_item = tauri::menu::MenuItem::with_id(
+                app,
+                "capture-window",
+                "Capture Window",
+                true,
+                Some("Super+Ctrl+5"),
+            )?;
             let capture_fullscreen_item = tauri::menu::MenuItem::with_id(
                 app,
                 "capture-fullscreen",
@@ -229,6 +242,7 @@ pub fn run() {
             let quit_item = tauri::menu::MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let tray_menu = tauri::menu::MenuBuilder::new(app)
                 .item(&capture_region_item)
+                .item(&capture_window_item)
                 .item(&capture_fullscreen_item)
                 .separator()
                 .item(&quit_item)
@@ -244,6 +258,9 @@ pub fn run() {
                             if let Err(e) = capture::open_capture_overlay(app_handle_tray.clone()) {
                                 eprintln!("[capture] tray trigger failed: {e}");
                             }
+                        }
+                        "capture-window" => {
+                            open_window_capture_overlay(&app_handle_tray);
                         }
                         "capture-fullscreen" => {
                             if let Err(e) = capture::capture_fullscreen(app_handle_tray.clone()) {
@@ -264,6 +281,7 @@ pub fn run() {
             // Register global shortcuts
             app.global_shortcut().register("Super+Shift+Space")?;
             app.global_shortcut().register("Super+Ctrl+4")?;
+            app.global_shortcut().register("Super+Ctrl+5")?;
 
             // Transcribing overlay — small floating pill shown while Whisper is running
             let overlay = tauri::WebviewWindowBuilder::new(
@@ -410,6 +428,44 @@ fn show_overlay_transcribing(app: &tauri::AppHandle) {
         let _ = w.show(); // show in case we got here without a prior listening phase
     }
     let _ = app.emit("overlay-state", "transcribing");
+}
+
+fn open_window_capture_overlay(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("window-capture-overlay") {
+        let _ = w.close();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let screens = screenshots::Screen::all().unwrap_or_default();
+    let (mut min_x, mut min_y, mut max_x, mut max_y) = (0i32, 0i32, 1920i32, 1080i32);
+    if !screens.is_empty() {
+        min_x = screens.iter().map(|s| s.display_info.x).min().unwrap_or(0);
+        min_y = screens.iter().map(|s| s.display_info.y).min().unwrap_or(0);
+        max_x = screens.iter().map(|s| {
+            let lw = (s.display_info.width as f64 / s.display_info.scale_factor as f64) as i32;
+            s.display_info.x + lw
+        }).max().unwrap_or(1920);
+        max_y = screens.iter().map(|s| {
+            let lh = (s.display_info.height as f64 / s.display_info.scale_factor as f64) as i32;
+            s.display_info.y + lh
+        }).max().unwrap_or(1080);
+    }
+    if let Err(e) = tauri::WebviewWindowBuilder::new(
+        app,
+        "window-capture-overlay",
+        tauri::WebviewUrl::App("window-capture.html".into()),
+    )
+    .inner_size((max_x - min_x) as f64, (max_y - min_y) as f64)
+    .position(min_x as f64, min_y as f64)
+    .transparent(true)
+    .always_on_top(true)
+    .decorations(false)
+    .skip_taskbar(true)
+    .focused(true)
+    .resizable(false)
+    .build()
+    {
+        eprintln!("[window-capture] overlay build failed: {e}");
+    }
 }
 
 fn set_tray_recording(app: &tauri::AppHandle, recording: bool) {
