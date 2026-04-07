@@ -27,6 +27,7 @@ export function RecordingOptionsPanel() {
     });
 
     // Listen for region selected from the overlay window
+    let cancelled = false;
     listen<{ x: number; y: number; width: number; height: number }>(
       "recording-region-selected",
       (event) => {
@@ -36,10 +37,15 @@ export function RecordingOptionsPanel() {
         getCurrentWindow().show().catch(() => {});
       }
     ).then((unlisten) => {
-      unlistenRef.current = unlisten;
+      if (cancelled) {
+        unlisten();
+      } else {
+        unlistenRef.current = unlisten;
+      }
     });
 
     return () => {
+      cancelled = true;
       unlistenRef.current?.();
     };
   }, []);
@@ -112,7 +118,6 @@ export function RecordingOptionsPanel() {
             data-testid="radio-region"
             name="area"
             checked={areaMode === "region"}
-            onChange={handleSelectRegion}
             onClick={handleSelectRegion}
           />
           <span style={{ fontSize: 13 }}>
