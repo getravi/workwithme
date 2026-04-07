@@ -2,6 +2,7 @@ mod server;
 mod audio;
 mod transcription;
 mod capture;
+mod library;
 #[cfg(target_os = "macos")]
 mod window_capture;
 

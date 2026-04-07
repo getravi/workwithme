@@ -87,6 +87,9 @@ governor = "0.6"
 # Phase 3 dependencies
 async-trait = "0.1"
 
+# Capture library
+rusqlite = { version = "0.38", features = ["bundled"] }
+
 [patch.crates-io]
 asupersync = { path = "../patches/asupersync" }
 pi_agent_rust = { path = "../patches/pi_agent_rust" }
