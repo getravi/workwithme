@@ -70,6 +70,9 @@ fn apply_schema(conn: &Connection) -> rusqlite::Result<()> {
         .filter_map(|r| r.ok())
         .collect();
 
+    // Note: NOT NULL in ALTER TABLE ADD COLUMN is not enforced by SQLite on pre-existing
+    // rows — the DEFAULT 'image' is returned by SQLite for all existing rows via schema
+    // metadata, but the constraint itself is not validated retroactively.
     if !columns.iter().any(|c| c == "media_type") {
         conn.execute_batch(
             "ALTER TABLE captures ADD COLUMN media_type TEXT NOT NULL DEFAULT 'image'",
@@ -252,6 +255,8 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].id, id);
         assert!(entries[0].is_draft);
+        assert_eq!(entries[0].media_type, "image");
+        assert!(entries[0].thumbnail_path.is_none());
     }
 
     #[test]
@@ -279,6 +284,40 @@ mod tests {
         prune_conn(&conn).unwrap();
         let count: i64 = conn.query_row("SELECT COUNT(*) FROM captures WHERE id='old-id'", [], |r| r.get(0)).unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_migration_adds_columns_to_existing_db() {
+        // Simulate a legacy DB that lacks the new columns
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("
+            CREATE TABLE captures (
+                id TEXT PRIMARY KEY,
+                file_path TEXT NOT NULL,
+                timestamp INTEGER NOT NULL,
+                app_name TEXT,
+                window_title TEXT,
+                is_draft INTEGER NOT NULL DEFAULT 1,
+                width INTEGER,
+                height INTEGER
+            );
+            CREATE VIRTUAL TABLE captures_fts USING fts5(
+                id UNINDEXED, app_name, window_title, ocr_text
+            );
+        ").unwrap();
+        // Insert a legacy row without the new columns
+        conn.execute(
+            "INSERT INTO captures (id, file_path, timestamp, is_draft, width, height)
+             VALUES ('legacy', '/tmp/old.png', 1000, 0, 100, 100)",
+            [],
+        ).unwrap();
+        // Run migration
+        apply_schema(&conn).unwrap();
+        // Legacy row gets default media_type
+        let entry = list_conn(&conn, None).unwrap();
+        assert_eq!(entry.len(), 1);
+        assert_eq!(entry[0].media_type, "image");
+        assert!(entry[0].thumbnail_path.is_none());
     }
 
     #[test]
