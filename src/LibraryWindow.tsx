@@ -1,4 +1,5 @@
 import { useState, useCallback } from "react";
+import { LibraryGrid } from "./LibraryGrid";
 
 export interface CaptureEntry {
   id: string;
@@ -59,19 +60,12 @@ export function LibraryWindow() {
 
       {/* Grid + optional detail panel */}
       <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
-        <div
-          style={{
-            flex: selected ? "0 0 60%" : "1 1 auto",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            color: "#6b7280",
-            fontSize: 13,
-          }}
-        >
-          {/* LibraryGrid renders here — added in Task 6 */}
-          Loading captures...
-        </div>
+        <LibraryGrid
+          query={query}
+          selected={selected}
+          onSelect={setSelected}
+          style={{ flex: selected ? "0 0 60%" : "1 1 auto" }}
+        />
         {selected && (
           <div
             style={{
