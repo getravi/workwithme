@@ -215,6 +215,11 @@ pub fn run() {
             // project is macOS-only.
             window_capture::get_window_list,
             window_capture::capture_window,
+            library::library_save_draft,
+            library::library_finalize,
+            library::library_list,
+            library::library_search,
+            library::library_delete,
         ])
         .setup(move |app| {
             // Build tray icon
@@ -243,10 +248,13 @@ pub fn run() {
                 None::<&str>,
             )?;
             let quit_item = tauri::menu::MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+            let open_library_item = tauri::menu::MenuItem::with_id(app, "open-library", "Open Library", true, None::<&str>)?;
             let tray_menu = tauri::menu::MenuBuilder::new(app)
                 .item(&capture_region_item)
                 .item(&capture_window_item)
                 .item(&capture_fullscreen_item)
+                .separator()
+                .item(&open_library_item)
                 .separator()
                 .item(&quit_item)
                 .build()?;
@@ -269,6 +277,9 @@ pub fn run() {
                             if let Err(e) = capture::capture_fullscreen(app_handle_tray.clone()) {
                                 eprintln!("[capture] fullscreen capture failed: {e}");
                             }
+                        }
+                        "open-library" => {
+                            open_library_window(&app_handle_tray);
                         }
                         "quit" => {
                             app_handle_tray.exit(0);
@@ -410,6 +421,20 @@ pub fn run() {
                 }
             });
 
+            // Initialize capture library DB and prune old entries
+            if let Err(e) = library::db::init_db() {
+                eprintln!("[library] DB init failed: {e}");
+            } else {
+                match library::db::prune() {
+                    Ok(paths) => {
+                        for p in &paths {
+                            eprintln!("[library] pruned old capture: {p}");
+                        }
+                    }
+                    Err(e) => eprintln!("[library] prune failed: {e}"),
+                }
+            }
+
             Ok(())
         })
         .run(tauri::generate_context!())
@@ -431,6 +456,28 @@ fn show_overlay_transcribing(app: &tauri::AppHandle) {
         let _ = w.show(); // show in case we got here without a prior listening phase
     }
     let _ = app.emit("overlay-state", "transcribing");
+}
+
+fn open_library_window(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("library") {
+        let _ = w.show();
+        let _ = w.set_focus();
+        return;
+    }
+    if let Err(e) = tauri::WebviewWindowBuilder::new(
+        app,
+        "library",
+        tauri::WebviewUrl::App("library.html".into()),
+    )
+    .inner_size(900.0, 640.0)
+    .min_inner_size(600.0, 400.0)
+    .decorations(true)
+    .resizable(true)
+    .title("Capture Library")
+    .build()
+    {
+        eprintln!("[library] window build failed: {e}");
+    }
 }
 
 // macOS-only: window_capture module is cfg(target_os = "macos") but this project
