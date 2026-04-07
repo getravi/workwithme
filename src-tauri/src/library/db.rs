@@ -14,6 +14,8 @@ pub struct CaptureEntry {
     pub is_draft: bool,
     pub width: Option<i32>,
     pub height: Option<i32>,
+    pub media_type: String,
+    pub thumbnail_path: Option<String>,
 }
 
 /// Open an in-memory connection (used by tests).
@@ -59,7 +61,25 @@ fn apply_schema(conn: &Connection) -> rusqlite::Result<()> {
             window_title,
             ocr_text
         );
-    ")
+    ")?;
+
+    // Safe migration: add media_type if absent (SQLite has no IF NOT EXISTS on ALTER)
+    let columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(captures)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    if !columns.iter().any(|c| c == "media_type") {
+        conn.execute_batch(
+            "ALTER TABLE captures ADD COLUMN media_type TEXT NOT NULL DEFAULT 'image'",
+        )?;
+    }
+    if !columns.iter().any(|c| c == "thumbnail_path") {
+        conn.execute_batch("ALTER TABLE captures ADD COLUMN thumbnail_path TEXT")?;
+    }
+
+    Ok(())
 }
 
 /// Save a draft capture to the global DB and return its UUID.
@@ -104,7 +124,8 @@ pub fn list(before_ts: Option<i64>) -> Result<Vec<CaptureEntry>, String> {
 pub fn list_conn(conn: &Connection, before_ts: Option<i64>) -> Result<Vec<CaptureEntry>, String> {
     let ts_filter = before_ts.unwrap_or(i64::MAX);
     let mut stmt = conn.prepare(
-        "SELECT id, file_path, timestamp, app_name, window_title, is_draft, width, height
+        "SELECT id, file_path, timestamp, app_name, window_title, is_draft, width, height,
+                media_type, thumbnail_path
          FROM captures WHERE timestamp < ?1 ORDER BY timestamp DESC LIMIT 50"
     ).map_err(|e| format!("prepare list: {e}"))?;
     let entries = stmt.query_map(params![ts_filter], row_to_entry)
@@ -124,7 +145,8 @@ pub fn search(query: &str) -> Result<Vec<CaptureEntry>, String> {
 
 pub fn search_conn(conn: &Connection, query: &str) -> Result<Vec<CaptureEntry>, String> {
     let mut stmt = conn.prepare(
-        "SELECT c.id, c.file_path, c.timestamp, c.app_name, c.window_title, c.is_draft, c.width, c.height
+        "SELECT c.id, c.file_path, c.timestamp, c.app_name, c.window_title, c.is_draft,
+                c.width, c.height, c.media_type, c.thumbnail_path
          FROM captures_fts f
          JOIN captures c ON c.id = f.id
          WHERE captures_fts MATCH ?1
@@ -204,6 +226,8 @@ fn row_to_entry(row: &rusqlite::Row) -> rusqlite::Result<CaptureEntry> {
         is_draft: row.get::<_, i32>(5)? != 0,
         width: row.get(6)?,
         height: row.get(7)?,
+        media_type: row.get::<_, Option<String>>(8)?.unwrap_or_else(|| "image".into()),
+        thumbnail_path: row.get(9)?,
     })
 }
 
@@ -244,7 +268,8 @@ mod tests {
         let conn = open_in_memory().expect("in-memory DB");
         let old_ts = chrono::Utc::now().timestamp_millis() - (31i64 * 24 * 60 * 60 * 1000);
         conn.execute(
-            "INSERT INTO captures (id, file_path, timestamp, is_draft, width, height) VALUES (?1, ?2, ?3, 1, 0, 0)",
+            "INSERT INTO captures (id, file_path, timestamp, is_draft, width, height, media_type)
+             VALUES (?1, ?2, ?3, 1, 0, 0, 'image')",
             params!["old-id", "/tmp/old.png", old_ts],
         ).unwrap();
         conn.execute(
