@@ -106,6 +106,46 @@ pub fn save_draft_conn(conn: &Connection, file_path: &str, app_name: Option<&str
     Ok(id)
 }
 
+/// Insert a finalized video capture. Returns the new UUID.
+pub fn save_video(file_path: &str, thumbnail_path: &str) -> Result<String, String> {
+    let conn = db().lock().unwrap();
+    let id = uuid::Uuid::new_v4().to_string();
+    let ts = chrono::Utc::now().timestamp_millis();
+    conn.execute(
+        "INSERT INTO captures
+             (id, file_path, timestamp, is_draft, media_type, thumbnail_path)
+         VALUES (?1, ?2, ?3, 0, 'video', ?4)",
+        params![id, file_path, ts, thumbnail_path],
+    )
+    .map_err(|e| format!("insert video: {e}"))?;
+    conn.execute(
+        "INSERT INTO captures_fts (id, app_name, window_title, ocr_text)
+         VALUES (?1, '', '', '')",
+        params![id],
+    )
+    .map_err(|e| format!("insert fts video: {e}"))?;
+    Ok(id)
+}
+
+pub fn save_video_conn(conn: &Connection, file_path: &str, thumbnail_path: &str) -> Result<String, String> {
+    let id = uuid::Uuid::new_v4().to_string();
+    let ts = chrono::Utc::now().timestamp_millis();
+    conn.execute(
+        "INSERT INTO captures
+             (id, file_path, timestamp, is_draft, media_type, thumbnail_path)
+         VALUES (?1, ?2, ?3, 0, 'video', ?4)",
+        params![id, file_path, ts, thumbnail_path],
+    )
+    .map_err(|e| format!("insert video: {e}"))?;
+    conn.execute(
+        "INSERT INTO captures_fts (id, app_name, window_title, ocr_text)
+         VALUES (?1, '', '', '')",
+        params![id],
+    )
+    .map_err(|e| format!("insert fts video: {e}"))?;
+    Ok(id)
+}
+
 /// Mark a capture as finalized (annotated version saved).
 pub fn finalize(id: &str) -> Result<(), String> {
     let conn = db().lock().unwrap();
@@ -318,6 +358,18 @@ mod tests {
         assert_eq!(entry.len(), 1);
         assert_eq!(entry[0].media_type, "image");
         assert!(entry[0].thumbnail_path.is_none());
+    }
+
+    #[test]
+    fn test_save_video_stores_media_type() {
+        let conn = open_in_memory().expect("in-memory DB");
+        let id = save_video_conn(&conn, "/tmp/rec.mp4", "/tmp/rec-thumb.png").unwrap();
+        let entries = list_conn(&conn, None).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, id);
+        assert_eq!(entries[0].media_type, "video");
+        assert_eq!(entries[0].thumbnail_path.as_deref(), Some("/tmp/rec-thumb.png"));
+        assert!(!entries[0].is_draft);
     }
 
     #[test]

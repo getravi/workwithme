@@ -54,6 +54,36 @@ pub fn library_delete(id: String) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+pub fn library_save_video(
+    app: tauri::AppHandle,
+    exported_path: String,
+) -> Result<String, String> {
+    // Extract first frame as base64 PNG thumbnail
+    let thumb_b64 = crate::recorder::recording_extract_thumbnail(app, exported_path.clone())?;
+
+    // Write thumbnail PNG to captures dir
+    let dir = dirs::data_local_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("workwithme")
+        .join("captures");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir: {e}"))?;
+    let thumb_id = uuid::Uuid::new_v4().to_string();
+    let thumb_path = dir.join(format!("{thumb_id}-thumb.png"));
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&thumb_b64)
+        .map_err(|e| format!("base64: {e}"))?;
+    std::fs::write(&thumb_path, &bytes).map_err(|e| format!("write thumb: {e}"))?;
+
+    // Insert DB row
+    let id = db::save_video(&exported_path, &thumb_path.to_string_lossy())?;
+
+    // Spawn OCR on thumbnail for searchability
+    super::ocr::spawn_ocr(id.clone(), thumb_path.to_string_lossy().to_string());
+
+    Ok(id)
+}
+
 /// Decode base64 PNG, write to captures dir, return (file_path, width, height).
 fn write_png(image_b64: &str) -> Result<(String, i32, i32), String> {
     let dir = dirs::data_local_dir()
