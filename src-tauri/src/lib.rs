@@ -3,6 +3,7 @@ mod audio;
 mod transcription;
 mod capture;
 mod library;
+mod recorder;
 #[cfg(target_os = "macos")]
 mod window_capture;
 
@@ -192,6 +193,10 @@ pub fn run() {
                         if event.state() == ShortcutState::Pressed {
                             open_window_capture_overlay(app);
                         }
+                    } else if shortcut.matches(Modifiers::SUPER | Modifiers::CONTROL, Code::Digit6) {
+                        if event.state() == ShortcutState::Pressed {
+                            open_recording_options_window(app);
+                        }
                     }
                 })
                 .build()
@@ -221,6 +226,19 @@ pub fn run() {
             library::library_list,
             library::library_search,
             library::library_delete,
+            library::library_save_video,
+            recorder::recording_list_mics,
+            recorder::recording_start,
+            recorder::recording_stop,
+            recorder::recording_get_elapsed,
+            recorder::recording_get_current_session,
+            recorder::recording_get_duration,
+            recorder::recording_export,
+            recorder::recording_extract_thumbnail,
+            recorder::recording_get_trim_path,
+            recorder::open_region_select_recording,
+            recorder::open_recording_pill,
+            recorder::open_trim_editor,
         ])
         .setup(move |app| {
             // Build tray icon
@@ -248,12 +266,20 @@ pub fn run() {
                 true,
                 None::<&str>,
             )?;
+            let record_screen_item = tauri::menu::MenuItem::with_id(
+                app,
+                "record-screen",
+                "Record Screen",
+                true,
+                Some("Super+Ctrl+6"),
+            )?;
             let quit_item = tauri::menu::MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let open_library_item = tauri::menu::MenuItem::with_id(app, "open-library", "Open Library", true, None::<&str>)?;
             let tray_menu = tauri::menu::MenuBuilder::new(app)
                 .item(&capture_region_item)
                 .item(&capture_window_item)
                 .item(&capture_fullscreen_item)
+                .item(&record_screen_item)
                 .separator()
                 .item(&open_library_item)
                 .separator()
@@ -282,6 +308,9 @@ pub fn run() {
                         "open-library" => {
                             open_library_window(&app_handle_tray);
                         }
+                        "record-screen" => {
+                            open_recording_options_window(&app_handle_tray);
+                        }
                         "quit" => {
                             app_handle_tray.exit(0);
                         }
@@ -297,6 +326,7 @@ pub fn run() {
             app.global_shortcut().register("Super+Shift+Space")?;
             app.global_shortcut().register("Super+Ctrl+4")?;
             app.global_shortcut().register("Super+Ctrl+5")?;
+            app.global_shortcut().register("Super+Ctrl+6")?;
 
             // Transcribing overlay — small floating pill shown while Whisper is running
             let overlay = tauri::WebviewWindowBuilder::new(
@@ -562,4 +592,27 @@ async fn start_http_server() {
 
 fn is_port_bound(port: u16) -> bool {
     std::net::TcpStream::connect(("127.0.0.1", port)).is_ok()
+}
+
+fn open_recording_options_window(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("recording-options") {
+        let _ = w.show();
+        let _ = w.set_focus();
+        return;
+    }
+    if let Err(e) = tauri::WebviewWindowBuilder::new(
+        app,
+        "recording-options",
+        tauri::WebviewUrl::App("recording-options.html".into()),
+    )
+    .inner_size(360.0, 220.0)
+    .always_on_top(true)
+    .decorations(true)
+    .resizable(false)
+    .title("Record Screen")
+    .center()
+    .build()
+    {
+        eprintln!("[recorder] options window build failed: {e}");
+    }
 }
