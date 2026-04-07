@@ -249,6 +249,25 @@ pub fn get_captured_image(
     Some(CapturedImageData { image, library_id })
 }
 
+/// Copy a saved capture to clipboard by reading the PNG from disk.
+/// Used by the library detail panel.
+#[tauri::command]
+pub fn copy_image_to_clipboard_from_path(file_path: String) -> Result<(), String> {
+    let bytes = std::fs::read(&file_path).map_err(|e| format!("read: {e}"))?;
+    let img = image::load_from_memory(&bytes).map_err(|e| format!("decode: {e}"))?;
+    let rgba = img.to_rgba8();
+    let (w, h) = (rgba.width(), rgba.height());
+    let raw = rgba.into_raw();
+    let img_data = arboard::ImageData {
+        width: w as usize,
+        height: h as usize,
+        bytes: raw.into(),
+    };
+    let mut board = arboard::Clipboard::new().map_err(|e| format!("clipboard: {e}"))?;
+    board.set_image(img_data).map_err(|e| format!("set: {e}"))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

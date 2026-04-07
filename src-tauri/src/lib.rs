@@ -207,6 +207,7 @@ pub fn run() {
             capture::capture_region,
             capture::capture_fullscreen,
             capture::copy_image_to_clipboard,
+            capture::copy_image_to_clipboard_from_path,
             capture::save_image_to_file,
             capture::open_capture_overlay,
             capture::open_editor_window,

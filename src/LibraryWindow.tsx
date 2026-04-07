@@ -1,5 +1,6 @@
 import { useState, useCallback } from "react";
 import { LibraryGrid } from "./LibraryGrid";
+import { LibraryDetailPanel } from "./LibraryDetailPanel";
 
 export interface CaptureEntry {
   id: string;
@@ -22,8 +23,6 @@ export function LibraryWindow() {
     },
     [setSelected],
   );
-
-  void handleDelete;
 
   return (
     <div
@@ -67,20 +66,11 @@ export function LibraryWindow() {
           style={{ flex: selected ? "0 0 60%" : "1 1 auto" }}
         />
         {selected && (
-          <div
-            style={{
-              width: 260,
-              borderLeft: "1px solid #1f2937",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              color: "#6b7280",
-              fontSize: 13,
-            }}
-          >
-            {/* LibraryDetailPanel renders here — added in Task 7 */}
-            Detail panel
-          </div>
+          <LibraryDetailPanel
+            entry={selected}
+            onClose={() => setSelected(null)}
+            onDeleted={handleDelete}
+          />
         )}
       </div>
     </div>
