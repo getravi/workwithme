@@ -5,6 +5,10 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 interface Point { x: number; y: number; }
 interface Rect { x: number; y: number; width: number; height: number; }
 
+interface CaptureOverlayProps {
+  mode?: "capture" | "record";
+}
+
 /** Pure utility — exported for testing. */
 export function computeSelectionRect(start: Point, end: Point): Rect {
   return {
@@ -15,7 +19,7 @@ export function computeSelectionRect(start: Point, end: Point): Rect {
   };
 }
 
-export function CaptureOverlay() {
+export function CaptureOverlay({ mode = "capture" }: CaptureOverlayProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [dragging, setDragging] = useState(false);
   const startRef = useRef<Point>({ x: 0, y: 0 });
@@ -83,18 +87,27 @@ export function CaptureOverlay() {
     setDragging(false);
     const rect = computeSelectionRect(startRef.current, { x: e.clientX, y: e.clientY });
     if (rect.width < 5 || rect.height < 5) {
-      // Too small — ignore and close
       await getCurrentWindow().close();
       return;
     }
     try {
-      const base64Png: string = await invoke("capture_region", {
-        x: Math.round(rect.x),
-        y: Math.round(rect.y),
-        width: Math.round(rect.width),
-        height: Math.round(rect.height),
-      });
-      await invoke("open_editor_window", { base64Png });
+      if (mode === "record") {
+        const { emit } = await import("@tauri-apps/api/event");
+        await emit("recording-region-selected", {
+          x: Math.round(rect.x),
+          y: Math.round(rect.y),
+          width: Math.round(rect.width),
+          height: Math.round(rect.height),
+        });
+      } else {
+        const base64Png: string = await invoke("capture_region", {
+          x: Math.round(rect.x),
+          y: Math.round(rect.y),
+          width: Math.round(rect.width),
+          height: Math.round(rect.height),
+        });
+        await invoke("open_editor_window", { base64Png });
+      }
     } catch (err) {
       console.error("[capture] failed:", err);
     }
