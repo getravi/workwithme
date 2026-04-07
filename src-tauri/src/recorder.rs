@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use serde::{Deserialize, Serialize};
-use screenshots::Screen as ScreenInfo;
 
 pub struct RecordingSession {
     pub id: String,
