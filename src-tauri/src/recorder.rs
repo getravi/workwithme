@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use serde::{Deserialize, Serialize};
+use tauri::Manager;
 
 pub struct RecordingSession {
     pub id: String,
@@ -237,4 +238,213 @@ pub fn recording_get_elapsed(session_id: String) -> Result<u64, String> {
 #[tauri::command]
 pub fn recording_get_current_session() -> Result<Option<String>, String> {
     Ok(get_active().lock().unwrap().as_ref().map(|s| s.id.clone()))
+}
+
+#[tauri::command]
+pub fn recording_get_duration(app: tauri::AppHandle, path: String) -> Result<u64, String> {
+    let ffmpeg = ffmpeg_path(&app);
+    let output = Command::new(&ffmpeg)
+        .args(["-i", &path])
+        .stderr(Stdio::piped())
+        .stdout(Stdio::null())
+        .output()
+        .map_err(|e| format!("ffmpeg error: {e}"))?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    parse_duration_from_output(&stderr)
+}
+
+fn parse_duration_from_output(output: &str) -> Result<u64, String> {
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("Duration:") {
+            // "Duration: HH:MM:SS.ss, ..."
+            let after_colon = trimmed.trim_start_matches("Duration:").trim();
+            let dur_str = after_colon.split(',').next().unwrap_or("").trim();
+            return parse_duration_str(dur_str);
+        }
+    }
+    Err("Duration not found in ffmpeg output".into())
+}
+
+fn parse_duration_str(s: &str) -> Result<u64, String> {
+    // "HH:MM:SS.ss"
+    let parts: Vec<&str> = s.split(':').collect();
+    if parts.len() != 3 {
+        return Err(format!("unexpected duration format: {s}"));
+    }
+    let h: u64 = parts[0].parse().map_err(|_| format!("parse hours: {}", parts[0]))?;
+    let m: u64 = parts[1].parse().map_err(|_| format!("parse minutes: {}", parts[1]))?;
+    let sec_frac: Vec<&str> = parts[2].split('.').collect();
+    let sec: u64 = sec_frac[0].parse().map_err(|_| format!("parse seconds: {}", sec_frac[0]))?;
+    let ms: u64 = if sec_frac.len() > 1 {
+        let frac = sec_frac[1];
+        let v: u64 = frac.parse().unwrap_or(0);
+        match frac.len() {
+            1 => v * 100,
+            2 => v * 10,
+            _ => v,
+        }
+    } else {
+        0
+    };
+    Ok(h * 3_600_000 + m * 60_000 + sec * 1_000 + ms)
+}
+
+#[tauri::command]
+pub fn recording_export(
+    app: tauri::AppHandle,
+    input: String,
+    output: String,
+    start_ms: u64,
+    end_ms: u64,
+) -> Result<(), String> {
+    let ffmpeg = ffmpeg_path(&app);
+    let start_s = format!("{:.3}", start_ms as f64 / 1000.0);
+    let end_s = format!("{:.3}", end_ms as f64 / 1000.0);
+    let status = Command::new(&ffmpeg)
+        .args([
+            "-ss", &start_s,
+            "-i", &input,
+            "-to", &end_s,
+            "-c", "copy",
+            "-y",
+            &output,
+        ])
+        .status()
+        .map_err(|e| format!("ffmpeg export error: {e}"))?;
+    if !status.success() {
+        return Err(format!("ffmpeg export failed: {status}"));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn recording_extract_thumbnail(app: tauri::AppHandle, path: String) -> Result<String, String> {
+    use base64::Engine;
+    let ffmpeg = ffmpeg_path(&app);
+    let output = Command::new(&ffmpeg)
+        .args([
+            "-i", &path,
+            "-vframes", "1",
+            "-f", "image2pipe",
+            "-vcodec", "png",
+            "pipe:1",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .map_err(|e| format!("ffmpeg thumbnail error: {e}"))?;
+    if output.stdout.is_empty() {
+        return Err("empty thumbnail output from ffmpeg".into());
+    }
+    Ok(base64::engine::general_purpose::STANDARD.encode(&output.stdout))
+}
+
+static PENDING_TRIM_PATH: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+
+fn get_pending_trim() -> &'static Mutex<Option<String>> {
+    PENDING_TRIM_PATH.get_or_init(|| Mutex::new(None))
+}
+
+/// Opens the region-selection overlay for recording (transparent fullscreen canvas).
+#[tauri::command]
+pub fn open_region_select_recording(app: tauri::AppHandle) -> Result<(), String> {
+    let screens = screenshots::Screen::all().unwrap_or_default();
+    let (min_x, min_y, max_x, max_y) = screen_bounds(&screens);
+    tauri::WebviewWindowBuilder::new(
+        &app,
+        "region-select-recording",
+        tauri::WebviewUrl::App("region-select-recording.html".into()),
+    )
+    .inner_size((max_x - min_x) as f64, (max_y - min_y) as f64)
+    .position(min_x as f64, min_y as f64)
+    .transparent(true)
+    .always_on_top(true)
+    .decorations(false)
+    .skip_taskbar(true)
+    .focused(true)
+    .resizable(false)
+    .build()
+    .map(|_| ())
+    .map_err(|e| format!("open region-select-recording: {e}"))
+}
+
+/// Opens the recording pill. The pill calls `recording_get_current_session` on mount.
+#[tauri::command]
+pub fn open_recording_pill(app: tauri::AppHandle) -> Result<(), String> {
+    // Close any existing pill first
+    if let Some(w) = app.get_webview_window("recording-pill") {
+        let _ = w.close();
+    }
+    let pill = tauri::WebviewWindowBuilder::new(
+        &app,
+        "recording-pill",
+        tauri::WebviewUrl::App("recording-pill.html".into()),
+    )
+    .inner_size(180.0, 44.0)
+    .always_on_top(true)
+    .decorations(false)
+    .transparent(true)
+    .skip_taskbar(true)
+    .resizable(false)
+    .build()
+    .map_err(|e| format!("open recording-pill: {e}"))?;
+
+    // Position bottom-center of primary monitor
+    if let Ok(Some(monitor)) = pill.primary_monitor() {
+        let sf = monitor.scale_factor();
+        let mw = monitor.size().width as f64 / sf;
+        let mh = monitor.size().height as f64 / sf;
+        let _ = pill.set_position(tauri::LogicalPosition::new(mw / 2.0 - 90.0, mh - 90.0));
+    }
+    Ok(())
+}
+
+/// Opens the trim editor. Stores the raw_path so the editor can call `recording_get_trim_path`.
+#[tauri::command]
+pub fn open_trim_editor(app: tauri::AppHandle, raw_path: String) -> Result<(), String> {
+    *get_pending_trim().lock().unwrap() = Some(raw_path);
+    tauri::WebviewWindowBuilder::new(
+        &app,
+        "trim-editor",
+        tauri::WebviewUrl::App("trim-editor.html".into()),
+    )
+    .inner_size(900.0, 600.0)
+    .decorations(true)
+    .resizable(true)
+    .title("Trim Recording")
+    .build()
+    .map(|_| ())
+    .map_err(|e| format!("open trim-editor: {e}"))
+}
+
+/// Called by the trim editor on mount to retrieve the raw MP4 path.
+#[tauri::command]
+pub fn recording_get_trim_path() -> Result<Option<String>, String> {
+    Ok(get_pending_trim().lock().unwrap().take())
+}
+
+fn screen_bounds(screens: &[screenshots::Screen]) -> (i32, i32, i32, i32) {
+    if screens.is_empty() {
+        return (0, 0, 1920, 1080);
+    }
+    let min_x = screens.iter().map(|s| s.display_info.x).min().unwrap_or(0);
+    let min_y = screens.iter().map(|s| s.display_info.y).min().unwrap_or(0);
+    let max_x = screens
+        .iter()
+        .map(|s| {
+            s.display_info.x
+                + (s.display_info.width as f64 / s.display_info.scale_factor as f64) as i32
+        })
+        .max()
+        .unwrap_or(1920);
+    let max_y = screens
+        .iter()
+        .map(|s| {
+            s.display_info.y
+                + (s.display_info.height as f64 / s.display_info.scale_factor as f64) as i32
+        })
+        .max()
+        .unwrap_or(1080);
+    (min_x, min_y, max_x, max_y)
 }
