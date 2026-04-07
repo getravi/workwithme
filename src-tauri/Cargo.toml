@@ -99,6 +99,9 @@ criterion = { version = "0.5", features = ["html_reports"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.23"
+objc2 = "0.5"
+objc2-foundation = { version = "0.2", features = ["NSArray", "NSDictionary", "NSString", "NSURL", "NSObject", "NSEnumerator"] }
+objc2-vision = { version = "0.2", features = ["VNRequest", "VNRequestHandler", "VNRecognizeTextRequest", "VNObservation"] }
 
 [[bench]]
 name = "performance_benchmarks"
