@@ -17,6 +17,10 @@ export default defineConfig(async () => ({
         editor: "editor.html",
         "window-capture": "window-capture.html",
         library: "library.html",
+        "recording-options": "recording-options.html",
+        "recording-pill": "recording-pill.html",
+        "trim-editor": "trim-editor.html",
+        "region-select-recording": "region-select-recording.html",
       },
       output: {
         manualChunks: {
