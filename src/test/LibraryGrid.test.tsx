@@ -11,6 +11,8 @@ const mockEntries = [
     is_draft: false,
     width: 1440,
     height: 900,
+    media_type: "image",
+    thumbnail_path: null,
   },
   {
     id: "bbb",
@@ -21,6 +23,8 @@ const mockEntries = [
     is_draft: true,
     width: 1280,
     height: 800,
+    media_type: "image",
+    thumbnail_path: null,
   },
 ];
 

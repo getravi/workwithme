@@ -19,6 +19,8 @@ const entry: CaptureEntry = {
   is_draft: false,
   width: 1440,
   height: 900,
+  media_type: "image",
+  thumbnail_path: null,
 };
 
 const draftEntry: CaptureEntry = { ...entry, id: "bbb", is_draft: true };

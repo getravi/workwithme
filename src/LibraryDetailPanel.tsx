@@ -33,6 +33,30 @@ export function LibraryDetailPanel({ entry, onClose, onDeleted }: Props) {
     }
   }
 
+  async function handlePlay() {
+    try {
+      const { open } = await import("@tauri-apps/plugin-opener");
+      await open(entry.file_path);
+    } catch (e) {
+      console.error("[LibraryDetailPanel] open failed:", e);
+    }
+  }
+
+  async function handleExportMp4() {
+    try {
+      const { save } = await import("@tauri-apps/plugin-dialog");
+      const outputPath = await save({
+        defaultPath: `recording-${new Date().toISOString().slice(0, 10)}.mp4`,
+        filters: [{ name: "MP4 Video", extensions: ["mp4"] }],
+      });
+      if (!outputPath) return;
+      const { copyFile } = await import("@tauri-apps/plugin-fs");
+      await copyFile(entry.file_path, outputPath);
+    } catch (e) {
+      console.error("[LibraryDetailPanel] export failed:", e);
+    }
+  }
+
   const date = new Date(entry.timestamp);
   const dateStr = date.toLocaleDateString(undefined, {
     year: "numeric", month: "short", day: "numeric",
@@ -75,13 +99,22 @@ export function LibraryDetailPanel({ entry, onClose, onDeleted }: Props) {
         </button>
       </div>
 
-      {/* Preview */}
+      {/* Preview: video shows <video>, image shows <img> */}
       <div style={{ padding: 12 }}>
-        <img
-          src={convertFileSrc(entry.file_path)}
-          alt="capture preview"
-          style={{ width: "100%", borderRadius: 6, border: "1px solid #1f2937" }}
-        />
+        {entry.media_type === "video" ? (
+          <video
+            src={convertFileSrc(entry.file_path)}
+            poster={entry.thumbnail_path ? convertFileSrc(entry.thumbnail_path) : undefined}
+            style={{ width: "100%", borderRadius: 6, border: "1px solid #1f2937" }}
+            controls
+          />
+        ) : (
+          <img
+            src={convertFileSrc(entry.file_path)}
+            alt="capture preview"
+            style={{ width: "100%", borderRadius: 6, border: "1px solid #1f2937" }}
+          />
+        )}
       </div>
 
       {/* Metadata */}
@@ -128,9 +161,28 @@ export function LibraryDetailPanel({ entry, onClose, onDeleted }: Props) {
 
       {/* Actions */}
       <div style={{ padding: 12, borderTop: "1px solid #1f2937", display: "flex", flexDirection: "column", gap: 6 }}>
-        <button onClick={handleCopy} style={actionBtn}>
-          Copy to Clipboard
-        </button>
+        {entry.media_type === "video" ? (
+          <>
+            <button
+              data-testid="play-btn"
+              onClick={handlePlay}
+              style={actionBtn}
+            >
+              Play
+            </button>
+            <button
+              data-testid="export-mp4-btn"
+              onClick={handleExportMp4}
+              style={actionBtn}
+            >
+              Export MP4
+            </button>
+          </>
+        ) : (
+          <button onClick={handleCopy} style={actionBtn}>
+            Copy to Clipboard
+          </button>
+        )}
 
         {!showDeleteConfirm ? (
           <button

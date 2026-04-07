@@ -11,6 +11,8 @@ export interface CaptureEntry {
   is_draft: boolean;
   width: number | null;
   height: number | null;
+  media_type: string;
+  thumbnail_path: string | null;
 }
 
 export function LibraryWindow() {

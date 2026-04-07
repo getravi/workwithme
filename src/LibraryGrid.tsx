@@ -112,7 +112,11 @@ export function LibraryGrid({ query, selected, onSelect, style }: LibraryGridPro
           >
             <div style={{ position: "relative" }}>
               <img
-                src={convertFileSrc(entry.file_path)}
+                src={convertFileSrc(
+                  entry.media_type === "video" && entry.thumbnail_path
+                    ? entry.thumbnail_path
+                    : entry.file_path
+                )}
                 alt=""
                 style={{
                   width: "100%",
@@ -135,6 +139,24 @@ export function LibraryGrid({ query, selected, onSelect, style }: LibraryGridPro
                     border: "1px solid #1e2a3a",
                   }}
                 />
+              )}
+              {entry.media_type === "video" && (
+                <div
+                  data-testid={`video-badge-${entry.id}`}
+                  style={{
+                    position: "absolute",
+                    bottom: 6,
+                    left: 6,
+                    background: "rgba(0,0,0,0.7)",
+                    color: "#fff",
+                    fontSize: 10,
+                    padding: "2px 6px",
+                    borderRadius: 4,
+                    fontWeight: 600,
+                  }}
+                >
+                  ▶
+                </div>
               )}
             </div>
             <div style={{ padding: "4px 8px 6px", fontSize: 11, color: "#9ca3af" }}>
