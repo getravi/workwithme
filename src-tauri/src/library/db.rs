@@ -109,7 +109,9 @@ pub fn list_conn(conn: &Connection, before_ts: Option<i64>) -> Result<Vec<Captur
     ).map_err(|e| format!("prepare list: {e}"))?;
     let entries = stmt.query_map(params![ts_filter], row_to_entry)
         .map_err(|e| format!("query list: {e}"))?
-        .filter_map(|r| r.ok())
+        .filter_map(|r| {
+            r.map_err(|e| eprintln!("[library/db] list row error: {e}")).ok()
+        })
         .collect();
     Ok(entries)
 }
@@ -130,7 +132,9 @@ pub fn search_conn(conn: &Connection, query: &str) -> Result<Vec<CaptureEntry>, 
     ).map_err(|e| format!("prepare search: {e}"))?;
     let entries = stmt.query_map(params![query], row_to_entry)
         .map_err(|e| format!("query search: {e}"))?
-        .filter_map(|r| r.ok())
+        .filter_map(|r| {
+            r.map_err(|e| eprintln!("[library/db] search row error: {e}")).ok()
+        })
         .collect();
     Ok(entries)
 }
@@ -141,10 +145,12 @@ pub fn delete(id: &str) -> Result<Option<String>, String> {
     let file_path: Option<String> = conn
         .query_row("SELECT file_path FROM captures WHERE id = ?1", params![id], |r| r.get(0))
         .ok();
+    conn.execute_batch("BEGIN").map_err(|e| format!("begin: {e}"))?;
     conn.execute("DELETE FROM captures WHERE id = ?1", params![id])
         .map_err(|e| format!("delete: {e}"))?;
     conn.execute("DELETE FROM captures_fts WHERE id = ?1", params![id])
         .map_err(|e| format!("delete fts: {e}"))?;
+    conn.execute_batch("COMMIT").map_err(|e| format!("commit: {e}"))?;
     Ok(file_path)
 }
 
@@ -159,6 +165,9 @@ pub fn update_ocr_conn(conn: &Connection, id: &str, ocr_text: &str) -> Result<()
         "UPDATE captures_fts SET ocr_text = ?1 WHERE id = ?2",
         params![ocr_text, id],
     ).map_err(|e| format!("update ocr: {e}"))?;
+    if conn.changes() == 0 {
+        eprintln!("[library/db] update_ocr: no FTS row found for id={id}");
+    }
     Ok(())
 }
 
@@ -174,7 +183,9 @@ pub fn prune_conn(conn: &Connection) -> Result<Vec<String>, String> {
         .map_err(|e| format!("prepare prune: {e}"))?;
     let paths: Vec<String> = stmt.query_map(params![cutoff], |r| r.get(0))
         .map_err(|e| format!("query prune: {e}"))?
-        .filter_map(|r| r.ok())
+        .filter_map(|r| {
+            r.map_err(|e| eprintln!("[library/db] prune row error: {e}")).ok()
+        })
         .collect();
     conn.execute("DELETE FROM captures WHERE timestamp < ?1", params![cutoff])
         .map_err(|e| format!("delete old: {e}"))?;
