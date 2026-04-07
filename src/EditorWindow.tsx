@@ -278,6 +278,7 @@ export function EditorWindow() {
   const [stageSize, setStageSize] = useState({ width: 800, height: 600 });
   const [copyToast, setCopyToast] = useState(false);
   const stageRef = useRef<Konva.Stage>(null);
+  const libraryIdRef = useRef<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [saveOpen, setSaveOpen] = useState(false);
   const [drawing, setDrawing] = useState<{ type: ToolType; startX: number; startY: number } | null>(null);
@@ -286,10 +287,11 @@ export function EditorWindow() {
 
   // Load captured image from Rust state
   useEffect(() => {
-    invoke<string | null>("get_captured_image").then((b64) => {
-      if (!b64) return;
+    invoke<{ image: string; library_id: string | null } | null>("get_captured_image").then((data) => {
+      if (!data) return;
+      libraryIdRef.current = data.library_id;
       const img = new window.Image();
-      img.src = `data:image/png;base64,${b64}`;
+      img.src = `data:image/png;base64,${data.image}`;
       img.onload = () => {
         setImageEl(img);
         setStageSize({ width: img.naturalWidth, height: img.naturalHeight });
@@ -318,6 +320,14 @@ export function EditorWindow() {
       await invoke("copy_image_to_clipboard", { base64Png });
       setCopyToast(true);
       setTimeout(() => setCopyToast(false), 2000);
+      if (libraryIdRef.current) {
+        const libId = libraryIdRef.current;
+        libraryIdRef.current = null;
+        invoke("library_finalize", {
+          id: libId,
+          imageB64: base64Png,
+        }).catch((e) => console.error("[editor] library_finalize failed:", e));
+      }
     } catch (err) {
       console.error("[editor] copy failed:", err);
     }
@@ -329,6 +339,15 @@ export function EditorWindow() {
     const base64Png = dataUrl.replace(/^data:image\/(png|jpeg);base64,/, "");
     try {
       await invoke("save_image_to_file", { base64Png });
+      // Finalize the library draft with the annotated version
+      if (libraryIdRef.current) {
+        const libId = libraryIdRef.current;
+        libraryIdRef.current = null; // clear so we don't finalize twice
+        invoke("library_finalize", {
+          id: libId,
+          imageB64: base64Png,
+        }).catch((e) => console.error("[editor] library_finalize failed:", e));
+      }
     } catch (err) {
       console.error("[editor] save failed:", err);
     }
