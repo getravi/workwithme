@@ -205,10 +205,17 @@ pub fn open_editor_window(
     base64_png: String,
     library_id: Option<String>,
 ) -> Result<(), String> {
-    // Store image so the editor can retrieve it via get_captured_image
     let state = app.state::<CaptureState>();
+
+    // Auto-save draft if no library_id provided (e.g. called directly from frontend)
+    let resolved_library_id = library_id.or_else(|| {
+        crate::library::commands::save_draft_internal(&base64_png, None, None)
+            .map_err(|e| eprintln!("[library] auto-save draft failed: {e}"))
+            .ok()
+    });
+
     *state.pending_image.lock().unwrap() = Some(base64_png);
-    *state.pending_library_id.lock().unwrap() = library_id;
+    *state.pending_library_id.lock().unwrap() = resolved_library_id;
 
     // Close any existing editor
     if let Some(w) = app.get_webview_window("capture-editor") {
