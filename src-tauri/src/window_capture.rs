@@ -235,5 +235,16 @@ pub fn capture_window(app: AppHandle, window_id: u32) -> Result<(), String> {
     std::fs::remove_file(&tmp).ok();
 
     let base64_png = base64::engine::general_purpose::STANDARD.encode(&bytes);
-    capture::open_editor_window(app, base64_png)
+
+    // Look up metadata for this window so we can store it in the library
+    let win_info = collect_windows().into_iter().find(|w| w.id == window_id);
+    let app_name = win_info.as_ref().map(|w| w.app_name.as_str()).unwrap_or("");
+    let window_title = win_info.as_ref().map(|w| w.title.as_str()).unwrap_or("");
+    let library_id = crate::library::commands::save_draft_internal(
+        &base64_png,
+        Some(app_name),
+        Some(window_title),
+    ).ok();
+
+    capture::open_editor_window(app, base64_png, library_id)
 }

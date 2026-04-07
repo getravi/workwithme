@@ -5,14 +5,22 @@ use tauri::{AppHandle, Manager};
 /// until the editor window is ready to request it.
 pub struct CaptureState {
     pub pending_image: std::sync::Mutex<Option<String>>,
+    pub pending_library_id: std::sync::Mutex<Option<String>>,
 }
 
 impl CaptureState {
     pub fn new() -> Self {
         Self {
             pending_image: std::sync::Mutex::new(None),
+            pending_library_id: std::sync::Mutex::new(None),
         }
     }
+}
+
+#[derive(serde::Serialize)]
+pub struct CapturedImageData {
+    pub image: String,
+    pub library_id: Option<String>,
 }
 
 /// Capture a rectangular region of the screen.
@@ -186,7 +194,8 @@ pub fn capture_fullscreen(app: AppHandle) -> Result<(), String> {
         .map_err(|e| format!("encode failed: {e}"))?;
     let base64_png = base64::engine::general_purpose::STANDARD.encode(cursor.into_inner());
 
-    open_editor_window(app, base64_png)
+    let library_id = crate::library::commands::save_draft_internal(&base64_png, None, None).ok();
+    open_editor_window(app, base64_png, library_id)
 }
 
 /// Store the captured image and open the annotation editor window.
@@ -194,10 +203,12 @@ pub fn capture_fullscreen(app: AppHandle) -> Result<(), String> {
 pub fn open_editor_window(
     app: AppHandle,
     base64_png: String,
+    library_id: Option<String>,
 ) -> Result<(), String> {
     // Store image so the editor can retrieve it via get_captured_image
     let state = app.state::<CaptureState>();
     *state.pending_image.lock().unwrap() = Some(base64_png);
+    *state.pending_library_id.lock().unwrap() = library_id;
 
     // Close any existing editor
     if let Some(w) = app.get_webview_window("capture-editor") {
@@ -225,8 +236,10 @@ pub fn open_editor_window(
 #[tauri::command]
 pub fn get_captured_image(
     state: tauri::State<CaptureState>,
-) -> Option<String> {
-    state.pending_image.lock().unwrap().take()
+) -> Option<CapturedImageData> {
+    let image = state.pending_image.lock().unwrap().take()?;
+    let library_id = state.pending_library_id.lock().unwrap().take();
+    Some(CapturedImageData { image, library_id })
 }
 
 #[cfg(test)]
