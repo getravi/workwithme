@@ -17,6 +17,8 @@ pub struct MeetingRecording {
     pub started_at: std::time::Instant,
 }
 
+// Singleton mutex for the in-progress meeting. OnceLock initializes it once; the inner
+// Option<MeetingRecording> is None when idle and Some(...) while recording.
 static ACTIVE_MEETING: OnceLock<Mutex<Option<MeetingRecording>>> = OnceLock::new();
 
 fn get_active() -> &'static Mutex<Option<MeetingRecording>> {
@@ -250,6 +252,11 @@ fn transcribe_meeting_audio(
 
     let _ = voice_db::complete_session(&session_id);
     let _ = app.emit("meeting-transcription-complete", json!({"session_id": session_id}));
+
+    // Delete the WAV file now that the transcript is persisted — these are large (~115 MB/hr).
+    if let Err(e) = std::fs::remove_file(&wav_path) {
+        eprintln!("[meeting] failed to delete WAV after transcription: {e}");
+    }
 }
 
 // ── Claude API summary generation ────────────────────────────────────────────
@@ -269,21 +276,12 @@ pub fn meeting_generate_summary(app: tauri::AppHandle, session_id: String) -> Re
     }
     let notes = voice_db::get_notes(&session_id)?;
 
-    let session_id_clone = session_id.clone();
-    std::thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-        let sid = session_id_clone;
-        let config = llm_config::load_config();
-        let api_key = match llm_config::get_api_key(&config) {
-            Ok(k) => k,
-            Err(e) => {
-                let _ = app.emit("meeting-summary-error", json!({"session_id": &sid, "error": e}));
-                return;
-            }
-        };
-        match rt.block_on(async {
-            generate_summary_inner(&config, &segments, &notes, &api_key).await
-        }) {
+    let sid = session_id;
+    let config = llm_config::load_config();
+    let api_key = llm_config::get_api_key(&config)?;
+
+    tauri::async_runtime::spawn(async move {
+        match generate_summary_inner(&config, &segments, &notes, &api_key).await {
             Ok((summary, action_items, decisions)) => {
                 match voice_db::update_ai_output(&sid, &summary, &action_items, &decisions) {
                     Ok(_) => {

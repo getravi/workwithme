@@ -48,12 +48,27 @@ pub fn voice_dir() -> PathBuf {
 }
 
 /// Initialize the global voice DB connection. Call once at app launch.
+/// Schema versioning via PRAGMA user_version:
+///   v1 — initial schema (voice_sessions, transcript_segments, session_notes, voice_fts)
+/// To add a migration: increment DB_VERSION, add `if version < N { ... }` block below.
+const DB_VERSION: i64 = 1;
+
 pub fn init_db() -> Result<(), String> {
     let dir = voice_dir();
     std::fs::create_dir_all(&dir).map_err(|e| format!("create voice dir: {e}"))?;
     let db_path = dir.join("voice.db");
     let conn = Connection::open(&db_path).map_err(|e| format!("open voice db: {e}"))?;
-    apply_schema(&conn).map_err(|e| format!("voice schema: {e}"))?;
+
+    let version: i64 = conn
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap_or(0);
+
+    if version < DB_VERSION {
+        apply_schema(&conn).map_err(|e| format!("voice schema: {e}"))?;
+        conn.execute_batch(&format!("PRAGMA user_version = {DB_VERSION}"))
+            .map_err(|e| format!("set user_version: {e}"))?;
+    }
+
     VOICE_DB
         .set(Mutex::new(conn))
         .map_err(|_| "VOICE_DB already initialized".to_string())
@@ -267,13 +282,16 @@ pub fn get_notes(session_id: &str) -> Result<Option<SessionNotes>, String> {
 
 pub fn search_sessions(query: &str) -> Result<Vec<String>, String> {
     let conn = db().lock().unwrap();
+    // Wrap in phrase quotes to prevent FTS5 operator injection (AND/OR/NOT/NEAR/column filters).
+    // Inner double-quotes are escaped by doubling them per FTS5 string literal rules.
+    let safe_query = format!("\"{}\"", query.replace('"', "\"\""));
     let mut stmt = conn
         .prepare(
             "SELECT DISTINCT session_id FROM voice_fts WHERE voice_fts MATCH ?1 LIMIT 50",
         )
         .map_err(|e| format!("search_sessions prepare: {e}"))?;
     let ids = stmt
-        .query_map(params![query], |row| row.get::<_, String>(0))
+        .query_map(params![safe_query], |row| row.get::<_, String>(0))
         .map_err(|e| format!("search_sessions query: {e}"))?
         .filter_map(|r| {
             r.map_err(|e| eprintln!("[voice_db] search_sessions row error: {e}"))

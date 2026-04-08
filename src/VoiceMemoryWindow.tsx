@@ -103,6 +103,7 @@ export function VoiceMemoryWindow() {
   const [activeTab, setActiveTab] = useState<DetailTab>("summary");
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const searchGenRef = useRef(0); // incremented per search to discard stale results
 
   const loadSessions = useCallback(async () => {
     setLoading(true);
@@ -128,13 +129,14 @@ export function VoiceMemoryWindow() {
     return () => { unlisten?.(); };
   }, [loadSessions]);
 
-  // Debounced search
+  // Debounced search — generation counter prevents stale results from overwriting newer ones
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(async () => {
       if (query.trim()) {
+        const gen = ++searchGenRef.current;
         const result = await invoke<VoiceSession[]>("meeting_search", { query: query.trim() });
-        setSessions(result);
+        if (gen === searchGenRef.current) setSessions(result);
       } else {
         loadSessions();
       }

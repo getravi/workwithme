@@ -227,15 +227,9 @@ pub fn llm_set_api_key(api_key_name: String, key: String) -> Result<(), String> 
 }
 
 #[tauri::command]
-pub fn llm_test_connection() -> Result<String, String> {
+pub async fn llm_test_connection() -> Result<String, String> {
     let config = load_config();
     let api_key = get_api_key(&config)?;
-
-    let rt = tokio::runtime::Runtime::new()
-        .map_err(|e| format!("failed to create tokio runtime: {e}"))?;
-
-    rt.block_on(async {
-        call_llm(&config, &api_key, None, "Hi", 1).await?;
-        Ok("ok".to_string())
-    })
+    call_llm(&config, &api_key, None, "Hi", 1).await?;
+    Ok("ok".to_string())
 }

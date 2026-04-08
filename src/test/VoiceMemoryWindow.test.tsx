@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 
 const mockSessions = [
   { id: "s1", title: "Q2 Planning", type: "meeting", status: "complete",
@@ -15,11 +15,22 @@ const mockDetail = {
            ai_action_items: "- Review PRD", ai_decisions: "- Launch in Q3", updated_at: Date.now() },
 };
 
-const { mockInvoke } = vi.hoisted(() => ({ mockInvoke: vi.fn() }));
+const { mockInvoke, mockListen, fireTauriEvent } = vi.hoisted(() => {
+  const listeners = new Map<string, (event: { payload: unknown }) => void>();
+  return {
+    mockInvoke: vi.fn(),
+    mockListen: vi.fn().mockImplementation((eventName: string, cb: (e: { payload: unknown }) => void) => {
+      listeners.set(eventName, cb);
+      return Promise.resolve(() => listeners.delete(eventName));
+    }),
+    fireTauriEvent: (eventName: string, payload: unknown) => {
+      listeners.get(eventName)?.({ payload });
+    },
+  };
+});
+
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mockInvoke }));
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn().mockReturnValue(Promise.resolve(() => {})),
-}));
+vi.mock("@tauri-apps/api/event", () => ({ listen: mockListen }));
 
 import { VoiceMemoryWindow } from "../VoiceMemoryWindow";
 
@@ -51,12 +62,37 @@ describe("VoiceMemoryWindow", () => {
     });
   });
 
+  it("shows session detail after clicking a session", async () => {
+    render(<VoiceMemoryWindow />);
+    await waitFor(() => screen.getByText("Q2 Planning"));
+    fireEvent.click(screen.getByText("Q2 Planning"));
+    await waitFor(() => {
+      expect(screen.getByText("Planning meeting summary")).toBeInTheDocument();
+    });
+  });
+
   it("calls meeting_search when typing in search bar", async () => {
     render(<VoiceMemoryWindow />);
     await waitFor(() => screen.getByPlaceholderText(/search/i));
     fireEvent.change(screen.getByPlaceholderText(/search/i), { target: { value: "planning" } });
     await waitFor(() => {
       expect(mockInvoke).toHaveBeenCalledWith("meeting_search", { query: "planning" });
+    });
+  });
+
+  it("refreshes session list when meeting-transcription-complete fires", async () => {
+    render(<VoiceMemoryWindow />);
+    await waitFor(() => screen.getByText("Q2 Planning"));
+
+    const callsBefore = mockInvoke.mock.calls.filter((c) => c[0] === "meeting_list").length;
+
+    act(() => {
+      fireTauriEvent("meeting-transcription-complete", {});
+    });
+
+    await waitFor(() => {
+      const callsAfter = mockInvoke.mock.calls.filter((c) => c[0] === "meeting_list").length;
+      expect(callsAfter).toBeGreaterThan(callsBefore);
     });
   });
 });

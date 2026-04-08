@@ -196,12 +196,6 @@ export function MeetingWindow() {
                   flexShrink: 0,
                 }}
               />
-              <style>{`
-                @keyframes pulse {
-                  0%, 100% { opacity: 1; }
-                  50% { opacity: 0.3; }
-                }
-              `}</style>
             </>
           )}
           <span style={{ fontWeight: 600, fontSize: 15, color: "#f3f4f6" }}>
