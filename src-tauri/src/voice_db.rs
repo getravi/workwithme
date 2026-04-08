@@ -68,7 +68,7 @@ fn apply_schema(conn: &Connection) -> rusqlite::Result<()> {
         CREATE TABLE IF NOT EXISTS voice_sessions (
             id           TEXT PRIMARY KEY,
             title        TEXT NOT NULL,
-            type         TEXT NOT NULL DEFAULT 'meeting',
+            session_type TEXT NOT NULL DEFAULT 'meeting',
             status       TEXT NOT NULL DEFAULT 'recording',
             started_at   INTEGER NOT NULL,
             ended_at     INTEGER,
@@ -108,7 +108,7 @@ pub fn create_session(id: &str, title: &str, session_type: &str) -> Result<(), S
     let conn = db().lock().unwrap();
     let now = chrono::Utc::now().timestamp_millis();
     conn.execute(
-        "INSERT INTO voice_sessions (id, title, type, status, started_at, created_at)
+        "INSERT INTO voice_sessions (id, title, session_type, status, started_at, created_at)
          VALUES (?1, ?2, ?3, 'recording', ?4, ?4)",
         params![id, title, session_type, now],
     )
@@ -148,6 +148,7 @@ pub fn insert_segment(session_id: &str, text: &str, start_ms: i64, end_ms: i64) 
     let conn = db().lock().unwrap();
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().timestamp_millis();
+    conn.execute_batch("BEGIN").map_err(|e| format!("insert_segment begin: {e}"))?;
     conn.execute(
         "INSERT INTO transcript_segments (id, session_id, text, start_ms, end_ms, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -159,6 +160,7 @@ pub fn insert_segment(session_id: &str, text: &str, start_ms: i64, end_ms: i64) 
         params![session_id, text],
     )
     .map_err(|e| format!("insert_segment fts: {e}"))?;
+    conn.execute_batch("COMMIT").map_err(|e| format!("insert_segment commit: {e}"))?;
     Ok(())
 }
 
@@ -187,6 +189,9 @@ pub fn update_ai_output(session_id: &str, summary: &str, actions: &str, decision
         params![summary, actions, decisions, now, session_id],
     )
     .map_err(|e| format!("update_ai_output: {e}"))?;
+    if conn.changes() == 0 {
+        eprintln!("[voice_db] update_ai_output: no session_notes row found for session_id={session_id} (upsert_notes must be called first)");
+    }
     Ok(())
 }
 
@@ -196,7 +201,7 @@ pub fn list_sessions() -> Result<Vec<VoiceSession>, String> {
     let conn = db().lock().unwrap();
     let mut stmt = conn
         .prepare(
-            "SELECT id, title, type, status, started_at, ended_at, duration_sec, created_at
+            "SELECT id, title, session_type, status, started_at, ended_at, duration_sec, created_at
              FROM voice_sessions ORDER BY started_at DESC LIMIT 200",
         )
         .map_err(|e| format!("list_sessions prepare: {e}"))?;
@@ -214,7 +219,7 @@ pub fn list_sessions() -> Result<Vec<VoiceSession>, String> {
 pub fn get_session(id: &str) -> Result<Option<VoiceSession>, String> {
     let conn = db().lock().unwrap();
     let result = conn.query_row(
-        "SELECT id, title, type, status, started_at, ended_at, duration_sec, created_at
+        "SELECT id, title, session_type, status, started_at, ended_at, duration_sec, created_at
          FROM voice_sessions WHERE id = ?1",
         params![id],
         row_to_session,
