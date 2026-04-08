@@ -72,5 +72,6 @@ workwithme/
 # Legacy vendored runtime dumps — current patches live under patches/
 vendor/
 
-# Whisper model — large binary, download via setup script
+# Bundled binaries — large files, placed by setup script
 src-tauri/resources/*.bin
+src-tauri/resources/ffmpeg
