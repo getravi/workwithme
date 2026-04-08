@@ -77,19 +77,21 @@ pub fn meeting_stop(app: tauri::AppHandle) -> Result<String, String> {
     let mut guard = get_active().lock().unwrap();
     let recording = guard.take().ok_or("no active meeting recording")?;
 
-    let session_id = recording.session_id.clone();
-    let wav_path = recording.wav_path.clone();
-    let elapsed = recording.started_at.elapsed();
+    let MeetingRecording { session_id, wav_path, process: mut proc, started_at } = recording;
+    let elapsed = started_at.elapsed();
 
-    // Drop the process — closes stdin → FFmpeg sees EOF → finalizes WAV
-    drop(recording);
-
-    // Let FFmpeg finalize the WAV header
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    // Close stdin → FFmpeg sees EOF and finalizes the WAV header
+    // Then wait for FFmpeg to exit (reaps the zombie, no sleep needed)
+    if let Some(stdin) = proc.stdin.take() {
+        drop(stdin); // explicit stdin close triggers FFmpeg shutdown
+    }
+    let _ = proc.wait(); // block until FFmpeg exits (usually < 200ms)
 
     let ended_at = chrono::Utc::now().timestamp_millis();
     let duration_sec = elapsed.as_secs() as i64;
 
+    // Finish session in DB BEFORE spawning background thread so DB is
+    // consistent before meeting_stop returns to the frontend.
     voice_db::finish_session(&session_id, ended_at, duration_sec)?;
 
     let model_path = app
@@ -158,10 +160,20 @@ fn transcribe_meeting_audio(
     // Decode WAV to raw f32le at 16kHz mono via FFmpeg
     let ffmpeg = ffmpeg_path(&app);
 
+    let wav_str = match wav_path.to_str() {
+        Some(s) => s,
+        None => {
+            eprintln!("[meeting] transcribe: invalid WAV path (non-UTF-8)");
+            let _ = voice_db::update_session_status(&session_id, "error");
+            let _ = app.emit("meeting-transcription-error", &session_id);
+            return;
+        }
+    };
+
     let decode_output = match Command::new(&ffmpeg)
         .args([
             "-i",
-            wav_path.to_str().unwrap_or(""),
+            wav_str,
             "-f", "f32le",
             "-ar", "16000",
             "-ac", "1",
