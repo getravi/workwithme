@@ -2,11 +2,17 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capability for the main window",
-  "windows": ["main"],
+  "windows": ["main", "recording-options", "recording-pill", "trim-editor", "region-select-recording"],
   "permissions": [
     "core:default",
+    "core:event:allow-listen",
+    "core:event:allow-emit",
     "opener:allow-open-url",
+    "opener:allow-open-path",
     "dialog:allow-open",
-    "fs:allow-read-file"
+    "dialog:allow-save",
+    "fs:allow-read-file",
+    "fs:allow-copy-file",
+    "fs:allow-remove"
   ]
 }
