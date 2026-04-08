@@ -156,11 +156,7 @@ fn transcribe_meeting_audio(
     model_path: PathBuf,
 ) {
     // Decode WAV to raw f32le at 16kHz mono via FFmpeg
-    let ffmpeg = app
-        .path()
-        .resource_dir()
-        .map(|p| p.join("resources/ffmpeg"))
-        .unwrap_or_else(|_| PathBuf::from("ffmpeg"));
+    let ffmpeg = ffmpeg_path(&app);
 
     let decode_output = match Command::new(&ffmpeg)
         .args([
