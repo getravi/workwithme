@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Key, Save, AlertCircle, CheckCircle2, Keyboard, Zap, Network, Link2 } from "lucide-react";
+import { Key, Save, AlertCircle, CheckCircle2, Keyboard, Zap, Network, Link2, Mic } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { API_BASE } from "./config";
+import { VoiceWorkspaceSettings } from "./VoiceWorkspaceSettings";
 
-export type SettingsTab = "connections" | "shortcuts" | "skills" | "connectors";
+export type SettingsTab = "connections" | "shortcuts" | "skills" | "connectors" | "voice_workspace";
 type AuthStatus = "idle" | "saving" | "success" | "error" | "oauth_loading";
 
 interface OAuthProvider {
@@ -34,6 +35,7 @@ export function SettingsTabBar({ tab, onChange }: SettingsTabBarProps) {
         { id: "shortcuts" as SettingsTab, label: "Shortcuts", icon: Keyboard },
         { id: "skills" as SettingsTab, label: "Skills", icon: Zap },
         { id: "connectors" as SettingsTab, label: "Connectors", icon: Network },
+        { id: "voice_workspace" as SettingsTab, label: "Voice Workspace", icon: Mic },
       ] as { id: SettingsTab; label: string; icon: React.ElementType }[]).map(({ id, label, icon: Icon }) => (
         <button
           key={id}
@@ -62,6 +64,7 @@ interface SettingsContentProps {
 export function SettingsContent({ tab, isConnected }: SettingsContentProps) {
   if (tab === "connections") return <div className="flex-1 overflow-y-auto"><ConnectionsTab isConnected={isConnected} /></div>;
   if (tab === "shortcuts") return <div className="flex-1 overflow-y-auto"><ShortcutsTab /></div>;
+  if (tab === "voice_workspace") return <div className="flex-1 overflow-y-auto"><VoiceWorkspaceSettings /></div>;
   return null; // skills + connectors rendered as top-level components in App.tsx
 }
 
