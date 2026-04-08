@@ -205,7 +205,7 @@ fn transcribe_meeting_audio(
         None => {
             eprintln!("[meeting] Whisper engine not available (model failed to load)");
             let _ = voice_db::update_session_status(&session_id, "error");
-            let _ = app.emit("meeting-transcription-error", &session_id);
+            let _ = app.emit("meeting-transcription-error", json!({"session_id": &session_id, "error": "WhisperEngine not available"}));
             return;
         }
     };
@@ -220,7 +220,7 @@ fn transcribe_meeting_audio(
         let end_ms = ((offset + chunk.len()) as f64 * ms_per_sample) as i64;
 
         let text_result = {
-            let eng = engine_state.0.lock().unwrap();
+            let eng = engine_state.0.lock().unwrap_or_else(|e| e.into_inner());
             eng.transcribe(chunk)
         };
         match text_result {

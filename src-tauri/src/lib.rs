@@ -420,7 +420,7 @@ pub fn run() {
                 while let Ok((chunk, native_rate, emit_event)) = chunk_rx.recv() {
                     let resampled = transcription::resample_to_16k(&chunk, native_rate);
                     let result = {
-                        let eng = engine.lock().unwrap();
+                        let eng = engine.lock().unwrap_or_else(|e| e.into_inner());
                         eng.transcribe(&resampled)
                     };
                     match result {
