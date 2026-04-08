@@ -255,16 +255,6 @@ fn transcribe_meeting_audio(
 // ── Claude API summary generation ────────────────────────────────────────────
 
 #[derive(Debug, serde::Deserialize)]
-struct ClaudeResponse {
-    content: Vec<ClaudeContent>,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct ClaudeContent {
-    text: String,
-}
-
-#[derive(Debug, serde::Deserialize)]
 struct SummaryOutput {
     summary: String,
     action_items: String,
@@ -292,7 +282,7 @@ pub fn meeting_generate_summary(app: tauri::AppHandle, session_id: String) -> Re
             }
         };
         match rt.block_on(async {
-            generate_summary_inner(&sid, &segments, &notes, &api_key).await
+            generate_summary_inner(&config, &segments, &notes, &api_key).await
         }) {
             Ok((summary, action_items, decisions)) => {
                 match voice_db::update_ai_output(&sid, &summary, &action_items, &decisions) {
@@ -333,7 +323,7 @@ pub fn meeting_generate_summary(app: tauri::AppHandle, session_id: String) -> Re
 }
 
 async fn generate_summary_inner(
-    _session_id: &str,
+    config: &llm_config::LlmConfig,
     segments: &[voice_db::TranscriptSegment],
     notes: &Option<voice_db::SessionNotes>,
     api_key: &str,
@@ -349,57 +339,22 @@ async fn generate_summary_inner(
         .and_then(|n| n.raw_notes.as_deref())
         .unwrap_or("");
 
-    let prompt = format!(
-        "You are a meeting assistant. Analyze the following meeting transcript and notes, then return ONLY a JSON object with no other text.\n\n\
-         The JSON object must have exactly three fields:\n\
-         - \"summary\": a 3-5 sentence executive summary of the meeting\n\
-         - \"action_items\": a newline-separated list of action items, each prefixed with \"- \"\n\
-         - \"decisions\": a newline-separated list of decisions made, each prefixed with \"- \"\n\n\
-         Do not invent facts not present in the transcript. If there are no action items or decisions, use an empty string for that field.\n\n\
-         TRANSCRIPT:\n{transcript}\n\nNOTES:\n{raw_notes}\n\n\
-         Return ONLY the JSON object, no markdown, no explanation.",
-        transcript = transcript,
-        raw_notes = raw_notes,
-    );
+    let system_prompt = "You are a meeting assistant. Analyze the transcript and notes provided, \
+        then return ONLY a JSON object with no other text. \
+        The JSON object must have exactly three fields: \
+        \"summary\" (a 3-5 sentence executive summary), \
+        \"action_items\" (newline-separated list prefixed with \"- \"), \
+        \"decisions\" (newline-separated list prefixed with \"- \"). \
+        Do not invent facts. If there are no action items or decisions, use an empty string. \
+        Return ONLY the JSON object, no markdown, no explanation.";
 
-    let client = reqwest::Client::new();
-    let body = serde_json::json!({
-        "model": "claude-sonnet-4-6",
-        "max_tokens": 2048,
-        "messages": [{"role": "user", "content": prompt}]
-    });
+    let user_message = format!("TRANSCRIPT:\n{transcript}\n\nNOTES:\n{raw_notes}");
 
-    let response = client
-        .post("https://api.anthropic.com/v1/messages")
-        .header("x-api-key", api_key)
-        .header("anthropic-version", "2023-06-01")
-        .header("content-type", "application/json")
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("Claude API request failed: {e}"))?;
+    let text = llm_config::call_llm(config, api_key, Some(system_prompt), &user_message, 2048).await?;
 
-    let status = response.status();
-    if !status.is_success() {
-        let text = response.text().await.unwrap_or_default();
-        return Err(format!("Claude API error {status}: {text}"));
-    }
-
-    let claude_resp: ClaudeResponse = response
-        .json()
-        .await
-        .map_err(|e| format!("failed to parse Claude response: {e}"))?;
-
-    let text = claude_resp
-        .content
-        .into_iter()
-        .next()
-        .map(|c| c.text)
-        .ok_or_else(|| "Claude returned empty content".to_string())?;
-
-    // Extract JSON from response — Claude may wrap in ```json...```
-    let start = text.find('{').ok_or("no JSON object in Claude response")?;
-    let end = text.rfind('}').ok_or("no closing brace in Claude response")?;
+    // Extract JSON from response — model may wrap in ```json...```
+    let start = text.find('{').ok_or("no JSON object in LLM response")?;
+    let end = text.rfind('}').ok_or("no closing brace in LLM response")?;
     let json_str = &text[start..=end];
 
     let output: SummaryOutput = serde_json::from_str(json_str)

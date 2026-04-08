@@ -102,7 +102,9 @@ export function MeetingWindow() {
     setNotes(value);
     if (notesDebounceRef.current) clearTimeout(notesDebounceRef.current);
     notesDebounceRef.current = setTimeout(() => {
-      invoke("meeting_save_notes", { notes: value }).catch(() => {});
+      if (sessionId) {
+        invoke("meeting_save_notes", { sessionId, notes: value }).catch(() => {});
+      }
     }, 300);
   }
 

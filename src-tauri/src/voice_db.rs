@@ -145,22 +145,22 @@ pub fn complete_session(id: &str) -> Result<(), String> {
 // ── Transcript segments ───────────────────────────────────────────────────────
 
 pub fn insert_segment(session_id: &str, text: &str, start_ms: i64, end_ms: i64) -> Result<(), String> {
-    let conn = db().lock().unwrap();
+    let mut conn = db().lock().unwrap();
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().timestamp_millis();
-    conn.execute_batch("BEGIN").map_err(|e| format!("insert_segment begin: {e}"))?;
-    conn.execute(
+    let tx = conn.transaction().map_err(|e| format!("insert_segment txn: {e}"))?;
+    tx.execute(
         "INSERT INTO transcript_segments (id, session_id, text, start_ms, end_ms, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         params![id, session_id, text, start_ms, end_ms, now],
     )
     .map_err(|e| format!("insert_segment: {e}"))?;
-    conn.execute(
+    tx.execute(
         "INSERT INTO voice_fts (session_id, text) VALUES (?1, ?2)",
         params![session_id, text],
     )
     .map_err(|e| format!("insert_segment fts: {e}"))?;
-    conn.execute_batch("COMMIT").map_err(|e| format!("insert_segment commit: {e}"))?;
+    tx.commit().map_err(|e| format!("insert_segment commit: {e}"))?;
     Ok(())
 }
 
