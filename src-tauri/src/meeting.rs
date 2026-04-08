@@ -8,6 +8,7 @@ use serde_json::json;
 use crate::recorder::ffmpeg_path;
 use crate::voice_db;
 use crate::voice_db::{VoiceSession, TranscriptSegment, SessionNotes};
+use crate::llm_config;
 
 pub struct MeetingRecording {
     pub session_id: String,
@@ -281,35 +282,43 @@ pub fn meeting_generate_summary(app: tauri::AppHandle, session_id: String) -> Re
     }
     let notes = voice_db::get_notes(&session_id)?;
 
-    let api_key = keyring::Entry::new("workwithme", "anthropic-api-key")
-        .map_err(|e| format!("keychain access error: {e}"))?
-        .get_password()
-        .map_err(|e| format!("anthropic-api-key not found in keychain: {e}"))?;
-
     let session_id_clone = session_id.clone();
     std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let sid = session_id_clone;
         match rt.block_on(async {
-            generate_summary_inner(&session_id_clone, &segments, &notes, &api_key).await
+            generate_summary_inner(&segments, &notes).await
         }) {
             Ok((summary, action_items, decisions)) => {
-                if let Err(e) = voice_db::update_ai_output(&session_id_clone, &summary, &action_items, &decisions) {
-                    eprintln!("[meeting] update_ai_output error: {e}");
+                match voice_db::update_ai_output(&sid, &summary, &action_items, &decisions) {
+                    Ok(_) => {
+                        let _ = app.emit("meeting-summary-ready", json!({
+                            "session_id": &sid, "summary": summary, "action_items": action_items, "decisions": decisions
+                        }));
+                    }
+                    Err(e) => {
+                        // Persist failed — try upsert_notes first to create the row, then retry
+                        let _ = voice_db::upsert_notes(&sid, None);
+                        match voice_db::update_ai_output(&sid, &summary, &action_items, &decisions) {
+                            Ok(_) => {
+                                let _ = app.emit("meeting-summary-ready", json!({
+                                    "session_id": &sid, "summary": summary, "action_items": action_items, "decisions": decisions
+                                }));
+                            }
+                            Err(e2) => {
+                                eprintln!("[meeting] update_ai_output failed twice: {e} / {e2}");
+                                let _ = app.emit("meeting-summary-error", json!({
+                                    "session_id": &sid, "error": format!("Failed to save summary: {e2}")
+                                }));
+                            }
+                        }
+                    }
                 }
-                let _ = app.emit(
-                    "meeting-summary-ready",
-                    json!({
-                        "session_id": session_id_clone,
-                        "summary": summary,
-                        "action_items": action_items,
-                        "decisions": decisions,
-                    }),
-                );
             }
             Err(e) => {
                 let _ = app.emit(
                     "meeting-summary-error",
-                    json!({"session_id": session_id_clone, "error": e}),
+                    json!({"session_id": &sid, "error": e}),
                 );
             }
         }
