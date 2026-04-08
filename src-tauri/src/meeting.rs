@@ -253,3 +253,143 @@ fn transcribe_meeting_audio(
     let _ = voice_db::complete_session(&session_id);
     let _ = app.emit("meeting-transcription-complete", json!({"session_id": session_id}));
 }
+
+// ── Claude API summary generation ────────────────────────────────────────────
+
+#[derive(Debug, serde::Deserialize)]
+struct ClaudeResponse {
+    content: Vec<ClaudeContent>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ClaudeContent {
+    text: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct SummaryOutput {
+    summary: String,
+    action_items: String,
+    decisions: String,
+}
+
+#[tauri::command]
+pub fn meeting_generate_summary(app: tauri::AppHandle, session_id: String) -> Result<(), String> {
+    let segments = voice_db::get_segments(&session_id)?;
+    if segments.is_empty() {
+        return Err("No transcript available".into());
+    }
+    let notes = voice_db::get_notes(&session_id)?;
+
+    let api_key = keyring::Entry::new("workwithme", "anthropic-api-key")
+        .map_err(|e| format!("keychain access error: {e}"))?
+        .get_password()
+        .map_err(|e| format!("anthropic-api-key not found in keychain: {e}"))?;
+
+    let session_id_clone = session_id.clone();
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+        match rt.block_on(async {
+            generate_summary_inner(&session_id_clone, &segments, &notes, &api_key).await
+        }) {
+            Ok((summary, action_items, decisions)) => {
+                if let Err(e) = voice_db::update_ai_output(&session_id_clone, &summary, &action_items, &decisions) {
+                    eprintln!("[meeting] update_ai_output error: {e}");
+                }
+                let _ = app.emit(
+                    "meeting-summary-ready",
+                    json!({
+                        "session_id": session_id_clone,
+                        "summary": summary,
+                        "action_items": action_items,
+                        "decisions": decisions,
+                    }),
+                );
+            }
+            Err(e) => {
+                let _ = app.emit(
+                    "meeting-summary-error",
+                    json!({"session_id": session_id_clone, "error": e}),
+                );
+            }
+        }
+    });
+
+    Ok(())
+}
+
+async fn generate_summary_inner(
+    _session_id: &str,
+    segments: &[voice_db::TranscriptSegment],
+    notes: &Option<voice_db::SessionNotes>,
+    api_key: &str,
+) -> Result<(String, String, String), String> {
+    let transcript = segments
+        .iter()
+        .map(|s| s.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    let raw_notes = notes
+        .as_ref()
+        .and_then(|n| n.raw_notes.as_deref())
+        .unwrap_or("");
+
+    let prompt = format!(
+        "You are a meeting assistant. Analyze the following meeting transcript and notes, then return ONLY a JSON object with no other text.\n\n\
+         The JSON object must have exactly three fields:\n\
+         - \"summary\": a 3-5 sentence executive summary of the meeting\n\
+         - \"action_items\": a newline-separated list of action items, each prefixed with \"- \"\n\
+         - \"decisions\": a newline-separated list of decisions made, each prefixed with \"- \"\n\n\
+         Do not invent facts not present in the transcript. If there are no action items or decisions, use an empty string for that field.\n\n\
+         TRANSCRIPT:\n{transcript}\n\nNOTES:\n{raw_notes}\n\n\
+         Return ONLY the JSON object, no markdown, no explanation.",
+        transcript = transcript,
+        raw_notes = raw_notes,
+    );
+
+    let client = reqwest::Client::new();
+    let body = serde_json::json!({
+        "model": "claude-sonnet-4-6",
+        "max_tokens": 2048,
+        "messages": [{"role": "user", "content": prompt}]
+    });
+
+    let response = client
+        .post("https://api.anthropic.com/v1/messages")
+        .header("x-api-key", api_key)
+        .header("anthropic-version", "2023-06-01")
+        .header("content-type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Claude API request failed: {e}"))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let text = response.text().await.unwrap_or_default();
+        return Err(format!("Claude API error {status}: {text}"));
+    }
+
+    let claude_resp: ClaudeResponse = response
+        .json()
+        .await
+        .map_err(|e| format!("failed to parse Claude response: {e}"))?;
+
+    let text = claude_resp
+        .content
+        .into_iter()
+        .next()
+        .map(|c| c.text)
+        .ok_or_else(|| "Claude returned empty content".to_string())?;
+
+    // Extract JSON from response — Claude may wrap in ```json...```
+    let start = text.find('{').ok_or("no JSON object in Claude response")?;
+    let end = text.rfind('}').ok_or("no closing brace in Claude response")?;
+    let json_str = &text[start..=end];
+
+    let output: SummaryOutput = serde_json::from_str(json_str)
+        .map_err(|e| format!("failed to parse summary JSON: {e}\nraw: {json_str}"))?;
+
+    Ok((output.summary, output.action_items, output.decisions))
+}
