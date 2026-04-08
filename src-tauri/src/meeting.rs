@@ -286,8 +286,16 @@ pub fn meeting_generate_summary(app: tauri::AppHandle, session_id: String) -> Re
     std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
         let sid = session_id_clone;
+        let config = llm_config::load_config();
+        let api_key = match llm_config::get_api_key(&config) {
+            Ok(k) => k,
+            Err(e) => {
+                let _ = app.emit("meeting-summary-error", json!({"session_id": &sid, "error": e}));
+                return;
+            }
+        };
         match rt.block_on(async {
-            generate_summary_inner(&segments, &notes).await
+            generate_summary_inner(&sid, &segments, &notes, &api_key).await
         }) {
             Ok((summary, action_items, decisions)) => {
                 match voice_db::update_ai_output(&sid, &summary, &action_items, &decisions) {

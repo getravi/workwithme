@@ -4,6 +4,9 @@ mod transcription;
 mod capture;
 mod library;
 mod recorder;
+mod voice_db;
+mod meeting;
+mod llm_config;
 #[cfg(target_os = "macos")]
 mod window_capture;
 
@@ -197,6 +200,10 @@ pub fn run() {
                         if event.state() == ShortcutState::Pressed {
                             open_recording_options_window(app);
                         }
+                    } else if shortcut.matches(Modifiers::SUPER | Modifiers::CONTROL, Code::Digit7) {
+                        if event.state() == ShortcutState::Pressed {
+                            open_meeting_window(app);
+                        }
                     }
                 })
                 .build()
@@ -239,6 +246,20 @@ pub fn run() {
             recorder::open_region_select_recording,
             recorder::open_recording_pill,
             recorder::open_trim_editor,
+            // Meeting commands
+            meeting::meeting_start,
+            meeting::meeting_stop,
+            meeting::meeting_get_elapsed,
+            meeting::meeting_save_notes,
+            meeting::meeting_list,
+            meeting::meeting_get,
+            meeting::meeting_search,
+            meeting::meeting_generate_summary,
+            // LLM config commands
+            llm_config::llm_get_config,
+            llm_config::llm_save_config,
+            llm_config::llm_set_api_key,
+            llm_config::llm_test_connection,
         ])
         .setup(move |app| {
             // Build tray icon
@@ -273,6 +294,12 @@ pub fn run() {
                 true,
                 Some("Super+Ctrl+6"),
             )?;
+            let new_meeting_item = tauri::menu::MenuItem::with_id(
+                app, "new-meeting", "New Meeting", true, Some("Super+Ctrl+7"),
+            )?;
+            let voice_memory_item = tauri::menu::MenuItem::with_id(
+                app, "voice-memory", "Voice Memory", true, None::<&str>,
+            )?;
             let quit_item = tauri::menu::MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let open_library_item = tauri::menu::MenuItem::with_id(app, "open-library", "Open Library", true, None::<&str>)?;
             let tray_menu = tauri::menu::MenuBuilder::new(app)
@@ -280,6 +307,8 @@ pub fn run() {
                 .item(&capture_window_item)
                 .item(&capture_fullscreen_item)
                 .item(&record_screen_item)
+                .item(&new_meeting_item)
+                .item(&voice_memory_item)
                 .separator()
                 .item(&open_library_item)
                 .separator()
@@ -311,6 +340,8 @@ pub fn run() {
                         "record-screen" => {
                             open_recording_options_window(&app_handle_tray);
                         }
+                        "new-meeting" => { open_meeting_window(&app_handle_tray); }
+                        "voice-memory" => { open_voice_memory_window(&app_handle_tray); }
                         "quit" => {
                             app_handle_tray.exit(0);
                         }
@@ -327,6 +358,7 @@ pub fn run() {
             app.global_shortcut().register("Super+Ctrl+4")?;
             app.global_shortcut().register("Super+Ctrl+5")?;
             app.global_shortcut().register("Super+Ctrl+6")?;
+            app.global_shortcut().register("Super+Ctrl+7")?;
 
             // Transcribing overlay — small floating pill shown while Whisper is running
             let overlay = tauri::WebviewWindowBuilder::new(
@@ -451,6 +483,19 @@ pub fn run() {
                     }
                 }
             });
+
+            // Initialize voice DB
+            if let Err(e) = voice_db::init_db() {
+                eprintln!("[voice_db] DB init failed: {e}");
+            }
+            // Mark any sessions left in 'recording' state as 'error' (app crashed mid-recording)
+            if let Ok(sessions) = voice_db::list_sessions() {
+                for s in sessions {
+                    if s.status == "recording" || s.status == "processing" {
+                        let _ = voice_db::update_session_status(&s.id, "error");
+                    }
+                }
+            }
 
             // Initialize capture library DB and prune old entries
             if let Err(e) = library::db::init_db() {
@@ -614,5 +659,49 @@ fn open_recording_options_window(app: &tauri::AppHandle) {
     .build()
     {
         eprintln!("[recorder] options window build failed: {e}");
+    }
+}
+
+fn open_meeting_window(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("meeting") {
+        let _ = w.show();
+        let _ = w.set_focus();
+        return;
+    }
+    if let Err(e) = tauri::WebviewWindowBuilder::new(
+        app,
+        "meeting",
+        tauri::WebviewUrl::App("meeting.html".into()),
+    )
+    .inner_size(900.0, 640.0)
+    .min_inner_size(700.0, 480.0)
+    .decorations(true)
+    .resizable(true)
+    .title("Meeting Capture")
+    .build()
+    {
+        eprintln!("[meeting] window build failed: {e}");
+    }
+}
+
+fn open_voice_memory_window(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("voice-memory") {
+        let _ = w.show();
+        let _ = w.set_focus();
+        return;
+    }
+    if let Err(e) = tauri::WebviewWindowBuilder::new(
+        app,
+        "voice-memory",
+        tauri::WebviewUrl::App("voice-memory.html".into()),
+    )
+    .inner_size(1000.0, 680.0)
+    .min_inner_size(700.0, 500.0)
+    .decorations(true)
+    .resizable(true)
+    .title("Voice Memory")
+    .build()
+    {
+        eprintln!("[voice-memory] window build failed: {e}");
     }
 }
