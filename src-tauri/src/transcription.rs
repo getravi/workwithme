@@ -281,6 +281,14 @@ fn clipboard_paste(text: &str) {
     }
 }
 
+// ── SharedWhisperEngine ───────────────────────────────────────────────────────
+
+use std::sync::{Arc, Mutex};
+
+/// Shared Whisper model instance. Stored as Tauri managed state so both
+/// the dictation worker and meeting transcription use the same loaded model.
+pub struct SharedWhisperEngine(pub Arc<Mutex<WhisperEngine>>);
+
 // ── tests ─────────────────────────────────────────────────────────────────────
 #[cfg(test)]
 mod tests {

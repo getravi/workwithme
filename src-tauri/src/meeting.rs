@@ -95,15 +95,9 @@ pub fn meeting_stop(app: tauri::AppHandle) -> Result<String, String> {
     // consistent before meeting_stop returns to the frontend.
     voice_db::finish_session(&session_id, ended_at, duration_sec)?;
 
-    let model_path = app
-        .path()
-        .resource_dir()
-        .map(|p| p.join("resources/ggml-small.en-q8_0.bin"))
-        .unwrap_or_else(|_| PathBuf::from("src-tauri/resources/ggml-small.en-q8_0.bin"));
-
     let session_id_clone = session_id.clone();
     std::thread::spawn(move || {
-        transcribe_meeting_audio(app, session_id_clone, wav_path, model_path);
+        transcribe_meeting_audio(app, session_id_clone, wav_path);
     });
 
     Ok(session_id)
@@ -156,7 +150,6 @@ fn transcribe_meeting_audio(
     app: tauri::AppHandle,
     session_id: String,
     wav_path: PathBuf,
-    model_path: PathBuf,
 ) {
     // Decode WAV to raw f32le at 16kHz mono via FFmpeg
     let ffmpeg = ffmpeg_path(&app);
@@ -206,13 +199,13 @@ fn transcribe_meeting_audio(
         return;
     }
 
-    // Load Whisper model
-    let engine = match crate::transcription::WhisperEngine::new(&model_path) {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("[meeting] failed to load whisper model: {e}");
-            let _ = app.emit("meeting-transcription-error", json!({"session_id": session_id, "error": e.to_string()}));
+    // Get the shared Whisper engine from Tauri managed state
+    let engine_state = match app.try_state::<crate::transcription::SharedWhisperEngine>() {
+        Some(s) => s,
+        None => {
+            eprintln!("[meeting] Whisper engine not available (model failed to load)");
             let _ = voice_db::update_session_status(&session_id, "error");
+            let _ = app.emit("meeting-transcription-error", &session_id);
             return;
         }
     };
@@ -226,7 +219,11 @@ fn transcribe_meeting_audio(
         let start_ms = (offset as f64 * ms_per_sample) as i64;
         let end_ms = ((offset + chunk.len()) as f64 * ms_per_sample) as i64;
 
-        match engine.transcribe(chunk) {
+        let text_result = {
+            let eng = engine_state.0.lock().unwrap();
+            eng.transcribe(chunk)
+        };
+        match text_result {
             Ok(text) if !text.trim().is_empty() => {
                 let text = text.trim().to_string();
                 if let Err(e) = voice_db::insert_segment(&session_id, &text, start_ms, end_ms) {

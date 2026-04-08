@@ -387,45 +387,59 @@ pub fn run() {
                 ));
             }
 
-            // Load whisper model on background thread, then run transcription worker
+            // Load Whisper model — shared between dictation and meeting transcription
             let model_path = app.path().resource_dir()
                 .map(|p| p.join("resources/ggml-small.en-q8_0.bin"))
                 .unwrap_or_else(|_| std::path::PathBuf::from("src-tauri/resources/ggml-small.en-q8_0.bin"));
 
+            let engine_for_worker: Option<Arc<Mutex<transcription::WhisperEngine>>>;
+
+            match transcription::WhisperEngine::new(&model_path) {
+                Ok(engine) => {
+                    println!("[whisper] model loaded");
+                    let shared = Arc::new(Mutex::new(engine));
+                    app.manage(transcription::SharedWhisperEngine(shared.clone()));
+                    engine_for_worker = Some(shared);
+                }
+                Err(e) => {
+                    eprintln!("[whisper] failed to load model: {e}");
+                    eprintln!("[whisper] voice dictation and meeting transcription disabled");
+                    if let Some(tray) = app.tray_by_id("dictation") {
+                        let _ = tray.set_tooltip(Some("Work With Me — voice disabled (model not found)"));
+                    }
+                    engine_for_worker = None;
+                }
+            }
+
+            // Transcription worker thread — runs only if model loaded
             let app_handle_worker = app.handle().clone();
             std::thread::spawn(move || {
-                match transcription::WhisperEngine::new(&model_path) {
-                    Ok(engine) => {
-                        println!("[dictation] whisper model loaded");
-                        let engine = Arc::new(engine);
-                        while let Ok((chunk, native_rate, emit_event)) = chunk_rx.recv() {
-                            let resampled = transcription::resample_to_16k(&chunk, native_rate);
-                            match engine.transcribe(&resampled) {
-                                Ok(text) if !text.trim().is_empty() => {
-                                    println!("[dictation] → {text}");
-                                    if emit_event {
-                                        // In-app mic: send text back to the frontend via event
-                                        let _ = app_handle_worker.emit("dictation-result", text);
-                                    } else {
-                                        // Global hotkey: type text into the active window
-                                        transcription::type_text(&text);
-                                    }
-                                }
-                                Ok(_) => {}
-                                Err(e) => eprintln!("[dictation] transcription error: {e}"),
-                            }
-                            // Hide overlay once this chunk is done (success or empty)
-                            if let Some(w) = app_handle_worker.get_webview_window("transcribing") {
-                                let _ = w.hide();
+                let Some(engine) = engine_for_worker else {
+                    return; // model failed to load
+                };
+                while let Ok((chunk, native_rate, emit_event)) = chunk_rx.recv() {
+                    let resampled = transcription::resample_to_16k(&chunk, native_rate);
+                    let result = {
+                        let eng = engine.lock().unwrap();
+                        eng.transcribe(&resampled)
+                    };
+                    match result {
+                        Ok(text) if !text.trim().is_empty() => {
+                            println!("[dictation] → {text}");
+                            if emit_event {
+                                // In-app mic: send text back to the frontend via event
+                                let _ = app_handle_worker.emit("dictation-result", text);
+                            } else {
+                                // Global hotkey: type text into the active window
+                                transcription::type_text(&text);
                             }
                         }
+                        Ok(_) => {}
+                        Err(e) => eprintln!("[dictation] transcription error: {e}"),
                     }
-                    Err(e) => {
-                        eprintln!("[dictation] failed to load model: {e}");
-                        eprintln!("[dictation] voice dictation disabled");
-                        if let Some(tray) = app_handle_worker.tray_by_id("dictation") {
-                            let _ = tray.set_tooltip(Some("Work With Me — voice dictation unavailable (model not found)"));
-                        }
+                    // Hide overlay once this chunk is done (success or empty)
+                    if let Some(w) = app_handle_worker.get_webview_window("transcribing") {
+                        let _ = w.hide();
                     }
                 }
             });
