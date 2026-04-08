@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { Send, Terminal, Loader2, Bot, Sidebar as SidebarIcon, Plus, MessageSquare, PanelRightOpen, Paperclip, ChevronDown, FolderOpen, PanelRightClose, Settings, Maximize2, Minimize2, X, CircleStop, Zap, Archive, ArchiveRestore, Bell, Mic, MicOff } from "lucide-react";
 import { MarkdownMessage } from "./MarkdownMessage";
+import { StatusIndicator } from "./StatusIndicator";
 import { API_BASE } from "./config";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";
@@ -81,6 +82,7 @@ function App() {
   const [isConnected, setIsConnected] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isSteering, setIsSteering] = useState(false);
+  const [currentToolStatus, setCurrentToolStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   
   // UI State
@@ -115,6 +117,7 @@ const groupedArchivedSessions = useMemo(() => groupSessionsByProject(archivedSes
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<number | null>(null);
+  const toolStatusClearRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const reconnectAttemptsRef = useRef(0);
   const [isRecording, setIsRecording] = useState(false);
@@ -299,6 +302,8 @@ const groupedArchivedSessions = useMemo(() => groupSessionsByProject(archivedSes
           else if (data.type === WS_EVENTS.AGENT_END) {
              setIsProcessing(false);
              setIsSteering(false);
+             if (toolStatusClearRef.current) clearTimeout(toolStatusClearRef.current);
+             setCurrentToolStatus(null);
              fetchSessions(); // Refresh list to get smart session names
           }
           else if (data.type === WS_EVENTS.AGENT_STATUS) {
@@ -313,6 +318,8 @@ const groupedArchivedSessions = useMemo(() => groupSessionsByProject(archivedSes
              setMessages(prev => updateLastStreamingMsg(prev, msg => ({
                ...msg, toolSteps: [...(msg.toolSteps ?? []), step],
              })));
+             if (toolStatusClearRef.current) clearTimeout(toolStatusClearRef.current);
+             setCurrentToolStatus(data.status || data.toolName);
           }
           else if (data.type === WS_EVENTS.TOOL_EXECUTION_UPDATE) {
              setToolExecutions(prev => prev.map(t =>
@@ -334,6 +341,7 @@ const groupedArchivedSessions = useMemo(() => groupSessionsByProject(archivedSes
              setMessages(prev => updateLastStreamingMsg(prev, msg => ({
                ...msg, toolSteps: (msg.toolSteps ?? []).map(patchStep),
              })));
+             toolStatusClearRef.current = setTimeout(() => setCurrentToolStatus(null), 1000);
           }
           else if (data.type === WS_EVENTS.PROMPT_COMPLETE) {
              setIsProcessing(false);
@@ -998,58 +1006,35 @@ const groupedArchivedSessions = useMemo(() => groupSessionsByProject(archivedSes
           ) : (
             <div className="max-w-4xl mx-auto space-y-5">
               {messages.map((msg) => (
-                <Fragment key={msg.id}>
-                  {/* Thinking bubble — separate row, only shown when thinking content exists */}
-                  {msg.role === "assistant" && msg.thinkingContent && (
-                    <div className="flex gap-3 fade-in">
-                      <div className="flex-shrink-0 mt-1">
-                        <div className="w-7 h-7 rounded-lg bg-[#182234] border border-[#1f2937] flex items-center justify-center flex-shrink-0">
-                          <Bot className="w-4 h-4 text-gray-400" />
-                        </div>
+                <div
+                  key={msg.id}
+                  className={`flex gap-3 ${msg.role === "assistant" ? "fade-in" : "flex-row-reverse"}`}
+                >
+                  <div className="flex-shrink-0 mt-1">
+                    {msg.role === "assistant" ? (
+                      <div className="w-7 h-7 rounded-lg bg-[#182234] border border-[#1f2937] flex items-center justify-center flex-shrink-0">
+                        <Bot className="w-4 h-4 text-gray-400" />
                       </div>
-                      <div className="flex-1 text-[13px] leading-6 relative">
-                        <MarkdownMessage
-                          content={`[THINKING]${msg.thinkingContent}[/THINKING]`}
-                          isStreaming={msg.isStreaming && !msg.content}
-                        />
+                    ) : (
+                      <div className="w-7 h-7 rounded-lg bg-[#fde047] flex items-center justify-center flex-shrink-0 text-[#111827] text-[12px] font-bold shadow-md">
+                        U
                       </div>
-                    </div>
-                  )}
-                  {/* Response bubble — shown for user messages, or assistant text once it arrives */}
-                  {(msg.role === "user" || msg.content || (msg.isStreaming && !msg.thinkingContent)) && (
-                    <div
-                      className={`flex gap-3 ${
-                        msg.role === "assistant"
-                        ? "fade-in"
-                        : "flex-row-reverse"
-                      }`}
-                    >
-                      <div className="flex-shrink-0 mt-1">
-                        {msg.role === "assistant" ? (
-                          <div className="w-7 h-7 rounded-lg bg-[#182234] border border-[#1f2937] flex items-center justify-center flex-shrink-0">
-                            <Bot className="w-4 h-4 text-gray-400" />
-                          </div>
-                        ) : (
-                          <div className="w-7 h-7 rounded-lg bg-[#fde047] flex items-center justify-center flex-shrink-0 text-[#111827] text-[12px] font-bold shadow-md">
-                            U
-                          </div>
-                        )}
+                    )}
+                  </div>
+                  <div className={`flex-1 text-[13px] leading-6 relative ${msg.role === "user" ? "max-w-[78%]" : ""}`}>
+                    {msg.role === "assistant" ? (
+                      <MarkdownMessage
+                        content={msg.content}
+                        thinkingContent={msg.thinkingContent}
+                        isStreaming={msg.isStreaming}
+                      />
+                    ) : (
+                      <div className="bg-[#1f2937] px-4 py-2.5 rounded-xl rounded-tr-sm text-[#f3f4f6] whitespace-pre-wrap inline-block shadow-sm w-full text-right">
+                        {msg.content}
                       </div>
-                      <div className={`flex-1 text-[13px] leading-6 relative ${msg.role === "user" ? "max-w-[78%]" : ""}`}>
-                        {msg.role === "assistant" ? (
-                          <MarkdownMessage
-                            content={msg.content}
-                            isStreaming={msg.isStreaming}
-                          />
-                        ) : (
-                          <div className="bg-[#1f2937] px-4 py-2.5 rounded-xl rounded-tr-sm text-[#f3f4f6] whitespace-pre-wrap inline-block shadow-sm w-full text-right">
-                            {msg.content}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </Fragment>
+                    )}
+                  </div>
+                </div>
               ))}
               {error && (
                 <div className="p-3 bg-red-500/10 border border-red-500/50 rounded-xl text-red-400 text-[13px] flex items-center justify-between gap-3">
@@ -1071,6 +1056,12 @@ const groupedArchivedSessions = useMemo(() => groupSessionsByProject(archivedSes
 
         {/* Input Footer Area */}
         <div className="p-3 mx-auto w-full max-w-4xl relative z-20 bg-gradient-to-t from-[#111827] via-[#111827] to-transparent pt-6">
+          {isProcessing && !messages.some(m => m.role === "assistant" && m.isStreaming && m.content.trim() !== "") && (
+            <StatusIndicator
+              status={currentToolStatus ?? undefined}
+              isStreaming={isProcessing}
+            />
+          )}
           <form 
             onSubmit={handleSubmit}
             className="relative flex flex-col bg-[#182234] rounded-xl border border-[#374151] shadow-xl focus-within:border-[#c5f016]/50 transition-all duration-200"

@@ -439,7 +439,7 @@ function ConnectionsTab({ isConnected }: { isConnected: boolean }) {
                                   ? "text-[#d8f46a]"
                                   : "text-gray-500"
                             }`}>
-                              {connected ? "Reconnect" : "Set up"}
+                              {connected ? "Active" : "Set up"}
                             </span>
                           </span>
                         )}
