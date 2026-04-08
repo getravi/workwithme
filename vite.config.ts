@@ -21,6 +21,8 @@ export default defineConfig(async () => ({
         "recording-pill": "recording-pill.html",
         "trim-editor": "trim-editor.html",
         "region-select-recording": "region-select-recording.html",
+        meeting: "meeting.html",
+        "voice-memory": "voice-memory.html",
       },
       output: {
         manualChunks: {
