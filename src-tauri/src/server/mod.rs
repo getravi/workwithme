@@ -300,6 +300,7 @@ pub async fn create_app() -> Result<Router, String> {
         .route("/api/auth/key", post(auth_endpoints::set_key))
         .route("/api/auth", get(auth_endpoints::get_configured))
         .route("/api/model", post(agent_endpoints::set_model))
+        .route("/api/thinking", get(agent_endpoints::get_thinking).post(agent_endpoints::set_thinking))
         .route("/api/stop", post(agent_endpoints::stop_agent))
         .route("/api/project", get(agent_endpoints::get_project))
         .route("/api/project", post(agent_endpoints::set_project))
@@ -709,6 +710,43 @@ mod agent_endpoints {
                 "model_id": req.model_id
             }))
         )
+    }
+
+    /// GET /api/thinking?sessionId=... — return the current thinking level for a session.
+    pub async fn get_thinking(
+        axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+        axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+    ) -> (StatusCode, Json<serde_json::Value>) {
+        let session_id = params.get("sessionId").cloned().unwrap_or_else(|| "__global__".to_string());
+        let level = {
+            let handles = state.session_handles.read().await;
+            if let Some(handle) = handles.get(&session_id) {
+                let h = handle.lock().await;
+                h.thinking_level().map(|l| l.to_string()).unwrap_or_else(|| "off".to_string())
+            } else {
+                "off".to_string()
+            }
+        };
+        (StatusCode::OK, Json(json!({ "level": level })))
+    }
+
+    /// POST /api/thinking — set the thinking level for an active session.
+    /// Body: { "sessionId": "...", "level": "off" | "low" | "medium" | "high" }
+    pub async fn set_thinking(
+        axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+        Json(req): Json<serde_json::Value>,
+    ) -> (StatusCode, Json<serde_json::Value>) {
+        let session_id = req.get("sessionId").and_then(|v| v.as_str()).unwrap_or("__global__");
+        let level_str = req.get("level").and_then(|v| v.as_str()).unwrap_or("off");
+        let level: pi::model::ThinkingLevel = level_str.parse().unwrap_or_default();
+        let handles = state.session_handles.read().await;
+        if let Some(handle) = handles.get(session_id) {
+            let mut h = handle.lock().await;
+            if let Err(e) = h.set_thinking_level(level).await {
+                return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "success": false, "error": e.to_string() })));
+            }
+        }
+        (StatusCode::OK, Json(json!({ "success": true, "level": level_str })))
     }
 
     /// Stop an active agent run by firing the session's abort handle.

@@ -181,6 +181,7 @@ impl AuthState {
 }
 
 /// Generate OAuth authorization URL
+#[allow(dead_code)]
 pub fn generate_authorization_url(provider_id: &str) -> Result<(String, String), String> {
     let config = get_provider_config(provider_id)
         .ok_or(format!(
@@ -213,6 +214,7 @@ pub fn generate_authorization_url(provider_id: &str) -> Result<(String, String),
 }
 
 /// Generate a random state parameter for CSRF protection
+#[allow(dead_code)]
 fn generate_state() -> String {
     use rand::Rng;
     const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -226,6 +228,7 @@ fn generate_state() -> String {
 }
 
 /// Get provider-specific OAuth scopes
+#[allow(dead_code)]
 fn get_provider_scopes(provider_id: &str) -> String {
     match provider_id {
         "google" => "openid profile email".to_string(),
@@ -403,6 +406,7 @@ pub fn delete_credentials(provider_id: &str, user_id: &str) -> Result<(), String
 }
 
 /// Store OAuth state with expiration (10 minutes default)
+#[allow(dead_code)]
 pub fn store_auth_state(provider_id: &str, state: &str) -> Result<(), String> {
     let now = chrono::Local::now().timestamp();
     let expires_at = now + 600; // 10 minutes
