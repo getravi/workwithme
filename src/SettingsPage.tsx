@@ -470,6 +470,9 @@ const SHORTCUTS: { keys: string[]; description: string; category: string }[] = [
   { category: "Input", keys: ["⌘", "V"], description: "Paste image or text from clipboard" },
   { category: "Screenshot", keys: ["⌘", "⌃", "4"], description: "Capture screen region" },
   { category: "Screenshot", keys: ["⌘", "⌃", "5"], description: "Capture window" },
+  { category: "Voice", keys: ["⌘", "⇧", "Space"], description: "Dictate (type into active window)" },
+  { category: "Voice", keys: ["⌘", "⌃", "7"], description: "New meeting" },
+  { category: "Voice", keys: ["⌘", "⌃", "6"], description: "Record screen" },
 ];
 
 function ShortcutsTab() {

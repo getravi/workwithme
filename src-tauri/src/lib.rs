@@ -10,6 +10,14 @@ mod llm_config;
 #[cfg(target_os = "macos")]
 mod window_capture;
 
+// Tray icons embedded at compile time — avoids resource_dir() path issues in dev and production.
+const TRAY_MIC: &[u8] = include_bytes!("../icons/tray-mic.png");
+const TRAY_MIC_RED: [&[u8]; 3] = [
+    include_bytes!("../icons/tray-mic-red-0.png"),
+    include_bytes!("../icons/tray-mic-red-1.png"),
+    include_bytes!("../icons/tray-mic-red-2.png"),
+];
+
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{Manager, Emitter};
@@ -263,9 +271,6 @@ pub fn run() {
         ])
         .setup(move |app| {
             // Build tray icon
-            let icon_path = app.path().resource_dir()
-                .map(|p| p.join("icons/tray-mic.png"))
-                .unwrap_or_else(|_| std::path::PathBuf::from("src-tauri/icons/tray-mic.png"));
             let capture_region_item = tauri::menu::MenuItem::with_id(
                 app,
                 "capture-region",
@@ -317,7 +322,7 @@ pub fn run() {
 
             let app_handle_tray = app.handle().clone();
             let mut tray_builder = tauri::tray::TrayIconBuilder::with_id("dictation")
-                .tooltip("Work With Me — Cmd+Shift+Space: dictate | Cmd+Ctrl+4: capture region | Cmd+Ctrl+5: capture window")
+                .tooltip("Work With Me — ⌘⇧Space: dictate | ⌘⌃7: new meeting | ⌘⌃4: capture region | ⌘⌃5: capture window")
                 .menu(&tray_menu)
                 .on_menu_event(move |_tray, event| {
                     match event.id().as_ref() {
@@ -348,7 +353,7 @@ pub fn run() {
                         _ => {}
                     }
                 });
-            if let Ok(img) = tauri::image::Image::from_path(&icon_path) {
+            if let Ok(img) = tauri::image::Image::from_bytes(TRAY_MIC) {
                 tray_builder = tray_builder.icon(img);
             }
             tray_builder.build(app.handle())?;
@@ -454,19 +459,13 @@ pub fn run() {
             let handle = app.handle().clone();
             let recording_flag_anim = recording_flag.clone();
             std::thread::spawn(move || {
-                let frames = ["tray-mic-red-0.png", "tray-mic-red-1.png", "tray-mic-red-2.png"];
                 let mut frame = 0usize;
                 loop {
                     std::thread::sleep(std::time::Duration::from_millis(400));
                     if recording_flag_anim.load(Ordering::Relaxed) {
                         if let Some(tray) = handle.tray_by_id("dictation") {
-                            let icon_name = frames[frame % frames.len()];
-                            if let Ok(path) = handle.path().resource_dir()
-                                .map(|p| p.join(format!("icons/{icon_name}")))
-                            {
-                                if let Ok(img) = tauri::image::Image::from_path(&path) {
-                                    let _ = tray.set_icon(Some(img));
-                                }
+                            if let Ok(img) = tauri::image::Image::from_bytes(TRAY_MIC_RED[frame % 3]) {
+                                let _ = tray.set_icon(Some(img));
                             }
                             frame += 1;
                         }
@@ -612,13 +611,9 @@ fn open_window_capture_overlay(app: &tauri::AppHandle) {
 
 fn set_tray_recording(app: &tauri::AppHandle, recording: bool) {
     if let Some(tray) = app.tray_by_id("dictation") {
-        let icon_name = if recording { "tray-mic-red-0.png" } else { "tray-mic.png" };
-        if let Ok(path) = app.path().resource_dir()
-            .map(|p| p.join(format!("icons/{icon_name}")))
-        {
-            if let Ok(img) = tauri::image::Image::from_path(&path) {
-                let _ = tray.set_icon(Some(img));
-            }
+        let bytes = if recording { TRAY_MIC_RED[0] } else { TRAY_MIC };
+        if let Ok(img) = tauri::image::Image::from_bytes(bytes) {
+            let _ = tray.set_icon(Some(img));
         }
     }
 }

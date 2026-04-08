@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Save, CheckCircle2, AlertCircle, Wifi } from "lucide-react";
+import { Save, CheckCircle2, AlertCircle, Wifi, Keyboard } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -261,6 +261,32 @@ export function VoiceWorkspaceSettings() {
           </div>
         </section>
       )}
+
+      {/* Keyboard Shortcuts */}
+      <section>
+        <h3 className="text-[12px] font-semibold text-gray-400 uppercase tracking-wider mb-3 flex items-center gap-2">
+          <Keyboard className="w-3.5 h-3.5" /> Keyboard Shortcuts
+        </h3>
+        <div className="space-y-1 bg-[#111827] rounded-lg border border-[#1f2937] p-1">
+          {[
+            { keys: ["⌘", "⇧", "Space"], description: "Dictate into active window (global)" },
+            { keys: ["⌘", "⌃", "7"], description: "Open new meeting (global)" },
+            { keys: ["⌘", "⌃", "6"], description: "Record screen" },
+          ].map(({ keys, description }, i) => (
+            <div key={i} className="flex items-center justify-between px-2 py-2 rounded-md hover:bg-[#1f2937]/60">
+              <span className="text-[13px] text-gray-300">{description}</span>
+              <div className="flex items-center gap-1 flex-shrink-0">
+                {keys.map((k, ki) => (
+                  <kbd key={ki} className="px-1.5 py-0.5 bg-[#1f2937] border border-[#374151] rounded text-[11px] text-gray-300 font-mono">
+                    {k}
+                  </kbd>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+        <p className="mt-2 text-[11px] text-gray-500">Global shortcuts work system-wide when the app is running.</p>
+      </section>
 
       {/* Test Connection */}
       <section>
