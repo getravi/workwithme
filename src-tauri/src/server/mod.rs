@@ -1,3 +1,25 @@
+//! Axum HTTP server — the agent runtime backend.
+//!
+//! Sub-modules:
+//! - [`ws`] — WebSocket hub for streaming agent output to the frontend
+//! - [`sessions`] — session lifecycle (create, list, delete, append)
+//! - [`files`] — file-system read/write routed through sandbox validation
+//! - [`processes`] — shell command execution with sandboxing and approval
+//! - [`sandbox`] — path-allowlist sandboxing for file/process operations
+//! - [`skills`] — `.pi/skills/` discovery and rendering
+//! - [`mcp`] — MCP server config and tool proxying
+//! - [`oauth`] — OAuth 2.0 PKCE flow for remote MCP auth
+//! - [`keychain`] — system keychain helpers for token storage
+//! - [`audit`] — append-only security audit log
+//! - [`approval`] — oneshot-channel approval flow for privileged operations
+//! - [`extensions`] — session labelling and metadata enrichment
+//! - [`models`] — available LLM model listing
+//! - [`settings`] — JSON settings store at `~/.pi/settings.json`
+//! - [`notifications`] — persistent notification log
+//! - [`plugins`] — plugin manifest discovery and lifecycle
+//! - [`clipboard`] — clipboard read/write helpers
+//! - [`static_files`] — `rust-embed` frontend asset serving
+
 pub mod ws;
 pub mod skills;
 pub mod keychain;
@@ -37,6 +59,46 @@ use std::collections::HashMap;
 use tokio::sync::{RwLock, oneshot};
 use std::sync::OnceLock;
 use std::sync::Mutex;
+
+/// Startup-generated token written to ~/.pi/server-token.
+/// Any process that calls the sensitive REST endpoints (keychain, clipboard, file browser)
+/// must present this as `Authorization: Bearer <token>`.  The token is generated once per
+/// app launch and lives only in memory — it is never persisted by the app itself.
+static SERVER_TOKEN: OnceLock<String> = OnceLock::new();
+
+/// Return (and lazily initialise) the server auth token.
+/// On first call a random UUID-based token is generated and written to ~/.pi/server-token
+/// so that the pi_agent (running as the same OS user) can read it.
+pub fn server_token() -> &'static str {
+    SERVER_TOKEN.get_or_init(|| {
+        let token = uuid::Uuid::new_v4().to_string().replace('-', "");
+        // Write to ~/.pi/server-token so pi_agent can read it.
+        if let Some(home) = dirs::home_dir() {
+            let pi_dir = home.join(".pi");
+            let _ = std::fs::create_dir_all(&pi_dir);
+            let _ = std::fs::write(pi_dir.join("server-token"), &token);
+        }
+        token
+    })
+}
+
+/// Middleware that requires `Authorization: Bearer <server_token>` on sensitive endpoints.
+async fn auth_middleware(
+    request: axum::http::Request<Body>,
+    next: Next,
+) -> axum::response::Result<axum::response::Response> {
+    let expected = server_token();
+    let provided = request
+        .headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "));
+
+    if provided != Some(expected) {
+        return Err((StatusCode::UNAUTHORIZED, "Unauthorized").into());
+    }
+    Ok(next.run(request).await)
+}
 
 /// Global map of OAuth state → completion sender.
 /// When the OAuth callback fires, it signals the waiting SSE stream.
@@ -250,12 +312,29 @@ pub async fn create_app() -> Result<Router, String> {
 
     // Configure rate limiter: 2 requests per second with burst of 10
     // This prevents DoS attacks while allowing normal usage
-    let quota = Quota::per_second(NonZeroU32::new(2).unwrap())
-        .allow_burst(NonZeroU32::new(10).unwrap());
+    let quota = Quota::per_second(NonZeroU32::new(2).expect("invariant: 2 is a valid NonZeroU32"))
+        .allow_burst(NonZeroU32::new(10).expect("invariant: 10 is a valid NonZeroU32"));
     let rate_limiter: Arc<RateLimiter<NotKeyed, InMemoryState, DefaultClock>> =
         Arc::new(RateLimiter::direct(quota));
 
+    // Initialise the server token early so it is written to ~/.pi/server-token
+    // before any endpoint can be called.
+    server_token();
+
+    // Routes that expose sensitive data (keychain secrets, clipboard contents, arbitrary
+    // file browsing) are placed in a sub-router that requires a valid Bearer token.
+    let protected = Router::new()
+        .route("/api/keychain/{key}", get(keychain_endpoints::get))
+        .route("/api/keychain", post(keychain_endpoints::set))
+        .route("/api/keychain/{key}", delete(keychain_endpoints::delete))
+        .route("/api/clipboard/paste", get(clipboard_endpoints::paste))
+        .route("/api/files/list", get(files_endpoints::list))
+        .route("/api/files/search", get(files_endpoints::search))
+        .route("/api/files/info", get(files_endpoints::info))
+        .layer(axum::middleware::from_fn(auth_middleware));
+
     let app = Router::new()
+        .merge(protected)
         // WebSocket endpoint
         .route("/", get(ws_handler))
         // Health check
@@ -265,10 +344,6 @@ pub async fn create_app() -> Result<Router, String> {
         // Skills endpoints
         .route("/api/skills", get(skills_endpoints::list))
         .route("/api/skills/{source}/{slug}", get(skills_endpoints::get))
-        // Keychain endpoints
-        .route("/api/keychain/{key}", get(keychain_endpoints::get))
-        .route("/api/keychain", post(keychain_endpoints::set))
-        .route("/api/keychain/{key}", delete(keychain_endpoints::delete))
         // Audit endpoint
         .route("/api/audit", post(audit_endpoints::log))
         // Sessions endpoints
@@ -319,16 +394,12 @@ pub async fn create_app() -> Result<Router, String> {
         .route("/api/models/select/{id}", post(models_endpoints::select))
         .route("/api/models/add", post(models_endpoints::add))
         .route("/api/models/{id}", delete(models_endpoints::remove))
-        // Clipboard endpoints
+        // Clipboard endpoints (paste is in the protected router)
         .route("/api/clipboard/copy", post(clipboard_endpoints::copy))
-        .route("/api/clipboard/paste", get(clipboard_endpoints::paste))
         // Notifications endpoints
         .route("/api/notifications/send", post(notifications_endpoints::send))
         .route("/api/notifications", get(notifications_endpoints::list))
-        // File browser endpoints
-        .route("/api/files/list", get(files_endpoints::list))
-        .route("/api/files/search", get(files_endpoints::search))
-        .route("/api/files/info", get(files_endpoints::info))
+        // File browser endpoints are in the protected router
         // Process management endpoints
         .route("/api/processes", get(processes_endpoints::list))
         .route("/api/processes/{id}/kill", post(processes_endpoints::kill))
@@ -453,22 +524,22 @@ async fn security_headers_middleware(
     let headers = response.headers_mut();
 
     // Prevent MIME type sniffing
-    headers.insert("X-Content-Type-Options", "nosniff".parse().unwrap());
+    headers.insert("X-Content-Type-Options", "nosniff".parse().expect("invariant: static header value"));
 
     // Enable XSS protection in older browsers
-    headers.insert("X-XSS-Protection", "1; mode=block".parse().unwrap());
+    headers.insert("X-XSS-Protection", "1; mode=block".parse().expect("invariant: static header value"));
 
     // Prevent clickjacking
-    headers.insert("X-Frame-Options", "SAMEORIGIN".parse().unwrap());
+    headers.insert("X-Frame-Options", "SAMEORIGIN".parse().expect("invariant: static header value"));
 
     // Enforce HTTPS (for production deployments)
     headers.insert(
         "Strict-Transport-Security",
-        "max-age=31536000; includeSubDomains".parse().unwrap(),
+        "max-age=31536000; includeSubDomains".parse().expect("invariant: static header value"),
     );
 
     // Prevent information disclosure
-    headers.insert("X-Powered-By", "".parse().unwrap());
+    headers.insert("X-Powered-By", "".parse().expect("invariant: static header value"));
     headers.remove("Server");
 
     response
@@ -900,16 +971,49 @@ mod agent_endpoints {
         )
     }
 
-    /// Get sandbox support status
+    /// Get sandbox support status.
+    /// Checks whether the platform sandbox tool (sandbox-exec on macOS, bwrap on Linux)
+    /// is actually available so the frontend warning banner reflects reality.
     pub async fn sandbox_status() -> Json<serde_json::Value> {
+        let (active, warning) = detect_sandbox_availability();
         Json(json!({
             "supported": true,
-            "active": true,
+            "active": active,
             "srtAvailable": false,
             "platform": std::env::consts::OS,
-            "warning": null,
+            "warning": warning,
             "features": ["tool_execution", "approval_flow", "tool_schemas"]
         }))
+    }
+
+    /// Returns (active, warning_message) by probing for the platform sandbox binary.
+    fn detect_sandbox_availability() -> (bool, Option<String>) {
+        #[cfg(target_os = "macos")]
+        {
+            let available = std::path::Path::new("/usr/bin/sandbox-exec").exists();
+            if available {
+                (true, None)
+            } else {
+                (false, Some("sandbox-exec not found — tool execution runs unsandboxed.".to_string()))
+            }
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let available = std::process::Command::new("which")
+                .arg("bwrap")
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+            if available {
+                (true, None)
+            } else {
+                (false, Some("bwrap (bubblewrap) not found — tool execution runs unsandboxed.".to_string()))
+            }
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        {
+            (false, Some("Sandboxing is not supported on this platform.".to_string()))
+        }
     }
 }
 
