@@ -87,12 +87,12 @@ impl AudioRecorder {
     /// Stop the stream and discard buffered audio.
     pub fn stop(&mut self) {
         self._stream = None;
-        self.buffer.lock().unwrap().clear();
+        self.buffer.lock().expect("mutex poisoned: audio buffer").clear();
     }
 
     /// Take all buffered samples, leaving the buffer empty.
     pub fn drain(&self) -> Vec<f32> {
-        std::mem::take(&mut self.buffer.lock().unwrap())
+        std::mem::take(&mut self.buffer.lock().expect("mutex poisoned: audio buffer"))
     }
 }
 
@@ -104,5 +104,55 @@ fn push_mono(data: &[f32], channels: usize, buffer: &Arc<Mutex<Vec<f32>>>) {
             .map(|frame| frame.iter().sum::<f32>() / channels as f32)
             .collect()
     };
-    buffer.lock().unwrap().extend_from_slice(&mono);
+    buffer.lock().expect("mutex poisoned: audio buffer").extend_from_slice(&mono);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_push_mono(data: &[f32], channels: usize) -> Vec<f32> {
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        push_mono(data, channels, &buf);
+        buf.lock().unwrap().clone()
+    }
+
+    #[test]
+    fn mono_passthrough() {
+        let samples = vec![0.1, 0.2, 0.3];
+        assert_eq!(run_push_mono(&samples, 1), samples);
+    }
+
+    #[test]
+    fn stereo_downmix_averages_pairs() {
+        // Interleaved L/R: [0.0, 1.0, 0.4, 0.6]  → mono: [0.5, 0.5]
+        let data = vec![0.0_f32, 1.0, 0.4, 0.6];
+        let out = run_push_mono(&data, 2);
+        assert_eq!(out.len(), 2);
+        assert!((out[0] - 0.5).abs() < 1e-6);
+        assert!((out[1] - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn quad_channel_averaging() {
+        // 4 channels all 1.0 → mono 1.0
+        let data = vec![1.0_f32; 8]; // two frames of 4 ch
+        let out = run_push_mono(&data, 4);
+        assert_eq!(out.len(), 2);
+        assert!((out[0] - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn empty_input_produces_empty_output() {
+        assert_eq!(run_push_mono(&[], 1), vec![]);
+        assert_eq!(run_push_mono(&[], 2), vec![]);
+    }
+
+    #[test]
+    fn push_mono_appends_to_existing_buffer() {
+        let buf = Arc::new(Mutex::new(vec![0.5_f32]));
+        push_mono(&[0.1, 0.2], 1, &buf);
+        let result = buf.lock().unwrap().clone();
+        assert_eq!(result, vec![0.5, 0.1, 0.2]);
+    }
 }

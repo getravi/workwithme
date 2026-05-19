@@ -1,3 +1,11 @@
+//! macOS window listing and per-window screenshot capture.
+//!
+//! Uses CoreGraphics (`CGWindowListCopyWindowInfo`, `CGWindowListCreateImageFromArray`)
+//! via raw FFI to enumerate visible on-screen windows and capture them as PNG images.
+//! The captured PNG is base64-encoded for transfer to the frontend.
+//!
+//! This module is compiled only on `target_os = "macos"`.
+
 #![cfg(target_os = "macos")]
 
 use base64::Engine;
@@ -115,7 +123,7 @@ unsafe fn dict_get_string(dict: CFDictRef, key: CFTypeRef) -> Option<String> {
 /// # Panics
 /// Panics if `s` contains an interior NUL byte. Only call with known-safe string literals.
 unsafe fn make_cfstring(s: &str) -> CFTypeRef {
-    let c = CString::new(s).unwrap();
+    let c = CString::new(s).expect("invariant: make_cfstring called with NUL-free string literals only");
     CFStringCreateWithCString(kCFAllocatorDefault, c.as_ptr(), CF_STRING_ENCODING_UTF8)
 }
 

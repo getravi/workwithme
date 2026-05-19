@@ -139,7 +139,7 @@ pub fn get_log_level() -> LogLevel {
 
 /// Get recent log entries
 pub fn get_recent_logs(limit: usize) -> Result<Vec<Value>, String> {
-    let config = LOG_CONFIG.lock().unwrap();
+    let config = LOG_CONFIG.lock().expect("mutex poisoned: LOG_CONFIG");
 
     if !config.file_path.exists() {
         return Ok(vec![]);
@@ -161,7 +161,7 @@ pub fn get_recent_logs(limit: usize) -> Result<Vec<Value>, String> {
 
 /// Clear log file
 pub fn clear_logs() -> Result<(), String> {
-    let config = LOG_CONFIG.lock().unwrap();
+    let config = LOG_CONFIG.lock().expect("mutex poisoned: LOG_CONFIG");
     std::fs::write(&config.file_path, "")
         .map_err(|e| format!("Failed to clear logs: {}", e))
 }

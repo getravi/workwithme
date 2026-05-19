@@ -1,3 +1,16 @@
+//! Tauri command handlers for the capture library.
+//!
+//! Exposes CRUD operations over [`super::db`] to the frontend:
+//! - [`library_save_draft`] — write a PNG capture and create a draft DB row
+//! - [`library_finalize`] — overwrite PNG with edited version and mark row `final`
+//! - [`library_list`] / [`library_search`] — paginated list and FTS5 search
+//! - [`library_delete`] — remove DB row and PNG file
+//! - [`library_save_video`] — import an exported screen-recording with a thumbnail
+//!
+//! [`save_draft_internal`] is the non-Tauri entry point called from `capture.rs`.
+//! [`write_png`] / [`write_png_to`] are private helpers that handle base64 decoding
+//! and disk writes into `<data_local_dir>/workwithme/captures/`.
+
 use super::db::{self, CaptureEntry};
 use base64::Engine;
 
@@ -23,7 +36,7 @@ pub fn library_finalize(id: String, image_b64: String) -> Result<(), String> {
     // Look up the file path from the DB
     let file_path = {
         let db_conn = db::DB.get().ok_or("DB not ready")?;
-        let conn = db_conn.lock().unwrap();
+        let conn = db_conn.lock().expect("mutex poisoned: DB connection");
         conn.query_row(
             "SELECT file_path FROM captures WHERE id = ?1",
             rusqlite::params![id],
@@ -78,8 +91,8 @@ pub fn library_save_video(
     // Insert DB row
     let id = db::save_video(&exported_path, &thumb_path.to_string_lossy())?;
 
-    // Spawn OCR on thumbnail for searchability
-    super::ocr::spawn_ocr(id.clone(), thumb_path.to_string_lossy().to_string());
+    // OCR is intentionally skipped for video thumbnails: the first frame of a
+    // screen recording produces large, noisy FTS5 results with minimal search value.
 
     Ok(id)
 }
@@ -93,10 +106,15 @@ fn write_png(image_b64: &str) -> Result<(String, i32, i32), String> {
     std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir: {e}"))?;
     let file_id = uuid::Uuid::new_v4().to_string();
     let path = dir.join(format!("{file_id}.png"));
-    write_png_to(image_b64, path.to_str().unwrap())?;
-    let bytes = std::fs::read(&path).map_err(|e| format!("read: {e}"))?;
+    // Decode base64 once in memory, read dimensions from the in-memory image,
+    // then write — avoids a redundant disk read just to get width/height.
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(image_b64)
+        .map_err(|e| format!("base64 decode: {e}"))?;
     let img = image::load_from_memory(&bytes).map_err(|e| format!("decode: {e}"))?;
-    Ok((path.to_string_lossy().to_string(), img.width() as i32, img.height() as i32))
+    let (width, height) = (img.width() as i32, img.height() as i32);
+    std::fs::write(&path, &bytes).map_err(|e| format!("write: {e}"))?;
+    Ok((path.to_string_lossy().to_string(), width, height))
 }
 
 fn write_png_to(image_b64: &str, file_path: &str) -> Result<(), String> {
