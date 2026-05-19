@@ -1,5 +1,14 @@
+//! Screen and window capture commands.
+//!
+//! Uses the [`screenshots`] crate (CoreGraphics on macOS) to capture pixels,
+//! encodes them as base64 PNG, and stores the result in [`CaptureState`]
+//! (Tauri managed state) for the editor window to retrieve on mount.
+//!
+//! Captured images are also written to the library DB via [`library::commands`]
+//! so they appear in [`LibraryWindow`].
+
 use base64::Engine;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 /// Shared state: holds the base64 PNG captured from the screen
 /// until the editor window is ready to request it.
@@ -128,34 +137,24 @@ pub async fn save_image_to_file(
 /// creates a new Space. Instead we size the window to cover all monitors manually.
 #[tauri::command]
 pub fn open_capture_overlay(app: AppHandle) -> Result<(), String> {
-    // Close any stale overlay from a previous capture
+    // If the overlay is already open, focus it and return — avoids a close+sleep+recreate
+    // cycle that blocks the hotkey event thread for 50ms and can race with window teardown.
     if let Some(w) = app.get_webview_window("capture-overlay") {
-        let _ = w.close();
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        let _ = w.set_focus();
+        return Ok(());
     }
 
-    // Compute bounding box of all monitors in logical coordinates (points).
-    // display_info.{x,y} are already in logical coords on macOS;
-    // width/height are physical pixels so we divide by scale_factor.
     let screens = screenshots::Screen::all().unwrap_or_default();
-    let (mut min_x, mut min_y, mut max_x, mut max_y) = (0i32, 0i32, 1920i32, 1080i32);
-    if !screens.is_empty() {
-        min_x = screens.iter().map(|s| s.display_info.x).min().unwrap_or(0);
-        min_y = screens.iter().map(|s| s.display_info.y).min().unwrap_or(0);
-        max_x = screens.iter().map(|s| {
-            let lw = (s.display_info.width as f64 / s.display_info.scale_factor as f64) as i32;
-            s.display_info.x + lw
-        }).max().unwrap_or(1920);
-        max_y = screens.iter().map(|s| {
-            let lh = (s.display_info.height as f64 / s.display_info.scale_factor as f64) as i32;
-            s.display_info.y + lh
-        }).max().unwrap_or(1080);
-    }
+    let (min_x, min_y, max_x, max_y) = crate::recorder::screen_bounds(&screens);
 
+    // Pass overlay origin so the frontend can translate window-relative mouse
+    // coordinates to global screen coordinates (needed for multi-monitor setups).
     tauri::WebviewWindowBuilder::new(
         &app,
         "capture-overlay",
-        tauri::WebviewUrl::App("capture-overlay.html".into()),
+        tauri::WebviewUrl::App(
+            format!("capture-overlay.html?ox={min_x}&oy={min_y}").into(),
+        ),
     )
     .inner_size((max_x - min_x) as f64, (max_y - min_y) as f64)
     .position(min_x as f64, min_y as f64)
@@ -214,12 +213,16 @@ pub fn open_editor_window(
             .ok()
     });
 
-    *state.pending_image.lock().unwrap() = Some(base64_png);
-    *state.pending_library_id.lock().unwrap() = resolved_library_id;
+    *state.pending_image.lock().expect("mutex poisoned: pending capture image") = Some(base64_png);
+    *state.pending_library_id.lock().expect("mutex poisoned: pending library id") = resolved_library_id;
 
-    // Close any existing editor
+    // If an editor window already exists, emit an event so it reloads the new
+    // image from state — avoids the close→create race where Tauri rejects the
+    // duplicate label before the old window has fully unregistered.
     if let Some(w) = app.get_webview_window("capture-editor") {
-        let _ = w.close();
+        let _ = w.set_focus();
+        let _ = w.emit("reload-capture", ());
+        return Ok(());
     }
 
     tauri::WebviewWindowBuilder::new(
@@ -244,8 +247,8 @@ pub fn open_editor_window(
 pub fn get_captured_image(
     state: tauri::State<CaptureState>,
 ) -> Option<CapturedImageData> {
-    let image = state.pending_image.lock().unwrap().take()?;
-    let library_id = state.pending_library_id.lock().unwrap().take();
+    let image = state.pending_image.lock().expect("mutex poisoned: pending capture image").take()?;
+    let library_id = state.pending_library_id.lock().expect("mutex poisoned: pending library id").take();
     Some(CapturedImageData { image, library_id })
 }
 
