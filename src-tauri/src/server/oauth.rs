@@ -1,3 +1,9 @@
+//! OAuth 2.0 PKCE flow for remote MCP server authentication.
+//!
+//! Initiates the browser-redirect authorization code flow with PKCE, exchanges
+//! the authorization code for tokens, and persists the refresh token via
+//! [`super::keychain`].
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use crate::server::keychain;
@@ -136,33 +142,6 @@ pub struct OAuthCredentials {
     pub user_id: Option<String>,
 }
 
-#[allow(dead_code)]
-impl OAuthCredentials {
-    /// Check if access token has expired
-    pub fn is_expired(&self) -> bool {
-        match self.expires_at {
-            Some(expires_at) => chrono::Local::now().timestamp() >= expires_at,
-            None => false, // No expiration set, consider valid
-        }
-    }
-
-    /// Check if token is expired or expiring soon (within 5 minutes)
-    pub fn is_expiring_soon(&self) -> bool {
-        match self.expires_at {
-            Some(expires_at) => {
-                let now = chrono::Local::now().timestamp();
-                now >= expires_at - 300 // 5 minute buffer
-            }
-            None => false,
-        }
-    }
-
-    /// Check if we can refresh this token
-    pub fn can_refresh(&self) -> bool {
-        self.refresh_token.is_some()
-    }
-}
-
 /// Auth state for tracking OAuth flows with expiration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthState {
@@ -172,71 +151,10 @@ pub struct AuthState {
     pub expires_at: i64,
 }
 
-#[allow(dead_code)]
 impl AuthState {
     /// Check if this state has expired (default: 10 minutes)
     pub fn is_expired(&self) -> bool {
         chrono::Local::now().timestamp() > self.expires_at
-    }
-}
-
-/// Generate OAuth authorization URL
-#[allow(dead_code)]
-pub fn generate_authorization_url(provider_id: &str) -> Result<(String, String), String> {
-    let config = get_provider_config(provider_id)
-        .ok_or(format!(
-            "OAuth provider '{}' not found. Supported providers: google, github, openai",
-            provider_id
-        ))?;
-
-    if config.client_id.is_empty() || config.client_secret.is_empty() {
-        return Err(format!(
-            "OAuth credentials not configured for '{}'. Please set{}_CLIENT_ID and {}_CLIENT_SECRET environment variables.",
-            provider_id,
-            provider_id.to_uppercase(),
-            provider_id.to_uppercase()
-        ));
-    }
-
-    let state = generate_state();
-    let scopes = get_provider_scopes(provider_id);
-
-    let auth_url = format!(
-        "{}?client_id={}&redirect_uri={}&response_type=code&scope={}&state={}",
-        config.auth_url,
-        urlencoding::encode(&config.client_id),
-        urlencoding::encode(&config.redirect_uri),
-        urlencoding::encode(&scopes),
-        urlencoding::encode(&state)
-    );
-
-    Ok((auth_url, state))
-}
-
-/// Generate a random state parameter for CSRF protection
-#[allow(dead_code)]
-fn generate_state() -> String {
-    use rand::Rng;
-    const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    let mut rng = rand::thread_rng();
-    (0..32)
-        .map(|_| {
-            let idx = rng.gen_range(0..CHARSET.len());
-            CHARSET[idx] as char
-        })
-        .collect()
-}
-
-/// Get provider-specific OAuth scopes
-#[allow(dead_code)]
-fn get_provider_scopes(provider_id: &str) -> String {
-    match provider_id {
-        "google" => "openid profile email".to_string(),
-        "github" => "user:email read:user repo".to_string(),
-        "microsoft" => "openid profile email offline_access".to_string(),
-        "slack" => "admin".to_string(),
-        "stripe" => "read_write".to_string(),
-        _ => String::new(),
     }
 }
 
@@ -248,8 +166,6 @@ pub struct TokenResponse {
     pub refresh_token: Option<String>,
     #[serde(default)]
     pub expires_in: Option<i64>,
-    #[allow(dead_code)]
-    pub token_type: String,
 }
 
 /// Exchange authorization code for access token
@@ -351,78 +267,11 @@ pub fn get_credentials(provider_id: &str, user_id: &str) -> Result<Option<OAuthC
     }
 }
 
-/// Refresh an access token using refresh token — forward scaffolding for token auto-renewal
-#[allow(dead_code)]
-pub async fn refresh_access_token(
-    provider_id: &str,
-    user_id: &str,
-) -> Result<OAuthCredentials, String> {
-    let mut creds = get_credentials(provider_id, user_id)?
-        .ok_or("No stored credentials found".to_string())?;
-
-    let refresh_token = creds.refresh_token.clone()
-        .ok_or("No refresh token available".to_string())?;
-
-    let config = get_provider_config(provider_id)
-        .ok_or("Provider not found".to_string())?;
-
-    let client = reqwest::Client::new();
-
-    let mut params = HashMap::new();
-    params.insert("grant_type", "refresh_token");
-    params.insert("refresh_token", &refresh_token);
-    params.insert("client_id", &config.client_id);
-    params.insert("client_secret", &config.client_secret);
-
-    let token_result: TokenResponse = client
-        .post(&config.token_url)
-        .form(&params)
-        .send()
-        .await
-        .map_err(|e| format!("Token refresh request failed: {}", e))?
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse refresh response: {}", e))?;
-
-    creds.access_token = token_result.access_token.clone();
-    creds.expires_at = token_result.expires_in.map(|secs| {
-        chrono::Local::now().timestamp() + secs
-    });
-
-    if let Some(new_refresh) = token_result.refresh_token {
-        creds.refresh_token = Some(new_refresh);
-    }
-
-    store_credentials(&creds)?;
-
-    Ok(creds)
-}
-
 /// Delete stored credentials
 pub fn delete_credentials(provider_id: &str, user_id: &str) -> Result<(), String> {
     let key = format!("oauth_token_{}_{}", provider_id, user_id);
     keychain::delete(&key)?;
     Ok(())
-}
-
-/// Store OAuth state with expiration (10 minutes default)
-#[allow(dead_code)]
-pub fn store_auth_state(provider_id: &str, state: &str) -> Result<(), String> {
-    let now = chrono::Local::now().timestamp();
-    let expires_at = now + 600; // 10 minutes
-
-    let auth_state = AuthState {
-        provider: provider_id.to_string(),
-        state: state.to_string(),
-        created_at: now,
-        expires_at,
-    };
-
-    let key = format!("oauth_state_{}", state);
-    let json = serde_json::to_string(&auth_state)
-        .map_err(|e| format!("Failed to serialize auth state: {}", e))?;
-
-    keychain::set(&key, &json)
 }
 
 /// Retrieve and validate OAuth state (removes it after validation to prevent replay)
@@ -492,16 +341,6 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_state() {
-        let state1 = generate_state();
-        let state2 = generate_state();
-
-        assert_eq!(state1.len(), 32);
-        assert_eq!(state2.len(), 32);
-        assert_ne!(state1, state2); // States should be different (with high probability)
-    }
-
-    #[test]
     fn test_oauth_credentials_serialization() {
         let creds = OAuthCredentials {
             provider: "google".to_string(),
@@ -520,106 +359,16 @@ mod tests {
     }
 
     #[test]
-    fn test_scopes_generation() {
-        let google_scopes = get_provider_scopes("google");
-        assert!(google_scopes.contains("openid"));
-        assert!(google_scopes.contains("profile"));
-        assert!(google_scopes.contains("email"));
-
-        let github_scopes = get_provider_scopes("github");
-        assert!(github_scopes.contains("user:email"));
-        assert!(github_scopes.contains("read:user"));
-
-        let unknown_scopes = get_provider_scopes("unknown");
-        assert!(unknown_scopes.is_empty());
-    }
-
-    #[test]
     fn test_token_response_parsing() {
         let json = r#"{
             "access_token": "test_access",
-            "token_type": "Bearer",
             "expires_in": 3600
         }"#;
 
         let token: TokenResponse = serde_json::from_str(json).unwrap();
         assert_eq!(token.access_token, "test_access");
-        assert_eq!(token.token_type, "Bearer");
         assert_eq!(token.expires_in, Some(3600));
         assert!(token.refresh_token.is_none());
-    }
-
-    #[test]
-    fn test_oauth_credentials_expiration() {
-        let now = chrono::Local::now().timestamp();
-
-        // Expired credentials
-        let expired_creds = OAuthCredentials {
-            provider: "google".to_string(),
-            access_token: "token".to_string(),
-            refresh_token: None,
-            expires_at: Some(now - 100), // 100 seconds in the past
-            user_id: Some("user123".to_string()),
-        };
-        assert!(expired_creds.is_expired());
-
-        // Valid credentials
-        let valid_creds = OAuthCredentials {
-            provider: "google".to_string(),
-            access_token: "token".to_string(),
-            refresh_token: None,
-            expires_at: Some(now + 3600), // 1 hour in the future
-            user_id: Some("user123".to_string()),
-        };
-        assert!(!valid_creds.is_expired());
-    }
-
-    #[test]
-    fn test_oauth_credentials_expiring_soon() {
-        let now = chrono::Local::now().timestamp();
-
-        // Expiring soon (within 5 minutes)
-        let expiring_soon = OAuthCredentials {
-            provider: "google".to_string(),
-            access_token: "token".to_string(),
-            refresh_token: None,
-            expires_at: Some(now + 200), // 200 seconds (3+ mins)
-            user_id: Some("user123".to_string()),
-        };
-        assert!(expiring_soon.is_expiring_soon());
-
-        // Not expiring soon
-        let valid = OAuthCredentials {
-            provider: "google".to_string(),
-            access_token: "token".to_string(),
-            refresh_token: None,
-            expires_at: Some(now + 3600),
-            user_id: Some("user123".to_string()),
-        };
-        assert!(!valid.is_expiring_soon());
-    }
-
-    #[test]
-    fn test_oauth_credentials_can_refresh() {
-        // Can refresh (has refresh token)
-        let with_refresh = OAuthCredentials {
-            provider: "google".to_string(),
-            access_token: "access".to_string(),
-            refresh_token: Some("refresh".to_string()),
-            expires_at: None,
-            user_id: Some("user123".to_string()),
-        };
-        assert!(with_refresh.can_refresh());
-
-        // Cannot refresh (no refresh token)
-        let no_refresh = OAuthCredentials {
-            provider: "google".to_string(),
-            access_token: "access".to_string(),
-            refresh_token: None,
-            expires_at: None,
-            user_id: Some("user123".to_string()),
-        };
-        assert!(!no_refresh.can_refresh());
     }
 
     #[test]
@@ -635,45 +384,6 @@ mod tests {
             assert!(!cfg.token_url.is_empty(), "Provider {} missing token_url", provider_id);
             assert!(!cfg.redirect_uri.is_empty(), "Provider {} missing redirect_uri", provider_id);
         }
-    }
-
-    #[test]
-    fn test_oauth_scopes_for_all_providers() {
-        let providers = vec!["google", "github", "microsoft", "slack", "stripe"];
-
-        for provider in providers {
-            let scopes = get_provider_scopes(provider);
-            assert!(!scopes.is_empty(), "Provider {} should have scopes", provider);
-        }
-    }
-
-    #[test]
-    fn test_microsoft_oauth_scopes() {
-        let scopes = get_provider_scopes("microsoft");
-        assert!(scopes.contains("openid"));
-        assert!(scopes.contains("profile"));
-        assert!(scopes.contains("email"));
-        assert!(scopes.contains("offline_access"));
-    }
-
-    #[test]
-    fn test_slack_oauth_scopes() {
-        let scopes = get_provider_scopes("slack");
-        assert_eq!(scopes, "admin");
-    }
-
-    #[test]
-    fn test_stripe_oauth_scopes() {
-        let scopes = get_provider_scopes("stripe");
-        assert_eq!(scopes, "read_write");
-    }
-
-    #[test]
-    fn test_github_oauth_scopes() {
-        let scopes = get_provider_scopes("github");
-        assert!(scopes.contains("user:email"));
-        assert!(scopes.contains("read:user"));
-        assert!(scopes.contains("repo"));
     }
 
     #[test]
@@ -733,14 +443,6 @@ mod tests {
                 provider.id
             );
         }
-    }
-
-    #[test]
-    fn test_generate_authorization_url_includes_required_params() {
-        // This would require setting env vars, so we just test the structure
-        let state = generate_state();
-        assert_eq!(state.len(), 32);
-        assert!(state.chars().all(|c| c.is_alphanumeric()));
     }
 
     #[test]

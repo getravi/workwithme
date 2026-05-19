@@ -1,3 +1,9 @@
+//! Plugin manifest discovery and lifecycle management.
+//!
+//! Scans `~/.pi/plugins/` for `plugin.toml` / `plugin.json` manifests, loads
+//! them into a shared registry, and exposes install/uninstall/list operations
+//! to the HTTP API.
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -29,26 +35,17 @@ pub struct Plugin {
     pub path: PathBuf,
     pub enabled: bool,
     pub loaded: bool,
-    /// Cached WASM bytes after download — forward scaffolding for hot-reload
-    #[serde(skip)]
-    #[allow(dead_code)]
-    pub wasm_bytes: Option<Vec<u8>>,
 }
 
 /// Plugin registry storing all plugins
 pub struct PluginRegistry {
     plugins: HashMap<String, Plugin>,
-    /// Directory where plugin manifests and WASM blobs are stored
-    #[allow(dead_code)]
-    plugin_dir: PathBuf,
 }
 
 lazy_static! {
     static ref REGISTRY: Arc<RwLock<PluginRegistry>> = {
-        let plugin_dir = get_plugins_dir();
         Arc::new(RwLock::new(PluginRegistry {
             plugins: HashMap::new(),
-            plugin_dir,
         }))
     };
 }
@@ -100,7 +97,7 @@ async fn scan_plugins() -> Result<(), String> {
                             path: path.clone(),
                             enabled: true,
                             loaded: false,
-                            wasm_bytes: None,
+
                         };
 
                         let mut registry = REGISTRY.write().await;
@@ -177,7 +174,6 @@ pub async fn install_plugin(
         path: plugin_dir,
         enabled: true,
         loaded: false,
-        wasm_bytes: Some(wasm_bytes),
     };
 
     // Register plugin
@@ -264,19 +260,6 @@ pub async fn uninstall_plugin(id: &str) -> Result<(), String> {
     } else {
         Err(format!("Plugin not found: {}", id))
     }
-}
-
-/// Load a plugin's WASM module — forward scaffolding for WASM execution support
-#[allow(dead_code)]
-pub async fn load_plugin_wasm(id: &str) -> Result<Vec<u8>, String> {
-    let plugin = get_plugin(id)
-        .await
-        .ok_or(format!("Plugin not found: {}", id))?;
-
-    let wasm_path = plugin.path.join("plugin.wasm");
-
-    std::fs::read(&wasm_path)
-        .map_err(|e| format!("Failed to load plugin WASM: {}", e))
 }
 
 /// Call a plugin function with JSON input
@@ -381,7 +364,6 @@ mod tests {
             path: PathBuf::from("/tmp/test"),
             enabled: true,
             loaded: false,
-            wasm_bytes: None,
         };
 
         assert_eq!(plugin.manifest.id, "test");

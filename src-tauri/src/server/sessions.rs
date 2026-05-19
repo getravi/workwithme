@@ -1,3 +1,9 @@
+//! Agent session lifecycle — create, list, append, and delete sessions.
+//!
+//! Sessions are directories under `~/.pi/sessions/<id>/` containing a
+//! `session.json` metadata file and a `transcript.jsonl` log.  Session IDs are
+//! UUIDs v4.  The HTTP API exposes CRUD endpoints consumed by the frontend.
+
 use serde_json::{Value, json};
 use std::fs;
 use std::path::PathBuf;
@@ -10,11 +16,8 @@ pub fn sessions_dir() -> PathBuf {
     PathBuf::from(home).join(".pi/sessions")
 }
 
-/// Session metadata constants — used by cleanup_expired_sessions (scheduled maintenance task)
-#[allow(dead_code)]
+/// Sessions older than this many days are deleted during startup cleanup.
 const SESSION_EXPIRY_DAYS: i64 = 30;
-#[allow(dead_code)]
-const STALE_SESSION_CLEANUP_INTERVAL_DAYS: i64 = 7;
 
 /// Get the archive directory path (~/.pi/sessions/archive)
 pub fn archive_dir() -> PathBuf {
@@ -27,38 +30,16 @@ fn ensure_sessions_dir() -> Result<(), String> {
     Ok(())
 }
 
-/// List all sessions
-#[allow(dead_code)]
-pub fn list_sessions() -> Result<Vec<Value>, String> {
-    ensure_sessions_dir()?;
-
-    let dir = sessions_dir();
-    if !dir.exists() {
-        return Ok(Vec::new());
-    }
-
-    let mut sessions = Vec::new();
-
-    if let Ok(entries) = fs::read_dir(&dir) {
-        for entry in entries {
-            if let Ok(entry) = entry {
-                let path = entry.path();
-                if path.extension().map_or(false, |ext| ext == "json") {
-                    if let Ok(content) = fs::read_to_string(&path) {
-                        if let Ok(session) = serde_json::from_str::<Value>(&content) {
-                            sessions.push(session);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(sessions)
+/// Validate that a session ID is a well-formed UUID to prevent path traversal.
+/// A caller-supplied id like "../../../etc/passwd" would otherwise escape the sessions dir.
+fn validate_session_id(id: &str) -> Result<(), String> {
+    Uuid::parse_str(id).map_err(|_| "Invalid session ID format".to_string())?;
+    Ok(())
 }
 
 /// Load a session by ID
 pub fn load_session(id: &str) -> Result<Option<Value>, String> {
+    validate_session_id(id)?;
     let path = sessions_dir().join(format!("{}.json", id));
     if !path.exists() {
         return Ok(None);
@@ -90,6 +71,7 @@ pub fn create_session(mut data: Value) -> Result<String, String> {
 
 /// Update an existing session with timestamp
 pub fn update_session(id: &str, mut data: Value) -> Result<(), String> {
+    validate_session_id(id)?;
     let path = sessions_dir().join(format!("{}.json", id));
 
     if !path.exists() {
@@ -107,7 +89,6 @@ pub fn update_session(id: &str, mut data: Value) -> Result<(), String> {
 }
 
 /// Check if a session is expired based on creation date
-#[allow(dead_code)]
 fn is_session_expired(session: &Value) -> bool {
     if let Some(created_at_str) = session.get("created_at").and_then(|v| v.as_str()) {
         if let Ok(created_at) = DateTime::parse_from_rfc3339(created_at_str) {
@@ -119,8 +100,8 @@ fn is_session_expired(session: &Value) -> bool {
     false
 }
 
-/// Clean up expired sessions — forward scaffolding for scheduled maintenance
-#[allow(dead_code)]
+/// Clean up expired sessions. Called once at app startup to remove sessions
+/// older than SESSION_EXPIRY_DAYS from ~/.pi/sessions.
 pub fn cleanup_expired_sessions() -> Result<usize, String> {
     let dir = sessions_dir();
     if !dir.exists() {
@@ -161,6 +142,7 @@ pub fn cleanup_expired_sessions() -> Result<usize, String> {
 
 /// Archive a session
 pub fn archive_session(id: &str) -> Result<bool, String> {
+    validate_session_id(id)?;
     let source = sessions_dir().join(format!("{}.json", id));
     if !source.exists() {
         return Ok(false);
@@ -176,6 +158,7 @@ pub fn archive_session(id: &str) -> Result<bool, String> {
 
 /// Unarchive a session (move from archive back to active)
 pub fn unarchive_session(id: &str) -> Result<bool, String> {
+    validate_session_id(id)?;
     let source = archive_dir().join(format!("{}.json", id));
     if !source.exists() {
         return Ok(false);

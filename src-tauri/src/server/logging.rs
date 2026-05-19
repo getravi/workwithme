@@ -1,15 +1,9 @@
 //! Structured in-process logging with file persistence.
-//! Helper functions (`log`, `debug`, `info`, `warn`, `error`) are forward
-//! scaffolding — they will be called once tracing is wired up.
-#![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-use std::fs::OpenOptions;
-use std::io::Write;
+use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use chrono::Local;
 
 /// Log level
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -55,62 +49,6 @@ lazy_static::lazy_static! {
             file_path: home.join(".pi/debug.log"),
         })
     };
-}
-
-/// Write a log entry
-pub fn log(level: LogLevel, module: &str, message: &str) {
-    let config = match LOG_CONFIG.lock() {
-        Ok(c) => c,
-        Err(poisoned) => {
-            eprintln!("[logging] mutex poisoned, recovering: {}", poisoned);
-            poisoned.into_inner()
-        }
-    };
-
-    // Only log if level is at or above configured level
-    if level < config.level {
-        return;
-    }
-
-    let timestamp = Local::now().to_rfc3339();
-    let entry = json!({
-        "timestamp": timestamp,
-        "level": level.as_str(),
-        "module": module,
-        "message": message
-    });
-
-    // Write to file
-    if let Some(parent) = config.file_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-
-    if let Ok(mut file) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&config.file_path)
-    {
-        let _ = writeln!(file, "{}", entry.to_string());
-    }
-
-    // Also print to console
-    eprintln!("[{}] {}: {}", level.as_str(), module, message);
-}
-
-pub fn debug(module: &str, message: &str) {
-    log(LogLevel::Debug, module, message);
-}
-
-pub fn info(module: &str, message: &str) {
-    log(LogLevel::Info, module, message);
-}
-
-pub fn warn(module: &str, message: &str) {
-    log(LogLevel::Warn, module, message);
-}
-
-pub fn error(module: &str, message: &str) {
-    log(LogLevel::Error, module, message);
 }
 
 /// Set log level

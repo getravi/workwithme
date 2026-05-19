@@ -1,3 +1,9 @@
+//! Append-only audit log for security-sensitive operations.
+//!
+//! Events are written as JSON lines to `~/.pi/audit.log`.
+//! Severity levels range from `Info` through `Critical`.
+//! Log rotation is left to the host OS or user — this module only appends.
+
 use serde_json::{json, Value};
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -68,62 +74,6 @@ pub fn log_event(event_type: &str, details: Option<Value>) -> Result<(), String>
     log_event_with_severity(event_type, AuditSeverity::Info, details)
 }
 
-// Convenience wrappers — forward scaffolding for callers that need typed audit helpers.
-#[allow(dead_code)]
-/// Log a security-sensitive event (warning severity)
-pub fn log_security_event(event_type: &str, details: Option<Value>) -> Result<(), String> {
-    log_event_with_severity(event_type, AuditSeverity::Warning, details)
-}
-
-#[allow(dead_code)]
-/// Log a critical security event
-pub fn log_critical_event(event_type: &str, details: Option<Value>) -> Result<(), String> {
-    log_event_with_severity(event_type, AuditSeverity::Critical, details)
-}
-
-#[allow(dead_code)]
-/// Log OAuth authentication attempt
-pub fn log_oauth_attempt(provider: &str, success: bool, reason: Option<&str>) -> Result<(), String> {
-    let details = json!({
-        "provider": provider,
-        "success": success,
-        "reason": reason,
-    });
-    let severity = if success { AuditSeverity::Info } else { AuditSeverity::Warning };
-    log_event_with_severity("oauth:attempt", severity, Some(details))
-}
-
-#[allow(dead_code)]
-/// Log file access event
-pub fn log_file_access(operation: &str, path: &str) -> Result<(), String> {
-    let details = json!({
-        "operation": operation,
-        "path": path,
-    });
-    log_event("file:access", Some(details))
-}
-
-#[allow(dead_code)]
-/// Log tool execution
-pub fn log_tool_execution(tool_name: &str, success: bool) -> Result<(), String> {
-    let details = json!({
-        "tool": tool_name,
-        "success": success,
-    });
-    log_event("tool:executed", Some(details))
-}
-
-#[allow(dead_code)]
-/// Log approval request
-pub fn log_approval(request_type: &str, approved: bool, user_id: Option<&str>) -> Result<(), String> {
-    let details = json!({
-        "type": request_type,
-        "approved": approved,
-        "user_id": user_id,
-    });
-    let severity = if approved { AuditSeverity::Info } else { AuditSeverity::Warning };
-    log_event_with_severity("approval:decision", severity, Some(details))
-}
 
 #[cfg(test)]
 mod tests {
@@ -174,18 +124,6 @@ mod tests {
         assert_eq!(AuditSeverity::Info.as_str(), "info");
         assert_eq!(AuditSeverity::Warning.as_str(), "warning");
         assert_eq!(AuditSeverity::Critical.as_str(), "critical");
-    }
-
-    #[test]
-    fn test_log_oauth_attempt() {
-        let result = log_oauth_attempt("google", true, None);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_log_file_access() {
-        let result = log_file_access("read", "/home/user/file.txt");
-        assert!(result.is_ok());
     }
 
     #[test]

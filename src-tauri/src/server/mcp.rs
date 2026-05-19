@@ -1,3 +1,9 @@
+//! Model Context Protocol (MCP) server configuration and tool loading.
+//!
+//! Manages the list of configured MCP servers (local and remote), loads tool
+//! definitions from server manifests, and proxies tool-call requests to the
+//! appropriate server process or HTTP endpoint.
+
 use serde_json::{json, Value};
 use serde::{Serialize, Deserialize};
 use std::fs;
@@ -672,148 +678,6 @@ pub struct McpTool {
     pub input_schema: Value,
 }
 
-use std::process::{Command, Stdio};
-use std::io::{BufRead, BufReader, Write};
-
-/// Spawn an MCP stdio server and query its tools — used by `load_agent_mcp_tools`
-#[allow(dead_code)]
-async fn query_mcp_server_tools(server_config: &Value) -> Result<Vec<McpTool>, String> {
-    // Get the command to run - could be a direct binary or a node/python script
-    let command_str = server_config
-        .get("command")
-        .and_then(|v| v.as_str())
-        .ok_or("MCP server config missing 'command' field".to_string())?;
-
-    // Parse command and args
-    let parts: Vec<&str> = command_str.split_whitespace().collect();
-    if parts.is_empty() {
-        return Err("Empty command in MCP server config".to_string());
-    }
-
-    // Spawn the stdio server process
-    let mut child = Command::new(parts[0])
-        .args(&parts[1..])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Failed to spawn MCP server: {}", e))?;
-
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or("Failed to get stdin handle".to_string())?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or("Failed to get stdout handle".to_string())?;
-
-    let reader = BufReader::new(stdout);
-    let mut lines = reader.lines();
-
-    // Send JSON-RPC initialize request
-    let init_request = json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {
-            "protocolVersion": "2024-11-05",
-            "capabilities": {
-                "tools": {}
-            },
-            "clientInfo": {
-                "name": "workwithme",
-                "version": env!("CARGO_PKG_VERSION")
-            }
-        }
-    });
-
-    stdin
-        .write_all(format!("{}\n", init_request.to_string()).as_bytes())
-        .map_err(|e| format!("Failed to write initialize request: {}", e))?;
-
-    // Read initialize response
-    let _init_response = lines
-        .next()
-        .ok_or("No response from MCP server")?
-        .map_err(|e| format!("Failed to read response: {}", e))?;
-
-    // Send tools_list request
-    let tools_request = json!({
-        "jsonrpc": "2.0",
-        "id": 2,
-        "method": "tools/list",
-        "params": {}
-    });
-
-    stdin
-        .write_all(format!("{}\n", tools_request.to_string()).as_bytes())
-        .map_err(|e| format!("Failed to write tools_list request: {}", e))?;
-
-    // Read tools response
-    let response_str = lines
-        .next()
-        .ok_or("No tools response from MCP server")?
-        .map_err(|e| format!("Failed to read tools response: {}", e))?;
-
-    let response: Value = serde_json::from_str(&response_str)
-        .map_err(|e| format!("Failed to parse tools response: {}", e))?;
-
-    // Extract tools from result
-    let tools = response
-        .get("result")
-        .and_then(|r| r.get("tools"))
-        .and_then(|t| t.as_array())
-        .ok_or("Invalid tools response format".to_string())?;
-
-    let mut mcp_tools = Vec::new();
-    for tool_value in tools {
-        if let Ok(tool) = serde_json::from_value::<McpTool>(tool_value.clone()) {
-            mcp_tools.push(tool);
-        }
-    }
-
-    // Kill the process
-    let _ = child.kill();
-
-    Ok(mcp_tools)
-}
-
-/// Load all enabled MCP tools from configuration — forward scaffolding for MCP → pi bridge
-#[allow(dead_code)]
-pub async fn load_agent_mcp_tools() -> Vec<ToolDefinition> {
-    let config = match load_mcp_config() {
-        Ok(cfg) => cfg,
-        Err(_) => return Vec::new(),
-    };
-
-    let mut tools = Vec::new();
-
-    if let Some(servers) = config.get("mcpServers").and_then(|s| s.as_object()) {
-        for (slug, server_config) in servers {
-            // Check if server is enabled
-            if let Some(false) = server_config.get("enabled").and_then(|e| e.as_bool()) {
-                continue;
-            }
-
-            match query_mcp_server_tools(server_config).await {
-                Ok(mcp_tools) => {
-                    for mcp_tool in mcp_tools {
-                        tools.push(ToolDefinition {
-                            name: mcp_tool.name,
-                            description: mcp_tool.description,
-                            input_schema: mcp_tool.input_schema,
-                        });
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Failed to load tools from MCP server '{}': {}", slug, e);
-                }
-            }
-        }
-    }
-
-    tools
-}
 
 #[cfg(test)]
 mod tests {

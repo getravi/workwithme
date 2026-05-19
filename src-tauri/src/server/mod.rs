@@ -37,7 +37,6 @@ pub mod files;
 pub mod processes;
 pub mod logging;
 pub mod plugins;
-pub mod errors;
 
 use axum::{
     extract::{ws::WebSocketUpgrade, Path, Query},
@@ -179,23 +178,11 @@ impl ModelRegistry {
         Ok(ModelRegistry { models })
     }
 
-    /// Get all available models
-    #[allow(dead_code)]
-    pub fn list(&self) -> Vec<models::Model> {
-        self.models.clone()
-    }
-
     /// Find a model by ID
     pub fn find(&self, id: &str) -> Option<models::Model> {
         self.models.iter().find(|m| m.id == id).cloned()
     }
 
-    /// Get API key for a specific model/provider
-    #[allow(dead_code)]
-    pub fn get_api_key_for_model(&self, model_id: &str, auth_storage: &AuthStorage) -> Option<String> {
-        self.find(model_id)
-            .and_then(|model| auth_storage.get_key(&model.provider.to_lowercase()))
-    }
 }
 
 /// Authentication storage for API keys
@@ -223,34 +210,6 @@ impl AuthStorage {
         env_var
     }
 
-    /// Store API key for a provider
-    #[allow(dead_code)]
-    pub fn set_key(&self, provider: &str, key: &str) -> Result<(), String> {
-        let provider_lower = provider.to_lowercase();
-        keychain::set(&format!("{}-api-key", provider_lower), key)
-    }
-
-    /// Delete API key for a provider
-    #[allow(dead_code)]
-    pub fn delete_key(&self, provider: &str) -> Result<bool, String> {
-        let provider_lower = provider.to_lowercase();
-        keychain::delete(&format!("{}-api-key", provider_lower))
-    }
-
-    /// Get list of configured providers (those with keys stored)
-    #[allow(dead_code)]
-    pub fn get_configured_providers(&self) -> Result<Vec<String>, String> {
-        let providers = vec!["anthropic", "openai", "google", "cohere"];
-        let mut configured = Vec::new();
-
-        for provider in providers {
-            if provider_has_session_auth(self, provider) {
-                configured.push(provider.to_string());
-            }
-        }
-
-        Ok(configured)
-    }
 }
 
 /// Pi session handle type — wraps the pi_agent_rust session behind an async mutex
@@ -2613,19 +2572,6 @@ mod tests {
     }
 
     #[test]
-    fn test_model_registry_initialization() {
-        // Test that ModelRegistry initializes properly
-        match ModelRegistry::new() {
-            Ok(registry) => {
-                let models = registry.list();
-                // Should have at least some models
-                assert!(!models.is_empty(), "ModelRegistry should have models");
-            }
-            Err(e) => panic!("Failed to initialize ModelRegistry: {}", e),
-        }
-    }
-
-    #[test]
     fn test_model_registry_find() {
         // Test finding a model by ID
         match ModelRegistry::new() {
@@ -2636,16 +2582,6 @@ mod tests {
             }
             Err(e) => panic!("Failed to initialize ModelRegistry: {}", e),
         }
-    }
-
-    #[test]
-    fn test_auth_storage_initialization() {
-        // Test that AuthStorage initializes and can query providers
-        let auth = AuthStorage;
-
-        // AuthStorage should be able to get configured providers
-        let result = auth.get_configured_providers();
-        assert!(result.is_ok(), "Should be able to query providers");
     }
 
     #[test]

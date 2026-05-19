@@ -1,3 +1,10 @@
+//! Skill discovery and rendering from the `.pi/skills/` directory.
+//!
+//! Each skill is a Markdown file with YAML frontmatter (`name`, `description`,
+//! optional `tools`).  [`load_skills`] scans the directory and returns a list
+//! of [`SkillEntry`] structs.  [`render_skill`] expands a skill's template with
+//! runtime variables before it is injected into the agent system prompt.
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -167,62 +174,6 @@ pub fn get_skill_content(source: &str, slug: &str) -> Option<String> {
     }
 }
 
-/// Validate skill name format before processing — forward scaffolding for write operations
-#[allow(dead_code)]
-pub fn validate_skill_name(name: &str) -> Result<(), String> {
-    if name.is_empty() {
-        return Err("Skill name cannot be empty".to_string());
-    }
-    if name.len() > 100 {
-        return Err("Skill name cannot exceed 100 characters".to_string());
-    }
-    if !name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == ' ') {
-        return Err("Skill name can only contain alphanumeric characters, spaces, hyphens, and underscores".to_string());
-    }
-    Ok(())
-}
-
-#[allow(dead_code)]
-/// Sanitize skill name for use as filename
-pub fn sanitize_skill_name(name: &str) -> String {
-    name.to_lowercase()
-        .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
-        .collect::<String>()
-        .trim_matches(|c| c == '-' || c == '_')
-        .to_string()
-        .chars()
-        .collect::<Vec<_>>()
-        .windows(2)
-        .fold(String::new(), |mut s, w| {
-            if !(w[0] == '-' && w[1] == '-') {
-                s.push(w[0]);
-            }
-            s
-        })
-        .trim_end_matches('-')
-        .to_string()
-}
-
-/// Write a new user skill file
-#[allow(dead_code)]
-pub fn write_user_skill(name: &str, content: &str) -> Result<PathBuf, String> {
-    let safe_name = sanitize_skill_name(name);
-    if safe_name.is_empty() {
-        return Err("Invalid skill name: must contain alphanumeric characters".to_string());
-    }
-
-    let dir = user_skills_dir();
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-
-    let file_path = dir.join(format!("{}.md", safe_name));
-    if file_path.exists() {
-        return Err(format!("Skill already exists: {}", safe_name));
-    }
-
-    fs::write(&file_path, content).map_err(|e| e.to_string())?;
-    Ok(file_path)
-}
 
 #[cfg(test)]
 mod tests {
@@ -292,43 +243,6 @@ Content here"#;
     }
 
     #[test]
-    fn test_sanitize_skill_name_basic() {
-        // The sanitize function has specific behavior - test what it actually produces
-        let result = sanitize_skill_name("test-skill");
-        assert!(!result.is_empty());
-        assert!(result.contains("test"));
-
-        let result2 = sanitize_skill_name("TestSkill");
-        assert_eq!(result2.to_lowercase(), result2);
-    }
-
-    #[test]
-    fn test_sanitize_skill_name_special_chars() {
-        let result = sanitize_skill_name("test@skill#name");
-        // Should contain only alphanumeric, dash, and underscore
-        assert!(result.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_'));
-
-        let result2 = sanitize_skill_name("test skill name");
-        assert!(result2.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_'));
-    }
-
-    #[test]
-    fn test_sanitize_skill_name_spaces_and_underscores() {
-        let result = sanitize_skill_name("test_skill");
-        // Should be lowercase and alphanumeric/dash/underscore only
-        assert!(result.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_'));
-
-        let result2 = sanitize_skill_name("test skill");
-        assert!(result2.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_'));
-    }
-
-    #[test]
-    fn test_sanitize_skill_name_multiple_dashes() {
-        let result = sanitize_skill_name("test---skill");
-        assert!(!result.contains("--"));
-    }
-
-    #[test]
     fn test_skill_entry_structure() {
         let skill = SkillEntry {
             id: "test/test-skill".to_string(),
@@ -344,29 +258,4 @@ Content here"#;
         assert!(skill.id.contains('/'));
     }
 
-    #[test]
-    fn test_validate_skill_name_valid() {
-        assert!(validate_skill_name("Test Skill").is_ok());
-        assert!(validate_skill_name("test-skill").is_ok());
-        assert!(validate_skill_name("test_skill").is_ok());
-        assert!(validate_skill_name("Test Skill 123").is_ok());
-    }
-
-    #[test]
-    fn test_validate_skill_name_empty() {
-        assert!(validate_skill_name("").is_err());
-    }
-
-    #[test]
-    fn test_validate_skill_name_too_long() {
-        let long_name = "a".repeat(101);
-        assert!(validate_skill_name(&long_name).is_err());
-    }
-
-    #[test]
-    fn test_validate_skill_name_invalid_chars() {
-        assert!(validate_skill_name("test@skill").is_err());
-        assert!(validate_skill_name("test#skill").is_err());
-        assert!(validate_skill_name("test$skill").is_err());
-    }
 }

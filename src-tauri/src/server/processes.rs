@@ -1,81 +1,98 @@
 //! Process lifecycle tracking for long-running tool invocations.
-//! `spawn_process`, `mark_completed`, and `get_process` are forward scaffolding
-//! for the processes dashboard — they will be wired to the REST endpoints.
-#![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::process::Command;
-use std::sync::{Arc, Mutex};
-use uuid::Uuid;
+use std::process::Child;
+use std::sync::{Mutex, OnceLock};
 
-/// Represents a running process
+/// Represents a running process (serialisable metadata only).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProcessInfo {
     pub id: String,
     pub tool_name: String,
     pub pid: u32,
     pub started_at: String,
-    pub status: String, // "running", "completed", "failed"
+    pub status: String, // "running", "completed", "failed", "killed"
 }
 
-lazy_static::lazy_static! {
-    static ref PROCESS_REGISTRY: Arc<Mutex<HashMap<String, ProcessInfo>>> =
-        Arc::new(Mutex::new(HashMap::new()));
+/// Serialisable process metadata registry.
+static PROCESS_REGISTRY: OnceLock<Mutex<HashMap<String, ProcessInfo>>> = OnceLock::new();
+
+/// Live child handles — kept separately because `Child` is neither `Clone` nor `Serialize`.
+static CHILD_REGISTRY: OnceLock<Mutex<HashMap<String, Child>>> = OnceLock::new();
+
+fn process_registry() -> &'static Mutex<HashMap<String, ProcessInfo>> {
+    PROCESS_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Spawn a new tracked process
-pub fn spawn_process(tool_name: &str, command: &mut Command) -> Result<String, String> {
-    let process_id = Uuid::new_v4().to_string();
-    let now = chrono::Local::now().to_rfc3339();
+fn child_registry() -> &'static Mutex<HashMap<String, Child>> {
+    CHILD_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
-    let _child = command
-        .spawn()
-        .map_err(|e| format!("Failed to spawn process: {}", e))?;
+/// Reap any child processes that have exited naturally.
+/// Called before listing processes so status is always current.
+fn reap_exited_processes() {
+    let mut children = child_registry()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let mut registry = process_registry()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
 
-    let process_info = ProcessInfo {
-        id: process_id.clone(),
-        tool_name: tool_name.to_string(),
-        pid: 0, // We don't track the actual PID currently
-        started_at: now,
-        status: "running".to_string(),
-    };
+    let finished: Vec<String> = children
+        .iter_mut()
+        .filter_map(|(id, child)| match child.try_wait() {
+            Ok(Some(status)) => {
+                // Process has exited — update metadata and collect id for removal.
+                if let Some(info) = registry.get_mut(id) {
+                    info.status = if status.success() {
+                        "completed".to_string()
+                    } else {
+                        "failed".to_string()
+                    };
+                }
+                Some(id.clone())
+            }
+            _ => None,
+        })
+        .collect();
 
-    let mut registry = match PROCESS_REGISTRY.lock() {
-        Ok(r) => r,
-        Err(poisoned) => {
-            eprintln!("[processes] mutex poisoned in spawn_process, recovering");
-            poisoned.into_inner()
-        }
-    };
-    registry.insert(process_id.clone(), process_info);
-
-    println!("[processes] spawned process {}: {}", process_id, tool_name);
-    Ok(process_id)
+    for id in finished {
+        children.remove(&id);
+    }
 }
 
 /// Get list of running processes
 pub fn list_processes() -> Result<Vec<ProcessInfo>, String> {
-    let registry = match PROCESS_REGISTRY.lock() {
-        Ok(r) => r,
-        Err(poisoned) => {
+    reap_exited_processes();
+    Ok(process_registry()
+        .lock()
+        .unwrap_or_else(|e| {
             eprintln!("[processes] mutex poisoned in list_processes, recovering");
-            poisoned.into_inner()
-        }
-    };
-    Ok(registry
+            e.into_inner()
+        })
         .values()
         .filter(|p| p.status == "running")
         .cloned()
         .collect())
 }
 
-/// Kill a process
+/// Kill a process — signals the OS process and updates the status.
 pub fn kill_process(process_id: &str) -> Result<bool, String> {
-    let mut registry = PROCESS_REGISTRY.lock().unwrap();
+    let mut registry = process_registry().lock().unwrap_or_else(|e| e.into_inner());
 
     if let Some(process) = registry.get_mut(process_id) {
         process.status = "killed".to_string();
+        // Remove and kill the live child handle so the OS process actually receives SIGKILL.
+        if let Some(mut child) = child_registry()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(process_id)
+        {
+            if let Err(e) = child.kill() {
+                eprintln!("[processes] kill() failed for process {}: {}", process_id, e);
+            }
+        }
         println!("[processes] killed process {}", process_id);
         Ok(true)
     } else {
@@ -83,26 +100,10 @@ pub fn kill_process(process_id: &str) -> Result<bool, String> {
     }
 }
 
-/// Mark process as completed
-pub fn mark_completed(process_id: &str) -> Result<(), String> {
-    let mut registry = PROCESS_REGISTRY.lock().unwrap();
-
-    if let Some(process) = registry.get_mut(process_id) {
-        process.status = "completed".to_string();
-    }
-
-    Ok(())
-}
-
-/// Get process info
-pub fn get_process(process_id: &str) -> Result<Option<ProcessInfo>, String> {
-    let registry = PROCESS_REGISTRY.lock().unwrap();
-    Ok(registry.get(process_id).cloned())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use uuid::Uuid;
 
     #[test]
     fn test_process_info_creation() {
@@ -141,24 +142,10 @@ mod tests {
     }
 
     #[test]
-    fn test_get_nonexistent_process() {
-        let result = get_process("does-not-exist-xyz");
-        assert!(result.is_ok());
-        assert!(result.unwrap().is_none());
-    }
-
-    #[test]
     fn test_kill_nonexistent_process_returns_false() {
         let result = kill_process("no-such-process");
         assert!(result.is_ok());
         assert!(!result.unwrap());
-    }
-
-    #[test]
-    fn test_mark_completed_nonexistent_is_ok() {
-        // Should not error even if process doesn't exist
-        let result = mark_completed("phantom-process-id");
-        assert!(result.is_ok());
     }
 
     #[test]
