@@ -5,7 +5,6 @@
 //! - [`sessions`] — session lifecycle (create, list, delete, append)
 //! - [`files`] — file-system read/write routed through sandbox validation
 //! - [`processes`] — shell command execution with sandboxing and approval
-//! - [`sandbox`] — path-allowlist sandboxing for file/process operations
 //! - [`skills`] — `.pi/skills/` discovery and rendering
 //! - [`mcp`] — MCP server config and tool proxying
 //! - [`oauth`] — OAuth 2.0 PKCE flow for remote MCP auth
@@ -27,7 +26,6 @@ pub mod audit;
 pub mod sessions;
 pub mod mcp;
 pub mod oauth;
-pub mod sandbox;
 pub mod approval;
 pub mod extensions;
 pub mod static_files;
