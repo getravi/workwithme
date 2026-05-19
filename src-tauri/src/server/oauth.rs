@@ -8,16 +8,36 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use crate::server::keychain;
 
-/// OAuth provider information
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Internal OAuth provider config — never serialized. Use OAuthProviderPublic for API responses.
+#[derive(Debug, Clone)]
 pub struct OAuthProvider {
     pub id: String,
     pub name: String,
     pub client_id: String,
-    pub client_secret: String,
+    pub client_secret: String,  // never serialized — use OAuthProviderPublic for responses
     pub auth_url: String,
     pub token_url: String,
     pub redirect_uri: String,
+}
+
+/// Safe for serialization — no secret field. Use in all API responses.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OAuthProviderPublic {
+    pub id: String,
+    pub name: String,
+    pub auth_url: String,
+    pub redirect_uri: String,
+}
+
+impl From<&OAuthProvider> for OAuthProviderPublic {
+    fn from(p: &OAuthProvider) -> Self {
+        OAuthProviderPublic {
+            id: p.id.clone(),
+            name: p.name.clone(),
+            auth_url: p.auth_url.clone(),
+            redirect_uri: p.redirect_uri.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
