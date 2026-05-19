@@ -71,14 +71,17 @@ pub fn validate_mcp_url(url_str: &str) -> Result<(), String> {
         "localhost",
         "127.0.0.1",
         "0.0.0.0",
-        "192.168.",
-        "10.",
+        "192.168.", // RFC 1918: 192.168.0.0/16
+        "10.",      // RFC 1918: 10.0.0.0/8
+        // RFC 1918: 172.16.0.0/12 covers 172.16–172.31.
+        // Prefix "172.1" catches 172.10–172.19 (incl. 172.16–172.19),
+        // "172.2" catches 172.20–172.29, "172.3" catches 172.30–172.31.
         "172.1",
         "172.2",
         "172.3",
-        "[::1]",
-        "[::ffff:",
-        "169.254.",
+        "[::1]",     // IPv6 loopback
+        "[::ffff:",  // IPv4-mapped IPv6
+        "169.254.",  // link-local (APIPA)
     ];
 
     for pattern in &restricted_patterns {
