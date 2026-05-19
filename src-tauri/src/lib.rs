@@ -1,3 +1,18 @@
+//! Tauri application library — sets up the app, registers commands, manages the tray icon,
+//! and wires up the global keyboard shortcuts for voice dictation and capture actions.
+//!
+//! # Module layout
+//! - [`server`] — Axum HTTP server (skills, sessions, files, MCP, OAuth, …)
+//! - [`audio`] — cpal microphone capture
+//! - [`transcription`] — Whisper VAD + inference pipeline
+//! - [`capture`] — screenshot capture via the `screenshots` crate
+//! - [`library`] — SQLite capture library with FTS5 and OCR indexing
+//! - [`recorder`] — FFmpeg screen/audio recording
+//! - [`voice_db`] — SQLite voice-note store
+//! - [`meeting`] — meeting recorder sessions
+//! - [`llm_config`] — LLM provider config, API-key keychain helpers, HTTP call helpers
+//! - [`voice_shortcuts`] — global keyboard shortcut configuration + persistence
+
 mod server;
 mod audio;
 mod transcription;
@@ -7,6 +22,7 @@ mod recorder;
 mod voice_db;
 mod meeting;
 mod llm_config;
+mod voice_shortcuts;
 #[cfg(target_os = "macos")]
 mod window_capture;
 
@@ -21,7 +37,7 @@ const TRAY_MIC_RED: [&[u8]; 3] = [
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{Manager, Emitter};
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState, Modifiers, Code};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 /// Shared state for the dictation session.
 struct DictationState {
@@ -40,6 +56,21 @@ struct InAppDictationState {
     recording_flag: Arc<AtomicBool>,
 }
 
+/// Returns true if the Whisper model loaded successfully at startup.
+/// When false, voice dictation and meeting transcription are unavailable.
+#[tauri::command]
+fn whisper_model_available(app: tauri::AppHandle) -> bool {
+    app.try_state::<transcription::SharedWhisperEngine>().is_some()
+}
+
+/// Expose the HTTP server auth token to the Tauri webview.
+/// The token is required as `Authorization: Bearer <token>` on sensitive REST endpoints
+/// (keychain, clipboard/paste, file browser).  Only the in-process webview can call this.
+#[tauri::command]
+fn get_server_token() -> String {
+    server::server_token().to_string()
+}
+
 /// Toggle recording for the in-app mic button.
 /// Uses the same audio pipeline as the global hotkey but routes the transcript
 /// back to the frontend via a "dictation-result" Tauri event instead of typing it.
@@ -48,16 +79,16 @@ fn toggle_in_app_dictation(
     state: tauri::State<InAppDictationState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    let is_recording = state.dictation.lock().unwrap().is_recording;
+    let is_recording = state.dictation.lock().expect("mutex poisoned: dictation state").is_recording;
 
     if !is_recording {
         // ── Start recording ────────────────────────────────────────────────
         let native_rate = {
-            let mut rec = state.recorder.lock().unwrap();
+            let mut rec = state.recorder.lock().expect("mutex poisoned: audio recorder");
             rec.start().map_err(|e| format!("mic error: {e}"))?;
             rec.native_sample_rate
         };
-        let mut d = state.dictation.lock().unwrap();
+        let mut d = state.dictation.lock().expect("mutex poisoned: dictation state");
         d.detector = transcription::SilenceDetector::new(native_rate, 0.01, 300, 300, 10000);
         d.is_recording = true;
         d.in_app_mode = true;
@@ -66,9 +97,15 @@ fn toggle_in_app_dictation(
         show_overlay_listening(&app);
     } else {
         // ── Stop recording + queue transcription ───────────────────────────
-        let mut d = state.dictation.lock().unwrap();
+        let mut d = state.dictation.lock().expect("mutex poisoned: dictation state");
+        // Only the same source that started recording may stop it.
+        // If in_app_mode=false, the global hotkey owns this recording;
+        // the in-app button must not interfere.
+        if !d.in_app_mode {
+            return Ok(());
+        }
         let (remaining, native_rate) = {
-            let rec = state.recorder.lock().unwrap();
+            let rec = state.recorder.lock().expect("mutex poisoned: audio recorder");
             (rec.drain(), rec.native_sample_rate)
         };
         let chunk_to_send = d.detector.push(&remaining).or_else(|| d.detector.flush());
@@ -76,7 +113,7 @@ fn toggle_in_app_dictation(
         state.recording_flag.store(false, Ordering::Relaxed);
         let chunk_tx = d.chunk_tx.clone();
         drop(d);
-        state.recorder.lock().unwrap().stop();
+        state.recorder.lock().expect("mutex poisoned: audio recorder").stop();
         set_tray_recording(&app, false);
 
         if let Some(chunk) = chunk_to_send {
@@ -114,6 +151,14 @@ pub fn run() {
 
     let recording_flag = Arc::new(AtomicBool::new(false));
 
+    // Shutdown flag: set to true before app exit so background threads stop cleanly
+    // instead of accessing half-torn-down Tauri state.
+    let shutdown_flag = Arc::new(AtomicBool::new(false));
+
+    // Load shortcuts config from disk once; share via Arc so the handler closure
+    // can read the live config after voice_set_shortcut changes it at runtime.
+    let shortcuts_arc = Arc::new(Mutex::new(voice_shortcuts::load()));
+
     tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
@@ -122,17 +167,30 @@ pub fn run() {
             let dictation = dictation.clone();
             let recorder = recorder.clone();
             let recording_flag = recording_flag.clone();
+            let shortcuts_arc = shortcuts_arc.clone();
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |app, shortcut, event| {
-                    if shortcut.matches(Modifiers::SUPER | Modifiers::SHIFT, Code::Space) {
+                    let sc = shortcuts_arc.lock().expect("mutex poisoned: shortcuts config").clone();
+                    let is_dictate = voice_shortcuts::parse(&sc.dictate)
+                        .map_or(false, |(m, c)| shortcut.matches(m, c));
+                    let is_capture_region = voice_shortcuts::parse(&sc.capture_region)
+                        .map_or(false, |(m, c)| shortcut.matches(m, c));
+                    let is_capture_window = voice_shortcuts::parse(&sc.capture_window)
+                        .map_or(false, |(m, c)| shortcut.matches(m, c));
+                    let is_screen_recording = voice_shortcuts::parse(&sc.screen_recording)
+                        .map_or(false, |(m, c)| shortcut.matches(m, c));
+                    let is_new_meeting = voice_shortcuts::parse(&sc.new_meeting)
+                        .map_or(false, |(m, c)| shortcut.matches(m, c));
+
+                    if is_dictate {
                         match event.state() {
                             ShortcutState::Pressed => {
-                                let is_recording = dictation.lock().unwrap().is_recording;
+                                let is_recording = dictation.lock().expect("mutex poisoned: dictation state").is_recording;
                                 if !is_recording {
                                     // ── Start recording ────────────────────────────
                                     // Start recorder OUTSIDE dictation lock (mic permission dialog may block)
                                     let native_rate = {
-                                        let mut rec = recorder.lock().unwrap();
+                                        let mut rec = recorder.lock().expect("mutex poisoned: audio recorder");
                                         match rec.start() {
                                             Ok(()) => rec.native_sample_rate,
                                             Err(e) => {
@@ -141,7 +199,7 @@ pub fn run() {
                                             }
                                         }
                                     };
-                                    let mut d = dictation.lock().unwrap();
+                                    let mut d = dictation.lock().expect("mutex poisoned: dictation state");
                                     d.detector = transcription::SilenceDetector::new(native_rate, 0.01, 300, 300, 10000);
                                     d.is_recording = true;
                                     d.in_app_mode = false;
@@ -150,9 +208,15 @@ pub fn run() {
                                     show_overlay_listening(app);
                                 } else {
                                     // ── Stop recording + queue transcription ───────
-                                    let mut d = dictation.lock().unwrap();
+                                    let mut d = dictation.lock().expect("mutex poisoned: dictation state");
+                                    // Only the same source that started recording may stop it.
+                                    // If in_app_mode=true, the in-app mic button owns this
+                                    // recording; the global hotkey must not interfere.
+                                    if d.in_app_mode {
+                                        return;
+                                    }
                                     let (remaining, native_rate) = {
-                                        let rec = recorder.lock().unwrap();
+                                        let rec = recorder.lock().expect("mutex poisoned: audio recorder");
                                         (rec.drain(), rec.native_sample_rate)
                                     };
                                     let chunk_to_send = d.detector.push(&remaining)
@@ -168,7 +232,7 @@ pub fn run() {
 
                                     // Stop recorder only after dictation is released and is_recording
                                     // is already false, so the poll thread cannot race here.
-                                    recorder.lock().unwrap().stop();
+                                    recorder.lock().expect("mutex poisoned: audio recorder").stop();
                                     set_tray_recording(app, false);
 
                                     // Use blocking send — ensures no silent drops when channel is busy.
@@ -194,21 +258,21 @@ pub fn run() {
                                 // Toggle mode: release is ignored; stop happens on next key press
                             }
                         }
-                    } else if shortcut.matches(Modifiers::SUPER | Modifiers::CONTROL, Code::Digit4) {
+                    } else if is_capture_region {
                         if event.state() == ShortcutState::Pressed {
                             if let Err(e) = capture::open_capture_overlay(app.clone()) {
                                 eprintln!("[capture] failed to open overlay: {e}");
                             }
                         }
-                    } else if shortcut.matches(Modifiers::SUPER | Modifiers::CONTROL, Code::Digit5) {
+                    } else if is_capture_window {
                         if event.state() == ShortcutState::Pressed {
                             open_window_capture_overlay(app);
                         }
-                    } else if shortcut.matches(Modifiers::SUPER | Modifiers::CONTROL, Code::Digit6) {
+                    } else if is_screen_recording {
                         if event.state() == ShortcutState::Pressed {
                             open_recording_options_window(app);
                         }
-                    } else if shortcut.matches(Modifiers::SUPER | Modifiers::CONTROL, Code::Digit7) {
+                    } else if is_new_meeting {
                         if event.state() == ShortcutState::Pressed {
                             open_meeting_window(app);
                         }
@@ -222,6 +286,7 @@ pub fn run() {
             recording_flag: recording_flag.clone(),
         })
         .manage(capture::CaptureState::new())
+        .manage(voice_shortcuts::ShortcutsState(shortcuts_arc))
         .invoke_handler(tauri::generate_handler![
             toggle_in_app_dictation,
             capture::capture_region,
@@ -262,12 +327,20 @@ pub fn run() {
             meeting::meeting_list,
             meeting::meeting_get,
             meeting::meeting_search,
+            meeting::meeting_delete,
             meeting::meeting_generate_summary,
             // LLM config commands
             llm_config::llm_get_config,
             llm_config::llm_save_config,
             llm_config::llm_set_api_key,
             llm_config::llm_test_connection,
+            // Whisper model status
+            whisper_model_available,
+            // Server token (for webview to call protected HTTP endpoints)
+            get_server_token,
+            // Voice keyboard shortcuts
+            voice_shortcuts::voice_get_shortcuts,
+            voice_shortcuts::voice_set_shortcut,
         ])
         .setup(move |app| {
             // Build tray icon
@@ -321,6 +394,7 @@ pub fn run() {
                 .build()?;
 
             let app_handle_tray = app.handle().clone();
+            let shutdown_flag_quit = shutdown_flag.clone();
             let mut tray_builder = tauri::tray::TrayIconBuilder::with_id("dictation")
                 .tooltip("Work With Me — ⌘⇧Space: dictate | ⌘⌃7: new meeting | ⌘⌃4: capture region | ⌘⌃5: capture window")
                 .menu(&tray_menu)
@@ -348,6 +422,7 @@ pub fn run() {
                         "new-meeting" => { open_meeting_window(&app_handle_tray); }
                         "voice-memory" => { open_voice_memory_window(&app_handle_tray); }
                         "quit" => {
+                            shutdown_flag_quit.store(true, Ordering::Relaxed);
                             app_handle_tray.exit(0);
                         }
                         _ => {}
@@ -358,12 +433,16 @@ pub fn run() {
             }
             tray_builder.build(app.handle())?;
 
-            // Register global shortcuts
-            app.global_shortcut().register("Super+Shift+Space")?;
-            app.global_shortcut().register("Super+Ctrl+4")?;
-            app.global_shortcut().register("Super+Ctrl+5")?;
-            app.global_shortcut().register("Super+Ctrl+6")?;
-            app.global_shortcut().register("Super+Ctrl+7")?;
+            // Register global shortcuts from persisted config (or defaults)
+            {
+                let sc = app.state::<voice_shortcuts::ShortcutsState>();
+                let config = sc.0.lock().expect("mutex poisoned: shortcuts config").clone();
+                app.global_shortcut().register(config.dictate.as_str())?;
+                app.global_shortcut().register(config.capture_region.as_str())?;
+                app.global_shortcut().register(config.capture_window.as_str())?;
+                app.global_shortcut().register(config.screen_recording.as_str())?;
+                app.global_shortcut().register(config.new_meeting.as_str())?;
+            }
 
             // Transcribing overlay — small floating pill shown while Whisper is running
             let overlay = tauri::WebviewWindowBuilder::new(
@@ -458,10 +537,12 @@ pub fn run() {
             // Tray animation loop
             let handle = app.handle().clone();
             let recording_flag_anim = recording_flag.clone();
+            let shutdown_flag_anim = shutdown_flag.clone();
             std::thread::spawn(move || {
                 let mut frame = 0usize;
                 loop {
                     std::thread::sleep(std::time::Duration::from_millis(400));
+                    if shutdown_flag_anim.load(Ordering::Relaxed) { break; }
                     if recording_flag_anim.load(Ordering::Relaxed) {
                         if let Some(tray) = handle.tray_by_id("dictation") {
                             if let Ok(img) = tauri::image::Image::from_bytes(TRAY_MIC_RED[frame % 3]) {
@@ -476,15 +557,17 @@ pub fn run() {
             // Polling thread: feeds mic samples to SilenceDetector every 20ms for streaming transcription
             let dictation_poll = dictation.clone();
             let recorder_poll = recorder.clone();
+            let shutdown_flag_poll = shutdown_flag.clone();
             std::thread::spawn(move || {
                 loop {
                     std::thread::sleep(std::time::Duration::from_millis(20));
+                    if shutdown_flag_poll.load(Ordering::Relaxed) { break; }
                     // Hold dictation lock for the entire drain→push cycle so the
                     // release handler cannot flush the detector between our drain and push.
-                    let mut d = dictation_poll.lock().unwrap();
+                    let mut d = dictation_poll.lock().expect("mutex poisoned: dictation state");
                     if !d.is_recording { continue; }
                     let (samples, native_rate) = {
-                        let rec = recorder_poll.lock().unwrap();
+                        let rec = recorder_poll.lock().expect("mutex poisoned: audio recorder");
                         (rec.drain(), rec.native_sample_rate)
                     };
                     if samples.is_empty() { continue; }
@@ -508,6 +591,13 @@ pub fn run() {
                         let _ = voice_db::update_session_status(&s.id, "error");
                     }
                 }
+            }
+
+            // Clean up agent sessions older than 30 days (~/.pi/sessions)
+            match server::sessions::cleanup_expired_sessions() {
+                Ok(n) if n > 0 => println!("[sessions] deleted {n} expired session(s)"),
+                Ok(_) => {}
+                Err(e) => eprintln!("[sessions] cleanup failed: {e}"),
             }
 
             // Initialize capture library DB and prune old entries
@@ -572,28 +662,21 @@ fn open_library_window(app: &tauri::AppHandle) {
 // macOS-only: window_capture module is cfg(target_os = "macos") but this project
 // targets macOS exclusively, so no cfg guard is needed here.
 fn open_window_capture_overlay(app: &tauri::AppHandle) {
+    // If the overlay is already open, focus it and return — same rationale as
+    // open_capture_overlay: avoids blocking the tray menu event thread.
     if let Some(w) = app.get_webview_window("window-capture-overlay") {
-        let _ = w.close();
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        let _ = w.set_focus();
+        return;
     }
     let screens = screenshots::Screen::all().unwrap_or_default();
-    let (mut min_x, mut min_y, mut max_x, mut max_y) = (0i32, 0i32, 1920i32, 1080i32);
-    if !screens.is_empty() {
-        min_x = screens.iter().map(|s| s.display_info.x).min().unwrap_or(0);
-        min_y = screens.iter().map(|s| s.display_info.y).min().unwrap_or(0);
-        max_x = screens.iter().map(|s| {
-            let lw = (s.display_info.width as f64 / s.display_info.scale_factor as f64) as i32;
-            s.display_info.x + lw
-        }).max().unwrap_or(1920);
-        max_y = screens.iter().map(|s| {
-            let lh = (s.display_info.height as f64 / s.display_info.scale_factor as f64) as i32;
-            s.display_info.y + lh
-        }).max().unwrap_or(1080);
-    }
+    let (min_x, min_y, max_x, max_y) = recorder::screen_bounds(&screens);
     if let Err(e) = tauri::WebviewWindowBuilder::new(
         app,
         "window-capture-overlay",
-        tauri::WebviewUrl::App("window-capture.html".into()),
+        // Pass overlay origin for multi-monitor coordinate correction in frontend.
+        tauri::WebviewUrl::App(
+            format!("window-capture.html?ox={min_x}&oy={min_y}").into(),
+        ),
     )
     .inner_size((max_x - min_x) as f64, (max_y - min_y) as f64)
     .position(min_x as f64, min_y as f64)
