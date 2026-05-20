@@ -79,3 +79,18 @@ export const WS_EVENTS = {
 } as const;
 
 export type WsEventType = typeof WS_EVENTS[keyof typeof WS_EVENTS];
+
+export interface SandboxStatus {
+  supported: boolean;
+  srtAvailable: boolean;
+  active: boolean;
+  platform: string;
+  warning: string | null;
+}
+
+export interface ApprovalRequest {
+  id: string;
+  operation_type: string;
+  description: string;
+  details: Record<string, unknown> | null;
+}
