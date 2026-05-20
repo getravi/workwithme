@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, act, waitFor } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, act } from "@testing-library/react";
 import { ChatProvider, useChat } from "../../context/ChatContext";
 import { WebSocketContext } from "../../context/WebSocketContext";
 import { SessionContext } from "../../context/SessionContext";

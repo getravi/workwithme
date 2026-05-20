@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, act, waitFor } from "@testing-library/react";
 import { UIProvider, useUI } from "../../context/UIContext";
 import { WebSocketContext } from "../../context/WebSocketContext";

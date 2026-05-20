@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, act, waitFor } from "@testing-library/react";
 import { SessionProvider, useSession } from "../../context/SessionContext";
 import { WebSocketContext } from "../../context/WebSocketContext";
@@ -9,11 +9,11 @@ import type { Session } from "../../types";
 function MockWSProvider({
   children,
   isConnected = true,
-  wsSend = vi.fn().mockReturnValue(true),
+  wsSend = vi.fn().mockReturnValue(true) as (payload: object) => boolean,
 }: {
   children: React.ReactNode;
   isConnected?: boolean;
-  wsSend?: ReturnType<typeof vi.fn>;
+  wsSend?: (payload: object) => boolean;
 }) {
   const subscribe = vi.fn().mockReturnValue(() => {});
   const value: WebSocketContextValue = { wsSend, isConnected, error: null, subscribe };
