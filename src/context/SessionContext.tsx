@@ -21,7 +21,7 @@ export interface SessionContextValue {
   archiveSession: (session: Session, archived: boolean) => Promise<void>;
   setCurrentSessionId: (id: string | null) => void;
   /** Sets local projectDir state only — no API call. Use for loading session data. */
-  setLocalProjectDir: (path: string) => void;
+  setLocalProjectDir: React.Dispatch<React.SetStateAction<string | null>>;
   /** POSTs to /api/project then sends NEW_CHAT. Use for user-initiated project change. */
   changeProjectDir: (path: string) => Promise<void>;
 }
@@ -66,10 +66,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     },
     [fetchSessions],
   );
-
-  const setLocalProjectDir = useCallback((path: string) => {
-    setProjectDir(path);
-  }, []);
 
   const changeProjectDir = useCallback(
     async (path: string) => {
@@ -137,7 +133,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         createSession,
         archiveSession,
         setCurrentSessionId,
-        setLocalProjectDir,
+        setLocalProjectDir: setProjectDir,
         changeProjectDir,
       }}
     >
