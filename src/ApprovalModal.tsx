@@ -1,7 +1,7 @@
 import { useChat } from "./context/ChatContext";
 
 export function ApprovalModal() {
-  const { approvalRequest, handleApprovalResponse, isApprovingLoading } = useChat();
+  const { approvalRequest, handleApprovalResponse } = useChat();
 
   if (!approvalRequest) return null;
 
@@ -70,17 +70,15 @@ export function ApprovalModal() {
           <div className="flex gap-3">
             <button
               onClick={() => handleApprovalResponse(false)}
-              disabled={isApprovingLoading}
-              className="flex-1 px-4 py-2 rounded-lg bg-[#374151] hover:bg-[#4b5563] text-gray-300 font-medium transition-colors disabled:opacity-50"
+              className="flex-1 px-4 py-2 rounded-lg bg-[#374151] hover:bg-[#4b5563] text-gray-300 font-medium transition-colors"
             >
-              {isApprovingLoading ? "..." : "Deny"}
+              Deny
             </button>
             <button
               onClick={() => handleApprovalResponse(true)}
-              disabled={isApprovingLoading}
-              className="flex-1 px-4 py-2 rounded-lg bg-[#c5f016] hover:bg-[#d4ff24] text-black font-medium transition-colors disabled:opacity-50"
+              className="flex-1 px-4 py-2 rounded-lg bg-[#c5f016] hover:bg-[#d4ff24] text-black font-medium transition-colors"
             >
-              {isApprovingLoading ? "..." : "Approve"}
+              Approve
             </button>
           </div>
         </div>

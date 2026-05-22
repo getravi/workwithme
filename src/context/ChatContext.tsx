@@ -50,7 +50,6 @@ export interface ChatContextValue {
   isSteering: boolean;
   currentToolStatus: string | null;
   approvalRequest: ApprovalRequest | null;
-  isApprovingLoading: boolean;
   chatError: string | null;
   handleSubmit: (input: string, attachments: AttachedFile[]) => void;
   handleStop: () => Promise<void>;
@@ -74,7 +73,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [isSteering, setIsSteering] = useState(false);
   const [currentToolStatus, setCurrentToolStatus] = useState<string | null>(null);
   const [approvalRequest, setApprovalRequest] = useState<ApprovalRequest | null>(null);
-  const [isApprovingLoading, setIsApprovingLoading] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
 
   // Stable ref so callbacks always see current sessionId without stale closures
@@ -160,18 +158,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const handleApprovalResponse = useCallback(
     (approved: boolean) => {
       if (!approvalRequest) return;
-      setIsApprovingLoading(true);
-      try {
-        wsSend({
-          type: WS_EVENTS.SANDBOX_APPROVAL_RESPONSE,
-          id: approvalRequest.id,
-          approved,
-          sessionId: sessionIdRef.current,
-        });
-        setApprovalRequest(null);
-      } finally {
-        setIsApprovingLoading(false);
-      }
+      wsSend({
+        type: WS_EVENTS.SANDBOX_APPROVAL_RESPONSE,
+        id: approvalRequest.id,
+        approved,
+        sessionId: sessionIdRef.current,
+      });
+      setApprovalRequest(null);
     },
     [approvalRequest, wsSend],
   );
@@ -358,7 +351,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     <ChatContext.Provider
       value={{
         messages, toolExecutions, isProcessing, isSteering,
-        currentToolStatus, approvalRequest, isApprovingLoading, chatError,
+        currentToolStatus, approvalRequest, chatError,
         handleSubmit, handleStop, handleApprovalResponse,
         clearMessages, loadSession, setChatError,
       }}
