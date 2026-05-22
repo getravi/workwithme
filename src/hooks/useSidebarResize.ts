@@ -26,5 +26,5 @@ export function useSidebarResize() {
     [sidebarWidth, setSidebarWidth],
   );
 
-  return { sidebarWidth, handleSidebarResizeStart };
+  return { handleSidebarResizeStart };
 }

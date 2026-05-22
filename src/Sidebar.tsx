@@ -103,8 +103,9 @@ export function Sidebar() {
     activeView, setActiveView,
     inboxCount, setInboxCount,
     showArchived, setShowArchived,
+    sidebarWidth,
   } = useUI();
-  const { sidebarWidth, handleSidebarResizeStart } = useSidebarResize();
+  const { handleSidebarResizeStart } = useSidebarResize();
 
   const activeSessions = useMemo(() => sessions.filter((s) => !s.archived), [sessions]);
   const archivedSessions = useMemo(() => sessions.filter((s) => s.archived), [sessions]);
