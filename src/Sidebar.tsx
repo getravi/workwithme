@@ -3,11 +3,11 @@ import {
   Bot, Plus, MessageSquare, FolderOpen, Settings, Bell,
   Sidebar as SidebarIcon, Archive, ArchiveRestore,
 } from "lucide-react";
-import { open } from "@tauri-apps/plugin-dialog";
 import { useSession } from "./context/SessionContext";
 import { useChat } from "./context/ChatContext";
 import { useUI } from "./context/UIContext";
 import { useSidebarResize } from "./hooks/useSidebarResize";
+import { useProjectPicker } from "./hooks/useProjectPicker";
 import type { Session } from "./types";
 
 function groupSessionsByProject(items: Session[]): Array<[string, Session[]]> {
@@ -51,18 +51,13 @@ function SessionRow({ session }: { session: Session }) {
 }
 
 function ProjectSection({ projectDir }: { projectDir: string | null }) {
-  const { changeProjectDir } = useSession();
-
-  const handleSelectProject = useCallback(async () => {
-    const selected = await open({ directory: true, multiple: false, title: "Select Project Folder" });
-    if (selected && typeof selected === "string") await changeProjectDir(selected);
-  }, [changeProjectDir]);
+  const { openProjectPicker } = useProjectPicker();
 
   return (
     <div className="mb-4">
       <div className="text-[12px] font-semibold text-gray-500 uppercase tracking-wider mb-2 px-1 flex items-center justify-between">
         <span>Project</span>
-        <button onClick={handleSelectProject} className="p-1 hover:bg-[#1f2937] rounded text-gray-400 hover:text-gray-200 transition-colors" title="Open Folder">
+        <button onClick={openProjectPicker} className="p-1 hover:bg-[#1f2937] rounded text-gray-400 hover:text-gray-200 transition-colors" title="Open Folder">
           <FolderOpen className="w-3 h-3" />
         </button>
       </div>

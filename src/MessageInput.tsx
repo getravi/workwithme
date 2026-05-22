@@ -7,17 +7,17 @@ import { invoke } from "@tauri-apps/api/core";
 import { useChat } from "./context/ChatContext";
 import { useUI } from "./context/UIContext";
 import { useWebSocket } from "./context/WebSocketContext";
-import { useSession } from "./context/SessionContext";
 import { useFileAttachments } from "./hooks/useFileAttachments";
+import { useProjectPicker } from "./hooks/useProjectPicker";
 import { ModelSelector } from "./ModelSelector";
 
 export function MessageInput() {
   const { handleSubmit, handleStop, isProcessing, isSteering } = useChat();
   const { selectedModel, availableModels, handleModelChange, setIsRecording, isRecording } = useUI();
   const { isConnected } = useWebSocket();
-  const { changeProjectDir } = useSession();
   const { attachments, handleAttachFile, handleTextareaPaste, removeAttachment, clearAttachments } =
     useFileAttachments();
+  const { openProjectPicker } = useProjectPicker();
   const [input, setInput] = useState("");
 
   // Listen for dictation results from Rust backend
@@ -47,14 +47,6 @@ export function MessageInput() {
     },
     [input, attachments, isConnected, handleSubmit, clearAttachments],
   );
-
-  const onSelectProject = useCallback(async () => {
-    const { open } = await import("@tauri-apps/plugin-dialog");
-    const selected = await open({ directory: true, multiple: false, title: "Select Project Folder" });
-    if (selected && typeof selected === "string") {
-      await changeProjectDir(selected);
-    }
-  }, [changeProjectDir]);
 
   const submitDisabled = (!input.trim() && attachments.length === 0) || !isConnected;
 
@@ -103,7 +95,7 @@ export function MessageInput() {
             <button type="button" onClick={handleAttachFile} className="p-1.5 text-gray-400 hover:text-white rounded-lg hover:bg-[#374151] transition-colors" title="Attach Files">
               <Paperclip className="w-4 h-4" />
             </button>
-            <button type="button" onClick={onSelectProject} className="p-1.5 text-gray-400 hover:text-[#c5f016] rounded-lg hover:bg-[#374151] transition-colors" title="Select Project Folder">
+            <button type="button" onClick={openProjectPicker} className="p-1.5 text-gray-400 hover:text-[#c5f016] rounded-lg hover:bg-[#374151] transition-colors" title="Select Project Folder">
               <FolderOpen className="w-4 h-4" />
             </button>
             <button
