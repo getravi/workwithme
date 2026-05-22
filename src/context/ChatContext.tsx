@@ -47,6 +47,7 @@ export interface ChatContextValue {
   messages: Message[];
   toolExecutions: ToolExecution[];
   isProcessing: boolean;
+  isLoadingSession: boolean;
   isSteering: boolean;
   currentToolStatus: string | null;
   approvalRequest: ApprovalRequest | null;
@@ -70,6 +71,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [toolExecutions, setToolExecutions] = useState<ToolExecution[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isLoadingSession, setIsLoadingSession] = useState(false);
   const [isSteering, setIsSteering] = useState(false);
   const [currentToolStatus, setCurrentToolStatus] = useState<string | null>(null);
   const [approvalRequest, setApprovalRequest] = useState<ApprovalRequest | null>(null);
@@ -171,12 +173,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   /**
    * loadSession — lives here (not SessionContext) because it sets chat state
-   * (messages, toolExecutions, isProcessing) AND session state (currentSessionId).
+   * (messages, toolExecutions, isLoadingSession) AND session state (currentSessionId).
    * ChatContext is nested inside SessionProvider so useSession() works here.
    */
   const loadSession = useCallback(
     async (session: Session) => {
-      setIsProcessing(true);
+      setIsLoadingSession(true);
       try {
         const resp = await fetchWithTimeout(`${API_BASE}/api/sessions/load`, {
           method: "POST",
@@ -196,7 +198,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         console.error("[Chat] loadSession failed", err);
         setChatError(err instanceof Error ? err.message : String(err));
       } finally {
-        setIsProcessing(false);
+        setIsLoadingSession(false);
       }
     },
     [setCurrentSessionId, setLocalProjectDir, fetchSessions, wsSend],
@@ -350,7 +352,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   return (
     <ChatContext.Provider
       value={{
-        messages, toolExecutions, isProcessing, isSteering,
+        messages, toolExecutions, isProcessing, isLoadingSession, isSteering,
         currentToolStatus, approvalRequest, chatError,
         handleSubmit, handleStop, handleApprovalResponse,
         clearMessages, loadSession, setChatError,
