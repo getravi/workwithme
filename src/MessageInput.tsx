@@ -9,6 +9,7 @@ import { useUI } from "./context/UIContext";
 import { useWebSocket } from "./context/WebSocketContext";
 import { useSession } from "./context/SessionContext";
 import { useFileAttachments } from "./hooks/useFileAttachments";
+import { ModelSelector } from "./ModelSelector";
 
 export function MessageInput() {
   const { handleSubmit, handleStop, isProcessing, isSteering } = useChat();
@@ -116,25 +117,11 @@ export function MessageInput() {
           </div>
 
           <div className="flex items-center gap-2">
-            {/* Model selector */}
-            {availableModels.length > 0 && (
-              <div className="relative flex items-center bg-[#182234] border border-[#1f2937] rounded-lg shadow-sm hover:border-[#374151] transition-colors focus-within:border-[#c5f016]/50">
-                <select
-                  value={selectedModel ? `${selectedModel.provider}:${selectedModel.id}` : ""}
-                  onChange={(e) => {
-                    const model = availableModels.find((m) => `${m.provider}:${m.id}` === e.target.value);
-                    if (model) handleModelChange(model);
-                  }}
-                  className="appearance-none bg-transparent py-1.5 pl-2.5 pr-7 text-[13px] font-medium text-gray-300 focus:outline-none focus:text-white cursor-pointer w-full z-10"
-                >
-                  {availableModels.map((m) => (
-                    <option key={`${m.provider}:${m.id}`} value={`${m.provider}:${m.id}`} className="bg-[#182234] text-gray-200">
-                      {m.name ?? `${m.provider}/${m.id}`}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
+            <ModelSelector
+              selected={selectedModel}
+              models={availableModels}
+              onChange={handleModelChange}
+            />
 
             {isProcessing && (
               <button
