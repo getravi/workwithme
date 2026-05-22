@@ -19,7 +19,7 @@ import {
 export default function App2() {
   const { isConnected } = useWebSocket();
   const {
-    activeView, settingsTab, setSettingsTab,
+    activeView, setActiveView, settingsTab, setSettingsTab,
     isPreviewOpen, setIsPreviewOpen,
     isPreviewMaximized, setIsPreviewMaximized,
     selectedModel, availableModels, handleModelChange,
@@ -63,7 +63,12 @@ export default function App2() {
           </header>
 
           <SandboxBanner />
-          <ChatArea />
+          <ChatArea
+            onReconnectClick={() => {
+              setSettingsTab("connections");
+              setActiveView("settings");
+            }}
+          />
           <ApprovalModal />
           <MessageInput />
         </main>

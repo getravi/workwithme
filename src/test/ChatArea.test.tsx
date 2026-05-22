@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { ChatArea } from "../ChatArea";
 import { ChatContext } from "../context/ChatContext";
 import { UIContext } from "../context/UIContext";
@@ -34,11 +34,19 @@ function makeUICtx(overrides: Partial<UIContextValue> = {}): UIContextValue {
   } as UIContextValue;
 }
 
-function Wrap({ chat, ui }: { chat?: Partial<ChatContextValue>; ui?: Partial<UIContextValue> }) {
+function Wrap({
+  chat,
+  ui,
+  onReconnectClick,
+}: {
+  chat?: Partial<ChatContextValue>;
+  ui?: Partial<UIContextValue>;
+  onReconnectClick?: () => void;
+}) {
   return (
     <UIContext.Provider value={makeUICtx(ui)}>
       <ChatContext.Provider value={makeChatCtx(chat)}>
-        <ChatArea />
+        <ChatArea onReconnectClick={onReconnectClick} />
       </ChatContext.Provider>
     </UIContext.Provider>
   );
@@ -69,13 +77,21 @@ describe("ChatArea", () => {
   });
 
   it("renders chat error with reconnect button for auth errors", () => {
-    const setActiveView = vi.fn();
+    const onReconnectClick = vi.fn();
+    const setChatError = vi.fn();
     render(
       <Wrap
-        chat={{ chatError: "Your anthropic session has expired. Go to Settings → Connections to reconnect." }}
-        ui={{ setActiveView } as unknown as UIContextValue}
+        chat={{
+          chatError: "Your anthropic session has expired. Go to Settings → Connections to reconnect.",
+          setChatError,
+        }}
+        onReconnectClick={onReconnectClick}
       />,
     );
-    expect(screen.getByRole("button", { name: /reconnect/i })).toBeInTheDocument();
+    const btn = screen.getByRole("button", { name: /reconnect/i });
+    expect(btn).toBeInTheDocument();
+    fireEvent.click(btn);
+    expect(onReconnectClick).toHaveBeenCalledOnce();
+    expect(setChatError).toHaveBeenCalledWith(null);
   });
 });

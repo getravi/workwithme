@@ -5,12 +5,12 @@ import { StatusIndicator } from "./StatusIndicator";
 import { useChat } from "./context/ChatContext";
 import { useUI } from "./context/UIContext";
 
-export function ChatArea() {
+export function ChatArea({ onReconnectClick }: { onReconnectClick?: () => void }) {
   const {
     messages, isProcessing, currentToolStatus,
     chatError, setChatError,
   } = useChat();
-  const { setActiveView, setSettingsTab, sandboxStatus, sandboxBannerDismissed } = useUI();
+  const { sandboxStatus, sandboxBannerDismissed } = useUI();
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom when message count changes (not on every streaming delta)
@@ -37,8 +37,7 @@ export function ChatArea() {
           {/Connections to reconnect/.test(chatError) && (
             <button
               onClick={() => {
-                setActiveView("settings");
-                setSettingsTab("connections");
+                onReconnectClick?.();
                 setChatError(null);
               }}
               className="shrink-0 text-[#c5f016] underline hover:no-underline text-[12px]"
