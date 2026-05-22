@@ -29,7 +29,7 @@ export interface UIContextValue {
   setIsPreviewMaximized: React.Dispatch<React.SetStateAction<boolean>>;
   // Navigation
   activeView: ActiveView;
-  setActiveView: (view: ActiveView) => void;
+  setActiveView: React.Dispatch<React.SetStateAction<ActiveView>>;
   settingsTab: SettingsTab;
   setSettingsTab: React.Dispatch<React.SetStateAction<SettingsTab>>;
   // Models
@@ -61,7 +61,7 @@ export function UIProvider({ children }: { children: ReactNode }) {
   const [showArchived, setShowArchived] = useState(false);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [isPreviewMaximized, setIsPreviewMaximized] = useState(false);
-  const [activeView, setActiveViewState] = useState<ActiveView>("chat");
+  const [activeView, setActiveView] = useState<ActiveView>("chat");
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("connections");
   const [selectedModel, setSelectedModel] = useState<Model | null>(null);
   const [availableModels, setAvailableModels] = useState<Model[]>([]);
@@ -70,9 +70,6 @@ export function UIProvider({ children }: { children: ReactNode }) {
   const [inboxCount, setInboxCount] = useState(0);
   const [isRecording, setIsRecording] = useState(false);
 
-  const setActiveView = useCallback((view: ActiveView) => {
-    setActiveViewState(view);
-  }, []);
 
   const fetchModels = useCallback(async () => {
     try {
