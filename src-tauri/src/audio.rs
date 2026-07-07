@@ -112,9 +112,10 @@ mod tests {
     use super::*;
 
     fn run_push_mono(data: &[f32], channels: usize) -> Vec<f32> {
-        let buf = Arc::new(Mutex::new(Vec::new()));
+        let buf: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
         push_mono(data, channels, &buf);
-        buf.lock().unwrap().clone()
+        let out = buf.lock().unwrap().clone();
+        out
     }
 
     #[test]
@@ -144,8 +145,8 @@ mod tests {
 
     #[test]
     fn empty_input_produces_empty_output() {
-        assert_eq!(run_push_mono(&[], 1), vec![]);
-        assert_eq!(run_push_mono(&[], 2), vec![]);
+        assert_eq!(run_push_mono(&[], 1), Vec::<f32>::new());
+        assert_eq!(run_push_mono(&[], 2), Vec::<f32>::new());
     }
 
     #[test]

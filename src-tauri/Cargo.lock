@@ -12015,6 +12015,7 @@ dependencies = [
  "tauri-plugin-fs",
  "tauri-plugin-global-shortcut",
  "tauri-plugin-opener",
+ "tempfile",
  "tokio",
  "toml 0.8.2",
  "tower",

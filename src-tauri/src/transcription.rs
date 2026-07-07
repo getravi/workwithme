@@ -1,4 +1,16 @@
-// src-tauri/src/transcription.rs
+//! Audio transcription pipeline: VAD, Whisper inference, and text injection.
+//!
+//! # Pipeline overview
+//! 1. [`SilenceDetector`] buffers incoming PCM frames and emits utterance
+//!    chunks when it detects a sustained silence or the buffer reaches its
+//!    maximum length.
+//! 2. [`resample_to_16k`] converts the chunk from the recording sample rate
+//!    to the 16 kHz mono format required by Whisper, applying a low-pass
+//!    anti-aliasing filter when downsampling.
+//! 3. [`WhisperEngine::transcribe`] runs the Whisper model and returns the
+//!    recognised text, filtering obvious hallucinations via [`is_hallucination`].
+//! 4. [`type_text`] injects the text into the focused application via
+//!    `enigo`, falling back to clipboard + Cmd+V if that fails.
 
 /// Silence-based Voice Activity Detector.
 /// Accumulates samples and emits complete utterance chunks.
@@ -179,6 +191,7 @@ impl WhisperEngine {
 /// Resample from `from_rate` Hz to 16000 Hz using linear interpolation.
 pub fn resample_to_16k(samples: &[f32], from_rate: u32) -> Vec<f32> {
     const TARGET: u32 = 16000;
+    if from_rate == 0 { return samples.to_vec(); } // degenerate input: return unchanged
     if from_rate == TARGET { return samples.to_vec(); }
     let ratio = from_rate as f64 / TARGET as f64;
     // Apply anti-aliasing filter before downsampling to prevent aliasing of
@@ -358,6 +371,67 @@ mod tests {
         let mut d = make_detector();
         d.push(&speech(3200)); // 200ms only
         assert_eq!(d.flush(), None);
+    }
+
+    // ── is_hallucination ──────────────────────────────────────────────────────
+
+    #[test]
+    fn hallucination_bracket_tokens() {
+        assert!(is_hallucination("[BLANK_AUDIO]"));
+        assert!(is_hallucination("[Music]"));
+        assert!(is_hallucination("(applause)"));
+    }
+
+    #[test]
+    fn hallucination_common_phrases() {
+        assert!(is_hallucination("Thank you."));
+        assert!(is_hallucination("thanks for watching."));
+        assert!(is_hallucination("Bye!"));
+        assert!(is_hallucination("  you  "));
+    }
+
+    #[test]
+    fn hallucination_real_text_is_not_filtered() {
+        assert!(!is_hallucination("Hello, world."));
+        assert!(!is_hallucination("This is a real sentence."));
+        assert!(!is_hallucination("Thank you for the update.")); // longer form is OK
+    }
+
+    // ── resample_to_16k ───────────────────────────────────────────────────────
+
+    #[test]
+    fn resample_identity_at_16k() {
+        let samples: Vec<f32> = (0..160).map(|i| i as f32 * 0.01).collect();
+        let out = resample_to_16k(&samples, 16000);
+        assert_eq!(out.len(), samples.len());
+    }
+
+    #[test]
+    fn resample_zero_rate_returns_input_unchanged() {
+        let samples = vec![0.1f32, 0.2, 0.3];
+        let out = resample_to_16k(&samples, 0);
+        assert_eq!(out, samples);
+    }
+
+    #[test]
+    fn resample_44100_produces_correct_length() {
+        // 44100 Hz → 16000 Hz: output length ≈ input * 16000/44100
+        let n = 44100usize;
+        let samples = vec![0.0f32; n];
+        let out = resample_to_16k(&samples, 44100);
+        let expected = (n as f64 / (44100.0 / 16000.0)) as usize;
+        // Allow ±1 sample for integer rounding
+        assert!((out.len() as i64 - expected as i64).abs() <= 1);
+    }
+
+    #[test]
+    fn resample_upsample_produces_correct_length() {
+        // 8000 Hz → 16000 Hz: output should be ~2× input
+        let n = 8000usize;
+        let samples = vec![0.5f32; n];
+        let out = resample_to_16k(&samples, 8000);
+        let expected = (n as f64 * 2.0) as usize;
+        assert!((out.len() as i64 - expected as i64).abs() <= 1);
     }
 
     #[test]

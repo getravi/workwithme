@@ -1,3 +1,26 @@
+//! Persistent storage for voice/meeting sessions using SQLite.
+//!
+//! The database lives at `<data_local_dir>/workwithme/voice/voice.db` and is
+//! opened once at app startup via [`init_db`].  The live connection is stored
+//! in the process-global [`VOICE_DB`] `OnceLock`.
+//!
+//! # Schema
+//! | Table | Purpose |
+//! |---|---|
+//! | `voice_sessions` | One row per recording session (status lifecycle) |
+//! | `transcript_segments` | Whisper output chunks with timestamps |
+//! | `session_notes` | Raw notes + AI-generated summary/actions/decisions |
+//! | `voice_fts` (FTS5) | Full-text search over transcript text |
+//!
+//! Child rows (`transcript_segments`, `session_notes`) are removed via
+//! `ON DELETE CASCADE`.  The FTS5 virtual table must be cleaned explicitly
+//! before deleting a session — see [`delete_session`].
+//!
+//! # Poison recovery
+//! The `db_conn!()` macro recovers from a poisoned mutex by calling
+//! `into_inner()`, allowing future callers to proceed normally even after a
+//! panic during a previous operation.
+
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -59,12 +82,21 @@ pub fn init_db() -> Result<(), String> {
     let db_path = dir.join("voice.db");
     let conn = Connection::open(&db_path).map_err(|e| format!("open voice db: {e}"))?;
 
+    // Foreign keys are OFF by default per-connection in SQLite; without this the
+    // ON DELETE CASCADE clauses in the schema are inert and delete_session would
+    // orphan transcript_segments / session_notes rows.
+    conn.pragma_update(None, "foreign_keys", true)
+        .map_err(|e| format!("enable foreign_keys: {e}"))?;
+
     let version: i64 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap_or(0);
 
     if version < DB_VERSION {
         apply_schema(&conn).map_err(|e| format!("voice schema: {e}"))?;
+        // SQLite's PRAGMA statement does not support bound parameters (?1 style),
+        // so format! is intentional here.  DB_VERSION must always be a numeric
+        // literal constant — never a value derived from user input.
         conn.execute_batch(&format!("PRAGMA user_version = {DB_VERSION}"))
             .map_err(|e| format!("set user_version: {e}"))?;
     }
@@ -76,6 +108,15 @@ pub fn init_db() -> Result<(), String> {
 
 fn db() -> &'static Mutex<Connection> {
     VOICE_DB.get().expect("voice DB not initialized")
+}
+
+/// Acquire the DB connection, recovering from a poisoned mutex.
+/// A panic mid-operation poisons the mutex; rather than crashing all future
+/// callers we recover the inner connection (the DB itself is still valid).
+macro_rules! db_conn {
+    () => {
+        db().lock().unwrap_or_else(|e| e.into_inner())
+    };
 }
 
 fn apply_schema(conn: &Connection) -> rusqlite::Result<()> {
@@ -120,7 +161,7 @@ fn apply_schema(conn: &Connection) -> rusqlite::Result<()> {
 // ── Session CRUD ──────────────────────────────────────────────────────────────
 
 pub fn create_session(id: &str, title: &str, session_type: &str) -> Result<(), String> {
-    let conn = db().lock().unwrap();
+    let conn = db_conn!();
     let now = chrono::Utc::now().timestamp_millis();
     conn.execute(
         "INSERT INTO voice_sessions (id, title, session_type, status, started_at, created_at)
@@ -131,8 +172,21 @@ pub fn create_session(id: &str, title: &str, session_type: &str) -> Result<(), S
     Ok(())
 }
 
+/// Delete a session and all its associated data (segments, notes, FTS entries).
+/// The schema uses ON DELETE CASCADE for child rows; FTS must be cleaned manually.
+pub fn delete_session(id: &str) -> Result<(), String> {
+    let mut conn = db_conn!();
+    let tx = conn.transaction().map_err(|e| format!("delete_session txn: {e}"))?;
+    tx.execute("DELETE FROM voice_fts WHERE session_id = ?1", params![id])
+        .map_err(|e| format!("delete_session fts: {e}"))?;
+    tx.execute("DELETE FROM voice_sessions WHERE id = ?1", params![id])
+        .map_err(|e| format!("delete_session: {e}"))?;
+    tx.commit().map_err(|e| format!("delete_session commit: {e}"))?;
+    Ok(())
+}
+
 pub fn update_session_status(id: &str, status: &str) -> Result<(), String> {
-    let conn = db().lock().unwrap();
+    let conn = db_conn!();
     conn.execute(
         "UPDATE voice_sessions SET status = ?1 WHERE id = ?2",
         params![status, id],
@@ -143,7 +197,7 @@ pub fn update_session_status(id: &str, status: &str) -> Result<(), String> {
 
 /// Sets status='processing', ended_at, and duration_sec.
 pub fn finish_session(id: &str, ended_at: i64, duration_sec: i64) -> Result<(), String> {
-    let conn = db().lock().unwrap();
+    let conn = db_conn!();
     conn.execute(
         "UPDATE voice_sessions SET status = 'processing', ended_at = ?1, duration_sec = ?2 WHERE id = ?3",
         params![ended_at, duration_sec, id],
@@ -160,7 +214,7 @@ pub fn complete_session(id: &str) -> Result<(), String> {
 // ── Transcript segments ───────────────────────────────────────────────────────
 
 pub fn insert_segment(session_id: &str, text: &str, start_ms: i64, end_ms: i64) -> Result<(), String> {
-    let mut conn = db().lock().unwrap();
+    let mut conn = db_conn!();
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().timestamp_millis();
     let tx = conn.transaction().map_err(|e| format!("insert_segment txn: {e}"))?;
@@ -182,7 +236,7 @@ pub fn insert_segment(session_id: &str, text: &str, start_ms: i64, end_ms: i64) 
 // ── Notes CRUD ────────────────────────────────────────────────────────────────
 
 pub fn upsert_notes(session_id: &str, raw_notes: Option<&str>) -> Result<(), String> {
-    let conn = db().lock().unwrap();
+    let conn = db_conn!();
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().timestamp_millis();
     conn.execute(
@@ -196,7 +250,7 @@ pub fn upsert_notes(session_id: &str, raw_notes: Option<&str>) -> Result<(), Str
 }
 
 pub fn update_ai_output(session_id: &str, summary: &str, actions: &str, decisions: &str) -> Result<(), String> {
-    let conn = db().lock().unwrap();
+    let conn = db_conn!();
     let now = chrono::Utc::now().timestamp_millis();
     conn.execute(
         "UPDATE session_notes SET ai_summary = ?1, ai_action_items = ?2, ai_decisions = ?3, updated_at = ?4
@@ -213,7 +267,7 @@ pub fn update_ai_output(session_id: &str, summary: &str, actions: &str, decision
 // ── Queries ───────────────────────────────────────────────────────────────────
 
 pub fn list_sessions() -> Result<Vec<VoiceSession>, String> {
-    let conn = db().lock().unwrap();
+    let conn = db_conn!();
     let mut stmt = conn
         .prepare(
             "SELECT id, title, session_type, status, started_at, ended_at, duration_sec, created_at
@@ -232,7 +286,7 @@ pub fn list_sessions() -> Result<Vec<VoiceSession>, String> {
 }
 
 pub fn get_session(id: &str) -> Result<Option<VoiceSession>, String> {
-    let conn = db().lock().unwrap();
+    let conn = db_conn!();
     let result = conn.query_row(
         "SELECT id, title, session_type, status, started_at, ended_at, duration_sec, created_at
          FROM voice_sessions WHERE id = ?1",
@@ -247,7 +301,7 @@ pub fn get_session(id: &str) -> Result<Option<VoiceSession>, String> {
 }
 
 pub fn get_segments(session_id: &str) -> Result<Vec<TranscriptSegment>, String> {
-    let conn = db().lock().unwrap();
+    let conn = db_conn!();
     let mut stmt = conn
         .prepare(
             "SELECT id, session_id, text, start_ms, end_ms, created_at
@@ -266,7 +320,7 @@ pub fn get_segments(session_id: &str) -> Result<Vec<TranscriptSegment>, String> 
 }
 
 pub fn get_notes(session_id: &str) -> Result<Option<SessionNotes>, String> {
-    let conn = db().lock().unwrap();
+    let conn = db_conn!();
     let result = conn.query_row(
         "SELECT id, session_id, raw_notes, ai_summary, ai_action_items, ai_decisions, updated_at
          FROM session_notes WHERE session_id = ?1",
@@ -281,7 +335,11 @@ pub fn get_notes(session_id: &str) -> Result<Option<SessionNotes>, String> {
 }
 
 pub fn search_sessions(query: &str) -> Result<Vec<String>, String> {
-    let conn = db().lock().unwrap();
+    // An empty phrase literal ("") is invalid in FTS5 and returns a syntax error.
+    if query.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let conn = db_conn!();
     // Wrap in phrase quotes to prevent FTS5 operator injection (AND/OR/NOT/NEAR/column filters).
     // Inner double-quotes are escaped by doubling them per FTS5 string literal rules.
     let safe_query = format!("\"{}\"", query.replace('"', "\"\""));
@@ -337,4 +395,131 @@ fn row_to_notes(row: &rusqlite::Row) -> rusqlite::Result<SessionNotes> {
         ai_decisions: row.get(5)?,
         updated_at: row.get(6)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Once;
+
+    // Initialize an in-memory SQLite DB into VOICE_DB exactly once for all
+    // tests in this module.  Tests share the same DB and use unique IDs to
+    // avoid collisions when run in parallel.
+    static DB_INIT: Once = Once::new();
+
+    fn ensure_db() {
+        DB_INIT.call_once(|| {
+            let conn = Connection::open_in_memory().expect("in-memory db");
+            conn.pragma_update(None, "foreign_keys", true)
+                .expect("enable foreign_keys");
+            apply_schema(&conn).expect("apply schema");
+            VOICE_DB.set(Mutex::new(conn)).expect("set VOICE_DB");
+        });
+    }
+
+    fn unique_id() -> String {
+        uuid::Uuid::new_v4().to_string()
+    }
+
+    // ── voice_dir ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn voice_dir_is_under_data_local() {
+        let dir = voice_dir();
+        // Should end with workwithme/voice regardless of platform
+        assert!(dir.ends_with("workwithme/voice") || dir.ends_with("workwithme\\voice"));
+    }
+
+    // ── search_sessions empty-query guard ─────────────────────────────────────
+
+    #[test]
+    fn search_sessions_empty_query_returns_empty_without_db() {
+        // This early-return path runs before any DB access — no DB needed.
+        assert_eq!(search_sessions("").unwrap(), Vec::<String>::new());
+        assert_eq!(search_sessions("   ").unwrap(), Vec::<String>::new());
+    }
+
+    // ── session CRUD ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn create_and_get_session_round_trip() {
+        ensure_db();
+        let id = unique_id();
+        create_session(&id, "Test Meeting", "meeting").unwrap();
+        let session = get_session(&id).unwrap().expect("session should exist");
+        assert_eq!(session.id, id);
+        assert_eq!(session.title, "Test Meeting");
+        assert_eq!(session.status, "recording");
+    }
+
+    #[test]
+    fn get_session_returns_none_for_unknown_id() {
+        ensure_db();
+        assert!(get_session("does-not-exist-xyz").unwrap().is_none());
+    }
+
+    #[test]
+    fn update_session_status_changes_status() {
+        ensure_db();
+        let id = unique_id();
+        create_session(&id, "Status Test", "meeting").unwrap();
+        update_session_status(&id, "complete").unwrap();
+        let session = get_session(&id).unwrap().unwrap();
+        assert_eq!(session.status, "complete");
+    }
+
+    #[test]
+    fn delete_session_removes_row() {
+        ensure_db();
+        let id = unique_id();
+        create_session(&id, "To Delete", "meeting").unwrap();
+        assert!(get_session(&id).unwrap().is_some());
+        delete_session(&id).unwrap();
+        assert!(get_session(&id).unwrap().is_none());
+    }
+
+    // ── transcript segments ───────────────────────────────────────────────────
+
+    #[test]
+    fn insert_and_get_segments() {
+        ensure_db();
+        let session_id = unique_id();
+        create_session(&session_id, "Segment Test", "meeting").unwrap();
+        insert_segment(&session_id, "Hello world", 0, 3000).unwrap();
+        insert_segment(&session_id, "Goodbye world", 3000, 6000).unwrap();
+        let segs = get_segments(&session_id).unwrap();
+        assert_eq!(segs.len(), 2);
+        assert_eq!(segs[0].text, "Hello world");
+        assert_eq!(segs[1].start_ms, 3000);
+    }
+
+    #[test]
+    fn delete_session_cascades_to_segments() {
+        ensure_db();
+        let session_id = unique_id();
+        create_session(&session_id, "Cascade Test", "meeting").unwrap();
+        insert_segment(&session_id, "Segment A", 0, 1000).unwrap();
+        delete_session(&session_id).unwrap();
+        let segs = get_segments(&session_id).unwrap();
+        assert!(segs.is_empty(), "segments should be removed on cascade");
+    }
+
+    // ── notes ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn upsert_notes_creates_and_updates() {
+        ensure_db();
+        let session_id = unique_id();
+        create_session(&session_id, "Notes Test", "meeting").unwrap();
+
+        upsert_notes(&session_id, Some("First draft")).unwrap();
+        let notes = get_notes(&session_id).unwrap().unwrap();
+        assert_eq!(notes.raw_notes.as_deref(), Some("First draft"));
+
+        // Upsert should update, not create a duplicate
+        upsert_notes(&session_id, Some("Revised notes")).unwrap();
+        let notes2 = get_notes(&session_id).unwrap().unwrap();
+        assert_eq!(notes2.raw_notes.as_deref(), Some("Revised notes"));
+        assert_eq!(notes2.session_id, session_id);
+    }
 }

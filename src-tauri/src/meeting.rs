@@ -1,4 +1,24 @@
-use std::path::PathBuf;
+//! Meeting recording and transcription pipeline.
+//!
+//! A meeting session progresses through the following states:
+//! `recording` → `processing` → `complete` (or `error`).
+//!
+//! # Recording
+//! [`meeting_start`] spawns an `ffmpeg` process that captures the default
+//! microphone to a WAV file.  The session is stored in [`voice_db`] with
+//! status `"recording"`.  Only one active recording is allowed at a time;
+//! the running session is tracked in a process-wide
+//! `OnceLock<Mutex<Option<MeetingRecording>>>`.
+//!
+//! # Transcription
+//! [`meeting_stop`] kills ffmpeg, updates the session status to `"processing"`,
+//! and spawns a background thread that resamples the WAV to 16 kHz and runs
+//! Whisper via [`SharedWhisperEngine`].  Segments are written to the DB as they
+//! arrive and emitted to the frontend as `meeting-transcript-segment` events.
+//! On completion the status becomes `"complete"` and a
+//! `meeting-transcription-complete` event is emitted.
+
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use serde::Serialize;
@@ -25,6 +45,13 @@ fn get_active() -> &'static Mutex<Option<MeetingRecording>> {
     ACTIVE_MEETING.get_or_init(|| Mutex::new(None))
 }
 
+/// Lock the active-meeting slot, recovering from a poisoned mutex. A panic mid
+/// operation poisons the lock; recovering the inner value lets later callers
+/// proceed rather than cascading the panic.
+fn active() -> std::sync::MutexGuard<'static, Option<MeetingRecording>> {
+    get_active().lock().unwrap_or_else(|e| e.into_inner())
+}
+
 #[derive(Serialize)]
 pub struct MeetingStartResult {
     pub session_id: String,
@@ -39,7 +66,7 @@ pub struct MeetingDetail {
 
 #[tauri::command]
 pub fn meeting_start(app: tauri::AppHandle, title: String) -> Result<MeetingStartResult, String> {
-    let mut guard = get_active().lock().unwrap();
+    let mut guard = active();
     if guard.is_some() {
         return Err("a meeting recording is already active".into());
     }
@@ -59,7 +86,7 @@ pub fn meeting_start(app: tauri::AppHandle, title: String) -> Result<MeetingStar
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::inherit()) // surface permission/codec errors in logs
         .spawn()
         .map_err(|e| format!("spawn ffmpeg for meeting: {e}"))?;
 
@@ -77,7 +104,7 @@ pub fn meeting_start(app: tauri::AppHandle, title: String) -> Result<MeetingStar
 
 #[tauri::command]
 pub fn meeting_stop(app: tauri::AppHandle) -> Result<String, String> {
-    let mut guard = get_active().lock().unwrap();
+    let mut guard = active();
     let recording = guard.take().ok_or("no active meeting recording")?;
 
     let MeetingRecording { session_id, wav_path, process: mut proc, started_at } = recording;
@@ -107,7 +134,7 @@ pub fn meeting_stop(app: tauri::AppHandle) -> Result<String, String> {
 
 #[tauri::command]
 pub fn meeting_get_elapsed() -> Result<u64, String> {
-    let guard = get_active().lock().unwrap();
+    let guard = active();
     match guard.as_ref() {
         None => Err("no active meeting recording".into()),
         Some(r) => Ok(r.started_at.elapsed().as_secs()),
@@ -134,6 +161,30 @@ pub fn meeting_get(session_id: String) -> Result<MeetingDetail, String> {
 }
 
 #[tauri::command]
+pub fn meeting_delete(session_id: String) -> Result<(), String> {
+    // Refuse to delete a session that is currently being recorded.
+    let guard = active();
+    if guard.as_ref().map_or(false, |r| r.session_id == session_id) {
+        return Err("cannot delete a session that is currently recording".into());
+    }
+    drop(guard);
+
+    voice_db::delete_session(&session_id)?;
+
+    // Best-effort removal of the raw WAV. This is the common case for the delete
+    // action: a session stuck in "recording" (app crashed mid-record) still has
+    // its large WAV on disk. A missing file is fine — a transcribed session has
+    // already had its WAV removed.
+    let wav_path = voice_db::voice_dir().join(format!("{session_id}.wav"));
+    if let Err(e) = std::fs::remove_file(&wav_path) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            eprintln!("[meeting] failed to delete WAV for {session_id}: {e}");
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
 pub fn meeting_search(query: String) -> Result<Vec<VoiceSession>, String> {
     if query.is_empty() {
         return voice_db::list_sessions();
@@ -153,67 +204,65 @@ fn transcribe_meeting_audio(
     session_id: String,
     wav_path: PathBuf,
 ) {
-    // Decode WAV to raw f32le at 16kHz mono via FFmpeg
-    let ffmpeg = ffmpeg_path(&app);
+    let result = run_transcription(&app, &session_id, &wav_path);
 
-    let wav_str = match wav_path.to_str() {
-        Some(s) => s,
-        None => {
-            eprintln!("[meeting] transcribe: invalid WAV path (non-UTF-8)");
-            let _ = voice_db::update_session_status(&session_id, "error");
-            let _ = app.emit("meeting-transcription-error", &session_id);
-            return;
+    // Always delete the WAV — it's no longer needed whether we succeeded or not.
+    // WAV files are large (~115 MB/hr) and orphaned files fill disk fast.
+    if let Err(e) = std::fs::remove_file(&wav_path) {
+        eprintln!("[meeting] failed to delete WAV after transcription: {e}");
+    }
+
+    // Single owner of the terminal state transition + event, so success and
+    // failure can't drift apart.
+    match result {
+        Ok(()) => {
+            let _ = voice_db::complete_session(&session_id);
+            let _ = app.emit("meeting-transcription-complete", json!({"session_id": &session_id}));
         }
-    };
+        Err(e) => {
+            eprintln!("[meeting] transcription failed: {e}");
+            let _ = voice_db::update_session_status(&session_id, "error");
+            let _ = app.emit(
+                "meeting-transcription-error",
+                json!({"session_id": &session_id, "error": e}),
+            );
+        }
+    }
+}
 
-    let decode_output = match Command::new(&ffmpeg)
-        .args([
-            "-i",
-            wav_str,
-            "-f", "f32le",
-            "-ar", "16000",
-            "-ac", "1",
-            "pipe:1",
-        ])
+/// Inner transcription logic. Returns `Err` on any fatal error; the caller owns
+/// the resulting DB status update, the completion/error event, and WAV cleanup.
+fn run_transcription(
+    app: &tauri::AppHandle,
+    session_id: &str,
+    wav_path: &Path,
+) -> Result<(), String> {
+    let ffmpeg = ffmpeg_path(app);
+    let wav_str = wav_path.to_str().ok_or("invalid WAV path (non-UTF-8)")?;
+
+    let decode_output = Command::new(&ffmpeg)
+        .args(["-i", wav_str, "-f", "f32le", "-ar", "16000", "-ac", "1", "pipe:1"])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .output()
-    {
-        Ok(o) => o,
-        Err(e) => {
-            eprintln!("[meeting] ffmpeg decode failed: {e}");
-            let _ = app.emit("meeting-transcription-error", json!({"session_id": session_id, "error": e.to_string()}));
-            let _ = voice_db::update_session_status(&session_id, "error");
-            return;
-        }
-    };
+        .map_err(|e| format!("ffmpeg decode failed: {e}"))?;
 
-    let bytes = decode_output.stdout;
-    // Convert raw bytes to f32 samples (4 bytes each, little-endian)
-    let samples: Vec<f32> = bytes
+    let samples: Vec<f32> = decode_output
+        .stdout
         .chunks_exact(4)
         .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
         .collect();
 
     if samples.is_empty() {
-        let _ = voice_db::complete_session(&session_id);
-        let _ = app.emit("meeting-transcription-complete", json!({"session_id": session_id}));
-        return;
+        // Nothing to transcribe — an empty meeting still completes successfully.
+        return Ok(());
     }
 
-    // Get the shared Whisper engine from Tauri managed state
-    let engine_state = match app.try_state::<crate::transcription::SharedWhisperEngine>() {
-        Some(s) => s,
-        None => {
-            eprintln!("[meeting] Whisper engine not available (model failed to load)");
-            let _ = voice_db::update_session_status(&session_id, "error");
-            let _ = app.emit("meeting-transcription-error", json!({"session_id": &session_id, "error": "WhisperEngine not available"}));
-            return;
-        }
-    };
+    let engine_state = app
+        .try_state::<crate::transcription::SharedWhisperEngine>()
+        .ok_or("Whisper engine not available (model failed to load)")?;
 
-    // Chunk into 30-second segments (30s × 16000 samples/s)
-    const CHUNK_SAMPLES: usize = 480_000;
+    const CHUNK_SAMPLES: usize = 480_000; // 30s × 16 000 samples/s
     let ms_per_sample = 1000.0_f64 / 16000.0_f64;
 
     for (chunk_idx, chunk) in samples.chunks(CHUNK_SAMPLES).enumerate() {
@@ -228,35 +277,21 @@ fn transcribe_meeting_audio(
         match text_result {
             Ok(text) if !text.trim().is_empty() => {
                 let text = text.trim().to_string();
-                if let Err(e) = voice_db::insert_segment(&session_id, &text, start_ms, end_ms) {
+                if let Err(e) = voice_db::insert_segment(session_id, &text, start_ms, end_ms) {
                     eprintln!("[meeting] insert_segment error: {e}");
                 }
                 let _ = app.emit(
                     "meeting-transcript-segment",
-                    json!({
-                        "session_id": session_id,
-                        "text": text,
-                        "start_ms": start_ms,
-                        "end_ms": end_ms,
-                    }),
+                    json!({"session_id": session_id, "text": text, "start_ms": start_ms, "end_ms": end_ms}),
                 );
             }
-            Ok(_) => {
-                // Empty transcription for this chunk — skip
-            }
-            Err(e) => {
-                eprintln!("[meeting] transcription error at chunk {chunk_idx}: {e}");
-            }
+            Ok(_) => {}
+            // A per-chunk transcription error is non-fatal — log and keep going.
+            Err(e) => eprintln!("[meeting] transcription error at chunk {chunk_idx}: {e}"),
         }
     }
 
-    let _ = voice_db::complete_session(&session_id);
-    let _ = app.emit("meeting-transcription-complete", json!({"session_id": session_id}));
-
-    // Delete the WAV file now that the transcript is persisted — these are large (~115 MB/hr).
-    if let Err(e) = std::fs::remove_file(&wav_path) {
-        eprintln!("[meeting] failed to delete WAV after transcription: {e}");
-    }
+    Ok(())
 }
 
 // ── Claude API summary generation ────────────────────────────────────────────
