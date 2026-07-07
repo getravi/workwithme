@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { overlayOrigin } from "./overlayOrigin";
 
 export interface WindowInfo {
   id: number;
@@ -40,16 +41,23 @@ function drawHighlight(
   ctx: CanvasRenderingContext2D,
   win: WindowInfo,
   canvasW: number,
-  canvasH: number
+  canvasH: number,
+  offsetX: number,
+  offsetY: number,
 ) {
+  // CGWindowList returns global screen coords; the canvas origin is at
+  // (offsetX, offsetY) in screen space, so subtract the overlay origin to
+  // get canvas-relative coordinates.
+  const cx = win.x - offsetX;
+  const cy = win.y - offsetY;
   ctx.clearRect(0, 0, canvasW, canvasH);
   drawDim(ctx, canvasW, canvasH);
   // Cut out the hovered window so the real window shows through
-  ctx.clearRect(win.x, win.y, win.width, win.height);
+  ctx.clearRect(cx, cy, win.width, win.height);
   // Blue border
   ctx.strokeStyle = "rgba(100, 180, 255, 0.9)";
   ctx.lineWidth = 2;
-  ctx.strokeRect(win.x + 0.5, win.y + 0.5, win.width - 1, win.height - 1);
+  ctx.strokeRect(cx + 0.5, cy + 0.5, win.width - 1, win.height - 1);
 }
 
 // Component ──────────────────────────────────────────────────────────────────
@@ -60,6 +68,11 @@ export function WindowCaptureOverlay() {
   const [loaded, setLoaded] = useState(false);
   const hoveredRef = useRef<WindowInfo | null>(null);
   const logicalSizeRef = useRef({ w: 0, h: 0 });
+
+  // CGWindowList coordinates are global; clientX/clientY are window-relative.
+  // Add this offset to mouse coords for hit-testing; subtract it from window
+  // bounds when drawing.
+  const { x: offsetX, y: offsetY } = overlayOrigin();
 
   // Load window list on mount
   useEffect(() => {
@@ -107,11 +120,13 @@ export function WindowCaptureOverlay() {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const { w, h } = logicalSizeRef.current;
-    const found = findWindowAtPoint(windows, e.clientX, e.clientY);
+    // Translate window-relative mouse coords to global screen coords for
+    // CGWindowList hit-testing.
+    const found = findWindowAtPoint(windows, e.clientX + offsetX, e.clientY + offsetY);
     hoveredRef.current = found;
     const ctx = canvas.getContext("2d")!;
     if (found) {
-      drawHighlight(ctx, found, w, h);
+      drawHighlight(ctx, found, w, h, offsetX, offsetY);
     } else {
       ctx.clearRect(0, 0, w, h);
       drawDim(ctx, w, h);

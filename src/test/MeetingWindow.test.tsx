@@ -110,6 +110,15 @@ describe("MeetingWindow", () => {
     });
   });
 
+  it("uses 'Untitled Meeting' when title is empty on start", async () => {
+    render(<MeetingWindow />);
+    // Leave title blank and click Start
+    fireEvent.click(screen.getByRole("button", { name: /start/i }));
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith("meeting_start", { title: "Untitled Meeting" });
+    });
+  });
+
   it("calls meeting_save_notes with sessionId when notes change", async () => {
     render(<MeetingWindow />);
     fireEvent.click(screen.getByRole("button", { name: /start/i }));

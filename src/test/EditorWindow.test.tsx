@@ -1,6 +1,4 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 
 // Mock Tauri APIs
 vi.mock("@tauri-apps/api/core", () => ({
@@ -23,7 +21,6 @@ vi.mock("react-konva", () => ({
 }));
 vi.mock("konva", () => ({ default: {} }));
 
-import { EditorWindow } from "../EditorWindow";
 import { useEditorStore } from "../EditorWindow";
 
 describe("EditorWindow store", () => {

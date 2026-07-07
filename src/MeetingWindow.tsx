@@ -1,26 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-
-type WindowState = "idle" | "recording" | "processing" | "complete";
-
-interface TranscriptSegment {
-  text: string;
-  start_ms: number;
-  end_ms: number;
-}
-
-interface SummaryResult {
-  summary: string;
-  action_items: string;
-  decisions: string;
-}
-
-function formatTime(secs: number): string {
-  const mm = String(Math.floor(secs / 60)).padStart(2, "0");
-  const ss = String(secs % 60).padStart(2, "0");
-  return `${mm}:${ss}`;
-}
+import { useDebouncedSave } from "./hooks/useDebouncedSave";
+import { type WindowState, type TranscriptSegment, type SummaryResult } from "./meeting/types";
+import { MeetingHeader } from "./meeting/MeetingHeader";
+import { MeetingIdlePanel } from "./meeting/MeetingIdlePanel";
+import { MeetingNotes } from "./meeting/MeetingNotes";
+import { MeetingTranscriptPanel } from "./meeting/MeetingTranscriptPanel";
+import { MeetingFooter } from "./meeting/MeetingFooter";
 
 export function MeetingWindow() {
   const [state, setState] = useState<WindowState>("idle");
@@ -33,38 +20,65 @@ export function MeetingWindow() {
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const notesDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [processingElapsed, setProcessingElapsed] = useState(0);
+
   const elapsedIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Set up Tauri event listeners
+  // Debounced notes save that also flushes on unmount, so notes aren't lost when
+  // the window closes mid-debounce (e.g. user types then immediately closes it).
+  const saveNotes = useDebouncedSave<{ sessionId: string; notes: string }>(
+    ({ sessionId: sid, notes: n }) => {
+      invoke("meeting_save_notes", { sessionId: sid, notes: n }).catch(() => {});
+    },
+    300,
+  );
+
+  // Set up Tauri event listeners.
+  // All four listen() calls are awaited together with Promise.all so that the cleanup
+  // function always has every unlisten handle — previously individual .then() pushes
+  // could race against a fast unmount and leave stale listeners firing on dead components.
   useEffect(() => {
+    let mounted = true;
     const unlisteners: Array<() => void> = [];
 
-    listen<TranscriptSegment & { session_id?: string }>(
-      "meeting-transcript-segment",
-      (event) => {
-        const seg = event.payload;
-        // Filter by session_id if present
-        if (seg.session_id && sessionId && seg.session_id !== sessionId) return;
-        setSegments((prev) => [...prev, { text: seg.text, start_ms: seg.start_ms, end_ms: seg.end_ms }]);
+    Promise.all([
+      listen<TranscriptSegment & { session_id?: string }>(
+        "meeting-transcript-segment",
+        (event) => {
+          const seg = event.payload;
+          // Filter by session_id if present
+          if (seg.session_id && sessionId && seg.session_id !== sessionId) return;
+          setSegments((prev) => [...prev, { text: seg.text, start_ms: seg.start_ms, end_ms: seg.end_ms }]);
+        }
+      ),
+      listen<{ session_id?: string }>("meeting-transcription-complete", (event) => {
+        if (event.payload.session_id && sessionId && event.payload.session_id !== sessionId) return;
+        setState("complete");
+      }),
+      listen<SummaryResult>("meeting-summary-ready", (event) => {
+        setSummary(event.payload);
+        setSummaryLoading(false);
+      }),
+      listen<{ error: string }>("meeting-summary-error", (event) => {
+        setError(event.payload.error ?? "Summary failed");
+        setSummaryLoading(false);
+      }),
+      listen<{ session_id: string; error: string }>("meeting-transcription-error", (event) => {
+        if (event.payload.session_id && sessionId && event.payload.session_id !== sessionId) return;
+        setError(event.payload.error ?? "Transcription failed");
+        setState("error");
+      }),
+    ]).then((fns) => {
+      if (mounted) {
+        unlisteners.push(...fns);
+      } else {
+        // Component unmounted before promises resolved — clean up immediately
+        fns.forEach((fn) => fn());
       }
-    ).then((unlisten) => unlisteners.push(unlisten));
-
-    listen("meeting-transcription-complete", () => {
-      setState("complete");
-    }).then((unlisten) => unlisteners.push(unlisten));
-
-    listen<SummaryResult>("meeting-summary-ready", (event) => {
-      setSummary(event.payload);
-      setSummaryLoading(false);
-    }).then((unlisten) => unlisteners.push(unlisten));
-
-    listen<{ error: string }>("meeting-summary-error", (event) => {
-      setError(event.payload.error ?? "Summary failed");
-      setSummaryLoading(false);
-    }).then((unlisten) => unlisteners.push(unlisten));
+    });
 
     return () => {
+      mounted = false;
       unlisteners.forEach((fn) => fn());
     };
   }, [sessionId]);
@@ -97,21 +111,26 @@ export function MeetingWindow() {
     };
   }, [state]);
 
-  // Auto-save notes (debounced 300ms)
+  // Processing elapsed timer — ticks every second while transcription is running
+  useEffect(() => {
+    setProcessingElapsed(0);
+    if (state !== "processing") return;
+    const id = setInterval(() => setProcessingElapsed((s) => s + 1), 1000);
+    return () => clearInterval(id);
+  }, [state]);
+
+  // Auto-save notes (debounced 300ms, flushed on unmount)
   function handleNotesChange(value: string) {
     setNotes(value);
-    if (notesDebounceRef.current) clearTimeout(notesDebounceRef.current);
-    notesDebounceRef.current = setTimeout(() => {
-      if (sessionId) {
-        invoke("meeting_save_notes", { sessionId, notes: value }).catch(() => {});
-      }
-    }, 300);
+    if (sessionId) saveNotes({ sessionId, notes: value });
   }
 
   async function handleStart() {
     try {
       setError(null);
-      const result = await invoke<{ session_id: string }>("meeting_start", { title });
+      const effectiveTitle = title.trim() || "Untitled Meeting";
+      if (!title.trim()) setTitle(effectiveTitle);
+      const result = await invoke<{ session_id: string }>("meeting_start", { title: effectiveTitle });
       setSessionId(result.session_id);
       setState("recording");
       setElapsed(0);
@@ -143,320 +162,42 @@ export function MeetingWindow() {
     }
   }
 
-  const fullTranscript = segments.map((s) => s.text).join(" ");
+  function handleReset() {
+    setState("idle");
+    setError(null);
+    setSessionId(null);
+    setSegments([]);
+    setSummary(null);
+  }
 
   return (
-    <div
-      style={{
-        width: "100%",
-        height: "100vh",
-        display: "flex",
-        flexDirection: "column",
-        background: "#111827",
-        color: "#f3f4f6",
-        fontFamily: "Inter, system-ui, sans-serif",
-        fontSize: 14,
-      }}
-    >
-      {/* Header */}
-      {state === "idle" ? (
-        <div
-          style={{
-            padding: "24px 32px 16px",
-            borderBottom: "1px solid #1f2937",
-            display: "flex",
-            alignItems: "center",
-            gap: 12,
-          }}
-        >
-          <span style={{ fontSize: 16, fontWeight: 600, color: "#f3f4f6" }}>
-            New Meeting
-          </span>
-        </div>
-      ) : (
-        <div
-          style={{
-            padding: "12px 24px",
-            borderBottom: "1px solid #1f2937",
-            display: "flex",
-            alignItems: "center",
-            gap: 12,
-          }}
-        >
-          {/* Pulsing red dot when recording */}
-          {(state === "recording" || state === "processing") && (
-            <>
-              <div
-                style={{
-                  width: 8,
-                  height: 8,
-                  background: "#ef4444",
-                  borderRadius: "50%",
-                  animation: "pulse 1s ease-in-out infinite",
-                  flexShrink: 0,
-                }}
-              />
-            </>
-          )}
-          <span style={{ fontWeight: 600, fontSize: 15, color: "#f3f4f6" }}>
-            {title || "Untitled Meeting"}
-          </span>
-          {(state === "recording" || state === "processing") && (
-            <span
-              style={{
-                marginLeft: "auto",
-                fontVariantNumeric: "tabular-nums",
-                color: "#9ca3af",
-                fontSize: 13,
-              }}
-            >
-              {formatTime(elapsed)}
-            </span>
-          )}
-          {state === "complete" && (
-            <span style={{ marginLeft: "auto", color: "#6ee7b7", fontSize: 13 }}>
-              Complete
-            </span>
-          )}
-        </div>
-      )}
+    <div className="w-full h-screen flex flex-col bg-[#111827] text-[#f3f4f6] font-[Inter,system-ui,sans-serif] text-[14px]">
+      <MeetingHeader state={state} title={title} elapsed={elapsed} />
 
       {/* Body */}
-      <div style={{ flex: 1, overflow: "hidden", display: "flex" }}>
+      <div className="flex-1 overflow-hidden flex">
         {state === "idle" ? (
-          // Idle: centered title input + start button
-          <div
-            style={{
-              flex: 1,
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 16,
-              padding: 32,
-            }}
-          >
-            <input
-              type="text"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleStart()}
-              placeholder="Meeting title…"
-              style={{
-                background: "#1f2937",
-                border: "1px solid #374151",
-                borderRadius: 8,
-                color: "#f3f4f6",
-                fontSize: 16,
-                padding: "10px 16px",
-                width: "100%",
-                maxWidth: 400,
-                outline: "none",
-              }}
-            />
-            <button
-              onClick={handleStart}
-              style={{
-                background: "#4f46e5",
-                border: "none",
-                borderRadius: 8,
-                color: "#fff",
-                fontSize: 15,
-                fontWeight: 600,
-                padding: "10px 28px",
-                cursor: "pointer",
-                width: "100%",
-                maxWidth: 400,
-              }}
-            >
-              Start Recording
-            </button>
-            {error && (
-              <p style={{ color: "#f87171", fontSize: 13 }}>{error}</p>
-            )}
-          </div>
+          <MeetingIdlePanel title={title} onTitleChange={setTitle} onStart={handleStart} error={error} />
         ) : (
           // Recording / Processing / Complete: two-column layout
-          <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
-            {/* Left: notes */}
-            <div
-              style={{
-                flex: 1,
-                display: "flex",
-                flexDirection: "column",
-                borderRight: "1px solid #1f2937",
-                padding: 16,
-              }}
-            >
-              <label
-                style={{ fontSize: 11, color: "#9ca3af", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.05em" }}
-              >
-                Notes
-              </label>
-              <textarea
-                value={notes}
-                onChange={(e) => handleNotesChange(e.target.value)}
-                placeholder="Type rough notes here…"
-                style={{
-                  flex: 1,
-                  background: "#182234",
-                  border: "1px solid #374151",
-                  borderRadius: 6,
-                  color: "#f3f4f6",
-                  fontSize: 13,
-                  padding: 12,
-                  resize: "none",
-                  outline: "none",
-                  lineHeight: 1.5,
-                }}
-              />
-            </div>
-
-            {/* Right: transcript / summary */}
-            <div
-              style={{
-                flex: 1,
-                display: "flex",
-                flexDirection: "column",
-                padding: 16,
-                overflow: "hidden",
-              }}
-            >
-              <label
-                style={{ fontSize: 11, color: "#9ca3af", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.05em" }}
-              >
-                Transcript
-              </label>
-
-              {summary ? (
-                // Summary view
-                <div style={{ flex: 1, overflow: "auto", display: "flex", flexDirection: "column", gap: 16 }}>
-                  <section>
-                    <h3 style={{ fontSize: 13, fontWeight: 600, color: "#c5f016", margin: "0 0 6px" }}>
-                      Summary
-                    </h3>
-                    <p style={{ color: "#d1d5db", fontSize: 13, lineHeight: 1.6, margin: 0 }}>
-                      {summary.summary}
-                    </p>
-                  </section>
-                  <section>
-                    <h3 style={{ fontSize: 13, fontWeight: 600, color: "#c5f016", margin: "0 0 6px" }}>
-                      Action Items
-                    </h3>
-                    <p style={{ color: "#d1d5db", fontSize: 13, lineHeight: 1.6, margin: 0, whiteSpace: "pre-wrap" }}>
-                      {summary.action_items}
-                    </p>
-                  </section>
-                  <section>
-                    <h3 style={{ fontSize: 13, fontWeight: 600, color: "#c5f016", margin: "0 0 6px" }}>
-                      Decisions
-                    </h3>
-                    <p style={{ color: "#d1d5db", fontSize: 13, lineHeight: 1.6, margin: 0, whiteSpace: "pre-wrap" }}>
-                      {summary.decisions}
-                    </p>
-                  </section>
-                </div>
-              ) : state === "recording" && segments.length === 0 ? (
-                <div
-                  style={{
-                    flex: 1,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    color: "#6b7280",
-                    fontSize: 13,
-                    textAlign: "center",
-                  }}
-                >
-                  Transcript will appear after the meeting ends.
-                </div>
-              ) : (
-                <div
-                  style={{
-                    flex: 1,
-                    overflow: "auto",
-                    background: "#182234",
-                    borderRadius: 6,
-                    padding: 12,
-                    fontSize: 13,
-                    color: "#d1d5db",
-                    lineHeight: 1.6,
-                    whiteSpace: "pre-wrap",
-                  }}
-                >
-                  {segments.length > 0 ? fullTranscript : (
-                    <span style={{ color: "#6b7280" }}>
-                      Transcript will appear after the meeting ends.
-                    </span>
-                  )}
-                </div>
-              )}
-            </div>
+          <div className="flex-1 flex overflow-hidden">
+            <MeetingNotes notes={notes} onNotesChange={handleNotesChange} />
+            <MeetingTranscriptPanel state={state} segments={segments} summary={summary} />
           </div>
         )}
       </div>
 
-      {/* Footer */}
       {state !== "idle" && (
-        <div
-          style={{
-            padding: "12px 24px",
-            borderTop: "1px solid #1f2937",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "flex-end",
-            gap: 12,
-          }}
-        >
-          {error && (
-            <span style={{ color: "#f87171", fontSize: 13, marginRight: "auto" }}>
-              {error}
-            </span>
-          )}
-
-          {state === "recording" && (
-            <button
-              onClick={handleStop}
-              style={{
-                background: "#374151",
-                border: "1px solid #4b5563",
-                borderRadius: 6,
-                color: "#f3f4f6",
-                fontSize: 13,
-                fontWeight: 500,
-                padding: "7px 18px",
-                cursor: "pointer",
-              }}
-            >
-              Stop Recording
-            </button>
-          )}
-
-          {state === "processing" && (
-            <span style={{ color: "#fbbf24", fontSize: 13 }}>
-              Transcribing…
-            </span>
-          )}
-
-          {state === "complete" && !summary && (
-            <button
-              onClick={handleGenerateSummary}
-              disabled={summaryLoading}
-              style={{
-                background: summaryLoading ? "#312e81" : "#4f46e5",
-                border: "none",
-                borderRadius: 6,
-                color: summaryLoading ? "#a5b4fc" : "#fff",
-                fontSize: 13,
-                fontWeight: 500,
-                padding: "7px 18px",
-                cursor: summaryLoading ? "default" : "pointer",
-              }}
-            >
-              {summaryLoading ? "Generating…" : "Generate Summary"}
-            </button>
-          )}
-        </div>
+        <MeetingFooter
+          state={state}
+          error={error}
+          summary={summary}
+          summaryLoading={summaryLoading}
+          processingElapsed={processingElapsed}
+          onStop={handleStop}
+          onReset={handleReset}
+          onGenerateSummary={handleGenerateSummary}
+        />
       )}
     </div>
   );

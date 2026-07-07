@@ -1,279 +1,31 @@
-import { useEffect, useRef, useState } from "react";
-import { Stage, Layer, Image as KonvaImage, Arrow, Rect, Text, Circle } from "react-konva";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Stage, Layer, Image as KonvaImage, Arrow, Rect } from "react-konva";
 import { invoke } from "@tauri-apps/api/core";
-import { create } from "zustand";
+import { listen } from "@tauri-apps/api/event";
 import Konva from "konva";
+import {
+  useEditorStore,
+  FONT_SIZE_MAP,
+  STROKE_WEIGHT_MAP,
+  type ToolType,
+} from "./editor/editorStore";
+import { AnnotationNode } from "./editor/AnnotationNode";
+import { EditorToolbar } from "./editor/EditorToolbar";
 
-// ── Types ──────────────────────────────────────────────────────────────────
-
-export type ToolType = "arrow" | "text" | "rect" | "highlight" | "blur" | "step";
-export type StrokeWeight = "thin" | "medium" | "thick";
-export type FontSize = "S" | "M" | "L";
-export type BlurIntensity = "light" | "strong" | "solid";
-
-export interface Annotation {
-  id: string;
-  type: ToolType;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  props: Record<string, any>;
-}
-
-// ── Store ──────────────────────────────────────────────────────────────────
-
-interface EditorState {
-  activeTool: ToolType;
-  annotations: Annotation[];
-  undoStack: Annotation[][];
-  stepCounter: number;
-  color: string;
-  strokeWeight: StrokeWeight;
-  fontSize: FontSize;
-  blurIntensity: BlurIntensity;
-  setActiveTool: (t: ToolType) => void;
-  setColor: (c: string) => void;
-  setStrokeWeight: (w: StrokeWeight) => void;
-  setFontSize: (s: FontSize) => void;
-  setBlurIntensity: (i: BlurIntensity) => void;
-  pushAnnotation: (a: Annotation) => void;
-  deleteAnnotation: (id: string) => void;
-  undo: () => void;
-  incrementStepCounter: () => void;
-  resetStepCounter: () => void;
-}
-
-export const useEditorStore = create<EditorState>((set, get) => ({
-  activeTool: "arrow",
-  annotations: [],
-  undoStack: [],
-  stepCounter: 1,
-  color: "#ff4444",
-  strokeWeight: "medium",
-  fontSize: "M",
-  blurIntensity: "strong",
-  setActiveTool: (t) => set({ activeTool: t }),
-  setColor: (c) => set({ color: c }),
-  setStrokeWeight: (w) => set({ strokeWeight: w }),
-  setFontSize: (s) => set({ fontSize: s }),
-  setBlurIntensity: (i) => set({ blurIntensity: i }),
-  pushAnnotation: (a) =>
-    set((s) => ({
-      undoStack: [...s.undoStack.slice(-19), s.annotations],
-      annotations: [...s.annotations, a],
-    })),
-  deleteAnnotation: (id) =>
-    set((s) => ({
-      undoStack: [...s.undoStack.slice(-19), s.annotations],
-      annotations: s.annotations.filter((a) => a.id !== id),
-    })),
-  undo: () => {
-    const { undoStack } = get();
-    if (undoStack.length === 0) return;
-    const prev = undoStack[undoStack.length - 1];
-    set({ annotations: prev, undoStack: undoStack.slice(0, -1) });
-  },
-  incrementStepCounter: () => set((s) => ({ stepCounter: s.stepCounter + 1 })),
-  resetStepCounter: () => set({ stepCounter: 1 }),
-}));
-
-// ── Annotation renderer ────────────────────────────────────────────────────
-
-const FONT_SIZE_MAP: Record<FontSize, number> = { S: 14, M: 18, L: 24 };
-const STROKE_WEIGHT_MAP: Record<StrokeWeight, number> = { thin: 2, medium: 4, thick: 7 };
-
-function AnnotationNode({
-  ann,
-  isSelected,
-  onSelect,
-}: {
-  ann: Annotation;
-  isSelected: boolean;
-  onSelect: (id: string) => void;
-}) {
-  const p = ann.props;
-  const handleClick = () => onSelect(ann.id);
-
-  if (ann.type === "arrow") {
-    return (
-      <Arrow
-        points={p.points}
-        stroke={p.color}
-        strokeWidth={p.strokeWidth}
-        fill={p.color}
-        pointerLength={10}
-        pointerWidth={8}
-        onClick={handleClick}
-        opacity={isSelected ? 0.75 : 1}
-        draggable
-      />
-    );
-  }
-  if (ann.type === "text") {
-    return (
-      <Text
-        x={p.x} y={p.y}
-        text={p.text}
-        fontSize={p.fontSize}
-        fill={p.color}
-        onClick={handleClick}
-        opacity={isSelected ? 0.75 : 1}
-        draggable
-      />
-    );
-  }
-  if (ann.type === "rect") {
-    return (
-      <Rect
-        x={p.x} y={p.y} width={p.width} height={p.height}
-        stroke={p.color}
-        strokeWidth={p.strokeWidth}
-        fill={p.fill ?? "transparent"}
-        onClick={handleClick}
-        opacity={isSelected ? 0.75 : 1}
-        draggable
-      />
-    );
-  }
-  if (ann.type === "highlight") {
-    return (
-      <Rect
-        x={p.x} y={p.y} width={p.width} height={p.height}
-        fill={p.color}
-        listening={false}
-        opacity={isSelected ? 0.5 : 1}
-      />
-    );
-  }
-  if (ann.type === "blur") {
-    return (
-      <Rect
-        x={p.x} y={p.y} width={p.width} height={p.height}
-        fill={p.fill}
-        onClick={handleClick}
-        opacity={isSelected ? 0.75 : 1}
-        draggable
-      />
-    );
-  }
-  if (ann.type === "step") {
-    return (
-      <>
-        <Circle
-          x={p.x} y={p.y} radius={14}
-          fill={p.color}
-          onClick={handleClick}
-          opacity={isSelected ? 0.75 : 1}
-          draggable
-        />
-        <Text
-          x={p.x - 14} y={p.y - 14}
-          width={28} height={28}
-          text={String(p.step)}
-          fontSize={13}
-          fontStyle="bold"
-          fill="#fff"
-          align="center"
-          verticalAlign="middle"
-          listening={false}
-        />
-      </>
-    );
-  }
-  return null;
-}
-
-// ── Toolbar ────────────────────────────────────────────────────────────────
-
-const TOOL_COLORS = ["#ff4444", "#44aaff", "#44dd44", "#ffdd44", "#ffffff"];
-const HIGHLIGHT_COLORS = ["rgba(255,221,0,0.4)", "rgba(0,255,128,0.4)", "rgba(0,170,255,0.4)", "rgba(255,80,80,0.4)"];
-const labelStyle: React.CSSProperties = { fontSize: 11, color: "#666", textTransform: "uppercase", letterSpacing: 1 };
-const optBtnStyle: React.CSSProperties = { width: 30, height: 26, background: "#2a2a3e", border: "none", borderRadius: 4, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" };
-const TOOLS: { id: ToolType; label: string }[] = [
-  { id: "arrow", label: "→" },
-  { id: "text", label: "T" },
-  { id: "rect", label: "□" },
-  { id: "highlight", label: "〰" },
-  { id: "blur", label: "▓" },
-  { id: "step", label: "①" },
-];
-
-function ToolOptions() {
-  const { activeTool, color, strokeWeight, fontSize, blurIntensity,
-          setColor, setStrokeWeight, setFontSize, setBlurIntensity } = useEditorStore();
-
-  const swatch = (c: string, key: string) => (
-    <button
-      key={key}
-      onClick={() => setColor(c)}
-      style={{
-        width: 20, height: 20, borderRadius: "50%", background: c,
-        border: color === c ? "2px solid #fff" : "2px solid transparent",
-        cursor: "pointer", padding: 0,
-      }}
-    />
-  );
-
-  if (activeTool === "arrow" || activeTool === "rect") return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-      <span style={labelStyle}>Color</span>
-      <div style={{ display: "flex", gap: 4 }}>{TOOL_COLORS.map((c) => swatch(c, c))}</div>
-      <span style={{ ...labelStyle, marginLeft: 8 }}>Weight</span>
-      {(["thin", "medium", "thick"] as StrokeWeight[]).map((w) => (
-        <button key={w} onClick={() => setStrokeWeight(w)}
-          style={{ ...optBtnStyle, border: strokeWeight === w ? "1px solid #6c63ff" : "1px solid transparent" }}>
-          <div style={{ height: w === "thin" ? 1.5 : w === "medium" ? 3 : 5, width: 14, background: "#aaa", borderRadius: 2 }} />
-        </button>
-      ))}
-    </div>
-  );
-
-  if (activeTool === "text") return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-      <span style={labelStyle}>Color</span>
-      <div style={{ display: "flex", gap: 4 }}>{TOOL_COLORS.map((c) => swatch(c, c))}</div>
-      <span style={{ ...labelStyle, marginLeft: 8 }}>Size</span>
-      {(["S", "M", "L"] as FontSize[]).map((s) => (
-        <button key={s} onClick={() => setFontSize(s)}
-          style={{ ...optBtnStyle, border: fontSize === s ? "1px solid #6c63ff" : "1px solid transparent", fontSize: 11, color: "#aaa" }}>
-          {s}
-        </button>
-      ))}
-    </div>
-  );
-
-  if (activeTool === "highlight") return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-      <span style={labelStyle}>Color</span>
-      <div style={{ display: "flex", gap: 4 }}>{HIGHLIGHT_COLORS.map((c) => swatch(c, c))}</div>
-    </div>
-  );
-
-  if (activeTool === "blur") return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-      <span style={labelStyle}>Intensity</span>
-      {(["light", "strong", "solid"] as BlurIntensity[]).map((i) => (
-        <button key={i} onClick={() => setBlurIntensity(i)}
-          style={{ ...optBtnStyle, border: blurIntensity === i ? "1px solid #6c63ff" : "1px solid transparent", fontSize: 11, color: "#aaa", padding: "0 8px" }}>
-          {i === "solid" ? "Solid ■" : i.charAt(0).toUpperCase() + i.slice(1)}
-        </button>
-      ))}
-    </div>
-  );
-
-  if (activeTool === "step") return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-      <span style={labelStyle}>Color</span>
-      <div style={{ display: "flex", gap: 4 }}>{TOOL_COLORS.slice(0, 3).map((c) => swatch(c, c))}</div>
-      <span style={{ ...labelStyle, marginLeft: 8, color: "#555" }}>Auto-increments ①②③…</span>
-    </div>
-  );
-
-  return null;
-}
+// Re-exported so existing importers keep a stable public API.
+export {
+  useEditorStore,
+  type ToolType,
+  type StrokeWeight,
+  type FontSize,
+  type BlurIntensity,
+  type Annotation,
+} from "./editor/editorStore";
 
 // ── Main component ─────────────────────────────────────────────────────────
 
 export function EditorWindow() {
-  const { activeTool, setActiveTool, undo, annotations, color, strokeWeight, fontSize, blurIntensity, stepCounter, pushAnnotation, incrementStepCounter } = useEditorStore();
+  const { activeTool, undo, annotations, color, strokeWeight, fontSize, blurIntensity, stepCounter, pushAnnotation, incrementStepCounter } = useEditorStore();
   const [imageEl, setImageEl] = useState<HTMLImageElement | null>(null);
   const [stageSize, setStageSize] = useState({ width: 800, height: 600 });
   const [copyToast, setCopyToast] = useState(false);
@@ -285,8 +37,8 @@ export function EditorWindow() {
   const [liveRect, setLiveRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const [livePoints, setLivePoints] = useState<number[]>([]);
 
-  // Load captured image from Rust state
-  useEffect(() => {
+  // Fetch the captured image from Rust state and load it onto the stage.
+  const loadCapture = useCallback(() => {
     invoke<{ image: string; library_id: string | null } | null>("get_captured_image").then((data) => {
       if (!data) return;
       libraryIdRef.current = data.library_id;
@@ -298,6 +50,21 @@ export function EditorWindow() {
       };
     });
   }, []);
+
+  // Load on mount.
+  useEffect(() => { loadCapture(); }, [loadCapture]);
+
+  // When the Rust side reuses this window for a new capture (instead of
+  // close→create to avoid the label-conflict race), it emits "reload-capture".
+  // Reset annotation state, then load the new image.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen<void>("reload-capture", () => {
+      useEditorStore.setState({ annotations: [], undoStack: [], stepCounter: 1, activeTool: "arrow" });
+      loadCapture();
+    }).then((fn) => { unlisten = fn; });
+    return () => { unlisten?.(); };
+  }, [loadCapture]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -429,58 +196,17 @@ export function EditorWindow() {
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", width: "100vw", height: "100vh", background: "#111" }}>
-      {/* Toolbar */}
-      <div style={{
-        display: "flex", alignItems: "center", gap: 4,
-        padding: "6px 10px", background: "#1a1a2e",
-        borderBottom: "1px solid #333", flexShrink: 0,
-      }}>
-        <div style={{ display: "flex", gap: 3 }}>
-          {TOOLS.map((t) => (
-            <button
-              key={t.id}
-              onClick={() => setActiveTool(t.id)}
-              style={{
-                width: 32, height: 32, background: activeTool === t.id ? "#6c63ff" : "#2a2a3e",
-                border: "none", borderRadius: 6, cursor: "pointer",
-                color: activeTool === t.id ? "#fff" : "#aaa", fontSize: 14,
-                display: "flex", alignItems: "center", justifyContent: "center",
-              }}
-              title={t.id}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-        <div style={{ width: 1, height: 24, background: "#333", margin: "0 4px" }} />
-        <div style={{ flex: 1 }}><ToolOptions /></div>
-        <div style={{ width: 1, height: 24, background: "#333", margin: "0 4px" }} />
-        <button onClick={undo} style={{ width: 32, height: 32, background: "#2a2a3e", border: "none", borderRadius: 6, cursor: "pointer", color: "#aaa", fontSize: 16 }} title="Undo (⌘Z)">↩</button>
-        <div style={{ width: 1, height: 24, background: "#333", margin: "0 4px" }} />
-        <button onClick={handleCopy} style={{ width: 32, height: 32, background: "#2a2a3e", border: "none", borderRadius: 6, cursor: "pointer", color: "#aaa", fontSize: 14 }} title="Copy to clipboard">
-          {copyToast ? "✓" : "📋"}
-        </button>
-        <div style={{ position: "relative" }}>
-          <button onClick={() => setSaveOpen((o) => !o)}
-            style={{ height: 32, padding: "0 12px", background: "#2a3e2a", border: "none", borderRadius: 6, cursor: "pointer", color: "#5fb85f", fontSize: 12, fontWeight: 600 }}>
-            Save ▾
-          </button>
-          {saveOpen && (
-            <div style={{ position: "absolute", top: 36, right: 0, background: "#1a1a2e", border: "1px solid #333", borderRadius: 6, overflow: "hidden", zIndex: 100 }}>
-              {["png", "jpg"].map((fmt) => (
-                <button key={fmt} onClick={() => { setSaveOpen(false); handleSave(fmt as "png" | "jpg"); }}
-                  style={{ display: "block", width: "100%", padding: "8px 16px", background: "none", border: "none", color: "#ccc", cursor: "pointer", fontSize: 12, textAlign: "left" }}>
-                  Save as {fmt.toUpperCase()}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
+    <div className="flex flex-col w-screen h-screen bg-[#111]">
+      <EditorToolbar
+        copyToast={copyToast}
+        saveOpen={saveOpen}
+        setSaveOpen={setSaveOpen}
+        onCopy={handleCopy}
+        onSave={handleSave}
+      />
 
       {/* Canvas area */}
-      <div style={{ flex: 1, overflow: "auto", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+      <div className="flex-1 overflow-auto flex items-center justify-center p-6">
         <Stage
           ref={stageRef}
           width={stageSize.width}

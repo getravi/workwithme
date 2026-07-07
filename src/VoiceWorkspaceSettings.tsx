@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Save, CheckCircle2, AlertCircle, Wifi, Keyboard } from "lucide-react";
+import { Save, CheckCircle2, AlertCircle, Wifi } from "lucide-react";
+import { useDebouncedSave } from "./hooks/useDebouncedSave";
+import { ShortcutSection, type ShortcutsConfig } from "./ShortcutSection";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -60,8 +62,9 @@ export function VoiceWorkspaceSettings() {
   const [keySaveStatus, setKeySaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("idle");
   const [connectionMessage, setConnectionMessage] = useState("");
+  const [shortcuts, setShortcuts] = useState<ShortcutsConfig | null>(null);
+  const [whisperAvailable, setWhisperAvailable] = useState<boolean | null>(null);
 
-  const saveDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -77,20 +80,29 @@ export function VoiceWorkspaceSettings() {
       } catch {
         // non-critical — keep defaults
       }
+      try {
+        const sc = await invoke<ShortcutsConfig>("voice_get_shortcuts");
+        if (!mountedRef.current) return;
+        setShortcuts(sc);
+      } catch {
+        // non-critical — leave null, section stays hidden
+      }
+      try {
+        const available = await invoke<boolean>("whisper_model_available");
+        if (!mountedRef.current) return;
+        setWhisperAvailable(available);
+      } catch {
+        // non-critical
+      }
     })();
     return () => { mountedRef.current = false; };
   }, []);
 
-  const debouncedSave = useCallback((cfg: LlmConfig) => {
-    if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current);
-    saveDebounceRef.current = setTimeout(async () => {
-      try {
-        await invoke("llm_save_config", { config: cfg });
-      } catch {
-        // non-critical
-      }
-    }, 500);
-  }, []);
+  // Debounced config save that also flushes on unmount (e.g. user closes the
+  // settings window immediately after editing a field).
+  const debouncedSave = useDebouncedSave<LlmConfig>((cfg) => {
+    invoke("llm_save_config", { config: cfg }).catch(() => {});
+  }, 500);
 
   const updateConfig = useCallback((patch: Partial<LlmConfig>) => {
     setConfig((prev) => {
@@ -262,31 +274,19 @@ export function VoiceWorkspaceSettings() {
         </section>
       )}
 
-      {/* Keyboard Shortcuts */}
-      <section>
-        <h3 className="text-[12px] font-semibold text-gray-400 uppercase tracking-wider mb-3 flex items-center gap-2">
-          <Keyboard className="w-3.5 h-3.5" /> Keyboard Shortcuts
-        </h3>
-        <div className="space-y-1 bg-[#111827] rounded-lg border border-[#1f2937] p-1">
-          {[
-            { keys: ["⌘", "⇧", "Space"], description: "Dictate into active window (global)" },
-            { keys: ["⌘", "⌃", "7"], description: "Open new meeting (global)" },
-            { keys: ["⌘", "⌃", "6"], description: "Record screen" },
-          ].map(({ keys, description }, i) => (
-            <div key={i} className="flex items-center justify-between px-2 py-2 rounded-md hover:bg-[#1f2937]/60">
-              <span className="text-[13px] text-gray-300">{description}</span>
-              <div className="flex items-center gap-1 flex-shrink-0">
-                {keys.map((k, ki) => (
-                  <kbd key={ki} className="px-1.5 py-0.5 bg-[#1f2937] border border-[#374151] rounded text-[11px] text-gray-300 font-mono">
-                    {k}
-                  </kbd>
-                ))}
-              </div>
-            </div>
-          ))}
+      {/* Whisper model warning */}
+      {whisperAvailable === false && (
+        <div className="flex items-start gap-2 text-amber-400 text-[13px] bg-amber-400/10 p-3 rounded-lg border border-amber-400/20">
+          <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+          <span>
+            Voice model not found — dictation and meeting transcription are disabled.
+            Place <code className="font-mono text-[12px]">ggml-small.en-q8_0.bin</code> in the app resources folder and restart.
+          </span>
         </div>
-        <p className="mt-2 text-[11px] text-gray-500">Global shortcuts work system-wide when the app is running.</p>
-      </section>
+      )}
+
+      {/* Keyboard Shortcuts */}
+      {shortcuts && <ShortcutSection shortcuts={shortcuts} onChange={setShortcuts} />}
 
       {/* Test Connection */}
       <section>

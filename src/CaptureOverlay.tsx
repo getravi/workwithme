@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { overlayOrigin } from "./overlayOrigin";
 
 interface Point { x: number; y: number; }
 interface Rect { x: number; y: number; width: number; height: number; }
@@ -25,6 +26,8 @@ export function CaptureOverlay({ mode = "capture" }: CaptureOverlayProps) {
   const startRef = useRef<Point>({ x: 0, y: 0 });
   const currentRef = useRef<Point>({ x: 0, y: 0 });
 
+  const { x: offsetX, y: offsetY } = overlayOrigin();
+
   // Draw dimmed overlay + selection rect
   function draw(canvas: HTMLCanvasElement, start: Point, current: Point) {
     const ctx = canvas.getContext("2d")!;
@@ -40,11 +43,12 @@ export function CaptureOverlay({ mode = "capture" }: CaptureOverlayProps) {
     ctx.strokeStyle = "rgba(100, 180, 255, 0.9)";
     ctx.lineWidth = 1.5;
     ctx.strokeRect(rect.x, rect.y, rect.width, rect.height);
-    // Size label
+    // Size label — drawn above the selection, or below when near the top edge.
     if (rect.width > 40 && rect.height > 20) {
       ctx.fillStyle = "rgba(100, 180, 255, 0.9)";
       ctx.font = "12px -apple-system, sans-serif";
-      ctx.fillText(`${Math.round(rect.width)} × ${Math.round(rect.height)}`, rect.x + 4, rect.y - 6);
+      const labelY = rect.y > 18 ? rect.y - 6 : rect.y + rect.height + 14;
+      ctx.fillText(`${Math.round(rect.width)} × ${Math.round(rect.height)}`, rect.x + 4, labelY);
     }
   }
 
@@ -94,15 +98,17 @@ export function CaptureOverlay({ mode = "capture" }: CaptureOverlayProps) {
       if (mode === "record") {
         const { emit } = await import("@tauri-apps/api/event");
         await emit("recording-region-selected", {
-          x: Math.round(rect.x),
-          y: Math.round(rect.y),
+          // Translate window-relative coords to global screen coords.
+          x: Math.round(rect.x) + offsetX,
+          y: Math.round(rect.y) + offsetY,
           width: Math.round(rect.width),
           height: Math.round(rect.height),
         });
       } else {
         const base64Png: string = await invoke("capture_region", {
-          x: Math.round(rect.x),
-          y: Math.round(rect.y),
+          // Translate window-relative coords to global screen coords.
+          x: Math.round(rect.x) + offsetX,
+          y: Math.round(rect.y) + offsetY,
           width: Math.round(rect.width),
           height: Math.round(rect.height),
         });
