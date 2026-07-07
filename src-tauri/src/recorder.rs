@@ -372,7 +372,7 @@ pub fn open_region_select_recording(app: tauri::AppHandle) -> Result<(), String>
         let _ = w.set_focus();
         return Ok(());
     }
-    let screens = screenshots::Screen::all().unwrap_or_default();
+    let screens = xcap::Monitor::all().unwrap_or_default();
     let (min_x, min_y, max_x, max_y) = screen_bounds(&screens);
     // Pass overlay origin so the frontend can translate window-relative mouse
     // coordinates to global screen coordinates (needed for multi-monitor setups).
@@ -460,26 +460,28 @@ pub fn recording_get_trim_path() -> Result<Option<String>, String> {
 /// Compute the bounding box that encloses all screens.
 /// Returns `(min_x, min_y, max_x, max_y)` in logical pixels, or a safe
 /// default of `(0, 0, 1920, 1080)` when no screens are provided.
-pub fn screen_bounds(screens: &[screenshots::Screen]) -> (i32, i32, i32, i32) {
-    if screens.is_empty() {
+pub fn screen_bounds(monitors: &[xcap::Monitor]) -> (i32, i32, i32, i32) {
+    if monitors.is_empty() {
         return (0, 0, 1920, 1080);
     }
-    let min_x = screens.iter().map(|s| s.display_info.x).min().unwrap_or(0);
-    let min_y = screens.iter().map(|s| s.display_info.y).min().unwrap_or(0);
-    let max_x = screens
+    // xcap accessors return Result; a monitor whose geometry can't be read is
+    // skipped rather than aborting the whole bounds computation.
+    let logical_width = |m: &xcap::Monitor| -> Option<i32> {
+        Some((m.width().ok()? as f64 / m.scale_factor().ok()? as f64) as i32)
+    };
+    let logical_height = |m: &xcap::Monitor| -> Option<i32> {
+        Some((m.height().ok()? as f64 / m.scale_factor().ok()? as f64) as i32)
+    };
+    let min_x = monitors.iter().filter_map(|m| m.x().ok()).min().unwrap_or(0);
+    let min_y = monitors.iter().filter_map(|m| m.y().ok()).min().unwrap_or(0);
+    let max_x = monitors
         .iter()
-        .map(|s| {
-            s.display_info.x
-                + (s.display_info.width as f64 / s.display_info.scale_factor as f64) as i32
-        })
+        .filter_map(|m| Some(m.x().ok()? + logical_width(m)?))
         .max()
         .unwrap_or(1920);
-    let max_y = screens
+    let max_y = monitors
         .iter()
-        .map(|s| {
-            s.display_info.y
-                + (s.display_info.height as f64 / s.display_info.scale_factor as f64) as i32
-        })
+        .filter_map(|m| Some(m.y().ok()? + logical_height(m)?))
         .max()
         .unwrap_or(1080);
     (min_x, min_y, max_x, max_y)

@@ -5,7 +5,7 @@
 //! - [`server`] — Axum HTTP server (skills, sessions, files, MCP, OAuth, …)
 //! - [`audio`] — cpal microphone capture
 //! - [`transcription`] — Whisper VAD + inference pipeline
-//! - [`capture`] — screenshot capture via the `screenshots` crate
+//! - [`capture`] — screenshot capture via the `xcap` crate
 //! - [`library`] — SQLite capture library with FTS5 and OCR indexing
 //! - [`recorder`] — FFmpeg screen/audio recording
 //! - [`voice_db`] — SQLite voice-note store
@@ -668,7 +668,7 @@ fn open_window_capture_overlay(app: &tauri::AppHandle) {
         let _ = w.set_focus();
         return;
     }
-    let screens = screenshots::Screen::all().unwrap_or_default();
+    let screens = xcap::Monitor::all().unwrap_or_default();
     let (min_x, min_y, max_x, max_y) = recorder::screen_bounds(&screens);
     if let Err(e) = tauri::WebviewWindowBuilder::new(
         app,

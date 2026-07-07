@@ -62,7 +62,7 @@ rust-embed = { version = "8", features = ["compression"] }
 
 # Phase 6 dependencies
 arboard = "3"
-screenshots = "0.8"
+xcap = "0.9"
 image = "0.25"
 notify-rust = "4"
 dirs = "5"

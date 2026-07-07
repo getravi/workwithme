@@ -1,6 +1,6 @@
 //! Screen and window capture commands.
 //!
-//! Uses the [`screenshots`] crate (CoreGraphics on macOS) to capture pixels,
+//! Uses the [`xcap`] crate (CoreGraphics on macOS) to capture pixels,
 //! encodes them as base64 PNG, and stores the result in [`CaptureState`]
 //! (Tauri managed state) for the editor window to retrieve on mount.
 //!
@@ -34,7 +34,7 @@ pub struct CapturedImageData {
 
 /// Capture a rectangular region of the screen.
 /// Returns a base64-encoded PNG string.
-/// Coordinates are in logical pixels (points); the screenshots crate / CoreGraphics
+/// Coordinates are in logical pixels (points); xcap / CoreGraphics
 /// handles HiDPI internally — no manual scaling is needed from the caller.
 #[tauri::command]
 pub fn capture_region(
@@ -48,17 +48,24 @@ pub fn capture_region(
         return Err("selection too small to capture".to_string());
     }
 
-    // The screenshots crate operates in logical coordinates (CoreGraphics points on macOS).
-    // No manual HiDPI scaling is needed — the OS handles pixel density internally.
-    let screen = screenshots::Screen::from_point(x, y)
+    // Incoming (x, y) are global logical points. xcap::capture_region expects
+    // coordinates RELATIVE to the target monitor's origin (and unsigned), so we
+    // translate by the monitor's own origin. On the primary monitor at (0, 0)
+    // this is a no-op; on secondary monitors it yields the correct region.
+    // Verify capture alignment on-device, especially multi-monitor / HiDPI.
+    let monitor = xcap::Monitor::from_point(x, y)
         .map_err(|e| format!("screen lookup failed: {e}"))?;
+    let mx = monitor.x().map_err(|e| format!("monitor origin x: {e}"))?;
+    let my = monitor.y().map_err(|e| format!("monitor origin y: {e}"))?;
+    let rel_x = (x - mx).max(0) as u32;
+    let rel_y = (y - my).max(0) as u32;
 
-    let capture = screen
-        .capture_area(x, y, width, height)
+    let capture = monitor
+        .capture_region(rel_x, rel_y, width, height)
         .map_err(|e| format!("capture failed: {e}"))?;
 
-    // Work around screenshots 0.8 bundling image 0.24 while project uses image 0.25:
-    // extract raw RGBA bytes and re-wrap into the project's image::RgbaImage.
+    // Extract raw RGBA bytes and re-wrap into the project's image::RgbaImage so
+    // the PNG encode path is independent of xcap's bundled image version.
     let (w, h) = (capture.width(), capture.height());
     let raw_bytes = capture.into_raw();
     let rgba_img = image::RgbaImage::from_raw(w, h, raw_bytes)
@@ -144,7 +151,7 @@ pub fn open_capture_overlay(app: AppHandle) -> Result<(), String> {
         return Ok(());
     }
 
-    let screens = screenshots::Screen::all().unwrap_or_default();
+    let screens = xcap::Monitor::all().unwrap_or_default();
     let (min_x, min_y, max_x, max_y) = crate::recorder::screen_bounds(&screens);
 
     // Pass overlay origin so the frontend can translate window-relative mouse
@@ -173,15 +180,15 @@ pub fn open_capture_overlay(app: AppHandle) -> Result<(), String> {
 /// Capture the entire primary screen and open the annotation editor.
 #[tauri::command]
 pub fn capture_fullscreen(app: AppHandle) -> Result<(), String> {
-    let screens = screenshots::Screen::all().map_err(|e| format!("screen lookup: {e}"))?;
+    let screens = xcap::Monitor::all().map_err(|e| format!("screen lookup: {e}"))?;
     // Primary screen is the one at logical origin (0, 0)
     let screen = screens
         .iter()
-        .find(|s| s.display_info.x == 0 && s.display_info.y == 0)
+        .find(|m| m.x().ok() == Some(0) && m.y().ok() == Some(0))
         .or_else(|| screens.first())
         .ok_or("no screen found")?;
 
-    let capture = screen.capture().map_err(|e| format!("capture failed: {e}"))?;
+    let capture = screen.capture_image().map_err(|e| format!("capture failed: {e}"))?;
     let (w, h) = (capture.width(), capture.height());
     let raw_bytes = capture.into_raw();
     let rgba_img = image::RgbaImage::from_raw(w, h, raw_bytes)
