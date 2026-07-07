@@ -31,7 +31,7 @@ use axum::extract::ws::{Message, WebSocket};
 use futures::stream::StreamExt;
 use pi::sdk::{AgentEvent, SessionOptions};
 use serde_json::{json, Value};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use tokio::sync::mpsc;
@@ -52,12 +52,10 @@ struct WsConnectionMetadata {
     session_id: Option<String>,
 }
 
-lazy_static::lazy_static! {
-    /// Global map of active WebSocket connections, keyed by connection ID.
-    /// Cleaned up on disconnect to prevent memory leaks.
-    static ref WS_CONNECTIONS: Arc<RwLock<HashMap<String, WsConnectionMetadata>>> =
-        Arc::new(RwLock::new(HashMap::new()));
-}
+/// Global map of active WebSocket connections, keyed by connection ID.
+/// Cleaned up on disconnect to prevent memory leaks.
+static WS_CONNECTIONS: LazyLock<Arc<RwLock<HashMap<String, WsConnectionMetadata>>>> =
+    LazyLock::new(|| Arc::new(RwLock::new(HashMap::new())));
 
 // ─── Wire Types ──────────────────────────────────────────────────────────────
 

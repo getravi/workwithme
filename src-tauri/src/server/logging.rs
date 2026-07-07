@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Mutex, LazyLock};
 
 /// Log level
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -41,15 +41,13 @@ pub struct LogConfig {
     pub file_path: PathBuf,
 }
 
-lazy_static::lazy_static! {
-    static ref LOG_CONFIG: Mutex<LogConfig> = {
-        let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-        Mutex::new(LogConfig {
-            level: LogLevel::Info,
-            file_path: home.join(".pi/debug.log"),
-        })
-    };
-}
+static LOG_CONFIG: LazyLock<Mutex<LogConfig>> = LazyLock::new(|| {
+    let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+    Mutex::new(LogConfig {
+        level: LogLevel::Info,
+        file_path: home.join(".pi/debug.log"),
+    })
+});
 
 /// Set log level
 pub fn set_log_level(level: LogLevel) -> Result<(), String> {

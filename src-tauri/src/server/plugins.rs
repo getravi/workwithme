@@ -7,9 +7,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use tokio::sync::RwLock;
-use lazy_static::lazy_static;
 
 /// Plugin manifest metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,13 +41,11 @@ pub struct PluginRegistry {
     plugins: HashMap<String, Plugin>,
 }
 
-lazy_static! {
-    static ref REGISTRY: Arc<RwLock<PluginRegistry>> = {
-        Arc::new(RwLock::new(PluginRegistry {
-            plugins: HashMap::new(),
-        }))
-    };
-}
+static REGISTRY: LazyLock<Arc<RwLock<PluginRegistry>>> = LazyLock::new(|| {
+    Arc::new(RwLock::new(PluginRegistry {
+        plugins: HashMap::new(),
+    }))
+});
 
 /// Get plugins directory: ~/.pi/plugins
 fn get_plugins_dir() -> PathBuf {

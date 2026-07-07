@@ -10,14 +10,12 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
 use chrono::Local;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, LazyLock};
 use std::collections::HashMap;
 
-lazy_static::lazy_static! {
-    /// Rate limiter for notifications (max 10 per minute per title)
-    static ref NOTIFICATION_RATE_LIMITER: Arc<Mutex<HashMap<String, Vec<i64>>>> =
-        Arc::new(Mutex::new(HashMap::new()));
-}
+/// Rate limiter for notifications (max 10 per minute per title)
+static NOTIFICATION_RATE_LIMITER: LazyLock<Arc<Mutex<HashMap<String, Vec<i64>>>>> =
+    LazyLock::new(|| Arc::new(Mutex::new(HashMap::new())));
 
 /// Notification entry
 #[derive(Debug, Clone, Serialize, Deserialize)]
