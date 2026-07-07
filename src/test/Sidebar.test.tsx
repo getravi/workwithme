@@ -26,7 +26,7 @@ function makeSessionCtx(o: Partial<SessionContextValue> = {}): SessionContextVal
 function makeChatCtx(o: Partial<ChatContextValue> = {}): ChatContextValue {
   return {
     messages: [], toolExecutions: [], isProcessing: false, isSteering: false,
-    currentToolStatus: null, approvalRequest: null, isApprovingLoading: false, chatError: null,
+    currentToolStatus: null, approvalRequest: null, isLoadingSession: false, chatError: null,
     handleSubmit: vi.fn(), handleStop: vi.fn(), handleApprovalResponse: vi.fn(),
     clearMessages: vi.fn(), loadSession: vi.fn(), setChatError: vi.fn(),
     ...o,

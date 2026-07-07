@@ -9,7 +9,7 @@ import type { UIContextValue } from "../context/UIContext";
 function makeChatCtx(overrides: Partial<ChatContextValue> = {}): ChatContextValue {
   return {
     messages: [], toolExecutions: [], isProcessing: false, isSteering: false,
-    currentToolStatus: null, approvalRequest: null, isApprovingLoading: false, chatError: null,
+    currentToolStatus: null, approvalRequest: null, isLoadingSession: false, chatError: null,
     handleSubmit: vi.fn(), handleStop: vi.fn(), handleApprovalResponse: vi.fn(),
     clearMessages: vi.fn(), loadSession: vi.fn(), setChatError: vi.fn(),
     ...overrides,

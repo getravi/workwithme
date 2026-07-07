@@ -14,7 +14,7 @@ const mockApproval: ApprovalRequest = {
 
 function makeCtx(overrides: Partial<ChatContextValue> = {}): ChatContextValue {
   return {
-    messages: [], toolExecutions: [], isProcessing: false, isSteering: false,
+    messages: [], toolExecutions: [], isProcessing: false, isLoadingSession: false, isSteering: false,
     currentToolStatus: null, approvalRequest: null, chatError: null,
     handleSubmit: vi.fn(), handleStop: vi.fn(), handleApprovalResponse: vi.fn(),
     clearMessages: vi.fn(), loadSession: vi.fn(), setChatError: vi.fn(),
