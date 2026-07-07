@@ -10,7 +10,11 @@ vi.mock("@tauri-apps/api/core", () => ({
   convertFileSrc: mockConvertFileSrc,
 }));
 vi.mock("@tauri-apps/api/window", () => ({
-  getCurrentWindow: () => ({ close: vi.fn() }),
+  getCurrentWindow: () => ({
+    close: vi.fn(),
+    destroy: vi.fn().mockResolvedValue(undefined),
+    onCloseRequested: vi.fn().mockResolvedValue(() => {}),
+  }),
 }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   save: mockSave,

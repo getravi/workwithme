@@ -28,11 +28,13 @@ export function LibraryGrid({ query, selected, onSelect, style }: LibraryGridPro
   const [entries, setEntries] = useState<CaptureEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [hasMore, setHasMore] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
   const load = useCallback(async (q: string, cursor?: number) => {
     setLoading(true);
+    setLoadError(null);
     try {
       const results: CaptureEntry[] = q
         ? await invoke("library_search", { query: q })
@@ -45,6 +47,7 @@ export function LibraryGrid({ query, selected, onSelect, style }: LibraryGridPro
       setHasMore(results.length === 50);
     } catch (e) {
       console.error("[LibraryGrid] load error:", e);
+      setLoadError("Failed to load captures.");
     } finally {
       setLoading(false);
     }
@@ -81,36 +84,27 @@ export function LibraryGrid({ query, selected, onSelect, style }: LibraryGridPro
   }, [hasMore, loading, query, entries, load]);
 
   return (
-    <div style={{ overflowY: "auto", padding: 12, ...style }}>
-      {entries.length === 0 && !loading && (
-        <p style={{ color: "#6b7280", textAlign: "center", marginTop: 40 }}>
+    <div className="overflow-y-auto p-[12px]" style={style}>
+      {loadError && (
+        <p className="text-[#f87171] text-center mt-[40px]">{loadError}</p>
+      )}
+      {entries.length === 0 && !loading && !loadError && (
+        <p className="text-[#6b7280] text-center mt-[40px]">
           {query ? "No captures match your search." : "No captures yet."}
         </p>
       )}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(3, 1fr)",
-          gap: 10,
-        }}
-      >
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-[10px]">
         {entries.map((entry) => (
           <div
             key={entry.id}
             data-testid={`capture-card-${entry.id}`}
             onClick={() => onSelect(entry)}
-            style={{
-              background: "#1e2a3a",
-              borderRadius: 8,
-              overflow: "hidden",
-              cursor: "pointer",
-              border: selected?.id === entry.id
-                ? "2px solid #6c63ff"
-                : "2px solid transparent",
-              transition: "border-color 0.15s",
-            }}
+            className={`bg-[#1e2a3a] rounded-[8px] overflow-hidden cursor-pointer border-2 ${
+              selected?.id === entry.id ? "border-[#6c63ff]" : "border-transparent"
+            }`}
+            style={{ transition: "border-color 0.15s" }}
           >
-            <div style={{ position: "relative" }}>
+            <div className="relative">
               <img
                 src={convertFileSrc(
                   entry.media_type === "video" && entry.thumbnail_path
@@ -118,56 +112,32 @@ export function LibraryGrid({ query, selected, onSelect, style }: LibraryGridPro
                     : entry.file_path
                 )}
                 alt=""
-                style={{
-                  width: "100%",
-                  aspectRatio: "4/3",
-                  objectFit: "cover",
-                  display: "block",
-                }}
+                className="w-full aspect-[4/3] object-cover block"
               />
               {entry.is_draft && (
                 <div
                   data-testid={`draft-dot-${entry.id}`}
-                  style={{
-                    position: "absolute",
-                    top: 6,
-                    right: 6,
-                    width: 8,
-                    height: 8,
-                    background: "#f59e0b",
-                    borderRadius: "50%",
-                    border: "1px solid #1e2a3a",
-                  }}
+                  className="absolute top-[6px] right-[6px] w-[8px] h-[8px] bg-[#f59e0b] rounded-full border border-[#1e2a3a]"
                 />
               )}
               {entry.media_type === "video" && (
                 <div
                   data-testid={`video-badge-${entry.id}`}
-                  style={{
-                    position: "absolute",
-                    bottom: 6,
-                    left: 6,
-                    background: "rgba(0,0,0,0.7)",
-                    color: "#fff",
-                    fontSize: 10,
-                    padding: "2px 6px",
-                    borderRadius: 4,
-                    fontWeight: 600,
-                  }}
+                  className="absolute bottom-[6px] left-[6px] bg-[rgba(0,0,0,0.7)] text-white text-[10px] py-[2px] px-[6px] rounded-[4px] font-semibold"
                 >
                   ▶
                 </div>
               )}
             </div>
-            <div style={{ padding: "4px 8px 6px", fontSize: 11, color: "#9ca3af" }}>
+            <div className="pt-[4px] px-[8px] pb-[6px] text-[11px] text-[#9ca3af]">
               {formatTimestamp(entry.timestamp)}
             </div>
           </div>
         ))}
       </div>
-      <div ref={bottomRef} style={{ height: 1 }} />
+      <div ref={bottomRef} className="h-px" />
       {loading && (
-        <p style={{ color: "#6b7280", textAlign: "center", padding: 12 }}>Loading...</p>
+        <p className="text-[#6b7280] text-center p-[12px]">Loading...</p>
       )}
     </div>
   );

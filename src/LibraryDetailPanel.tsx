@@ -11,38 +11,51 @@ interface Props {
 export function LibraryDetailPanel({ entry, onClose, onDeleted }: Props) {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [copying, setCopying] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   async function handleDelete() {
     setDeleting(true);
+    setDeleteError(null);
     try {
       await invoke("library_delete", { id: entry.id });
       onDeleted(entry.id);
+      setShowDeleteConfirm(false);
     } catch (e) {
       console.error("[LibraryDetailPanel] delete failed:", e);
-    } finally {
+      setDeleteError("Delete failed. Please try again.");
       setDeleting(false);
-      setShowDeleteConfirm(false);
     }
   }
 
   async function handleCopy() {
+    setCopying(true);
+    setActionError(null);
     try {
       await invoke("copy_image_to_clipboard_from_path", { filePath: entry.file_path });
     } catch (e) {
       console.error("[LibraryDetailPanel] copy failed:", e);
+      setActionError("Copy to clipboard failed.");
+    } finally {
+      setCopying(false);
     }
   }
 
   async function handlePlay() {
     try {
-      const { open } = await import("@tauri-apps/plugin-opener");
-      await open(entry.file_path);
+      const { openPath } = await import("@tauri-apps/plugin-opener");
+      await openPath(entry.file_path);
     } catch (e) {
       console.error("[LibraryDetailPanel] open failed:", e);
+      setActionError("Could not open file.");
     }
   }
 
   async function handleExportMp4() {
+    setExporting(true);
+    setActionError(null);
     try {
       const { save } = await import("@tauri-apps/plugin-dialog");
       const outputPath = await save({
@@ -54,6 +67,9 @@ export function LibraryDetailPanel({ entry, onClose, onDeleted }: Props) {
       await copyFile(entry.file_path, outputPath);
     } catch (e) {
       console.error("[LibraryDetailPanel] export failed:", e);
+      setActionError("Export failed.");
+    } finally {
+      setExporting(false);
     }
   }
 
@@ -66,92 +82,63 @@ export function LibraryDetailPanel({ entry, onClose, onDeleted }: Props) {
   });
 
   return (
-    <div
-      style={{
-        width: 260,
-        flexShrink: 0,
-        borderLeft: "1px solid #1f2937",
-        background: "#0f172a",
-        display: "flex",
-        flexDirection: "column",
-        overflow: "hidden",
-      }}
-    >
+    <div className="w-[260px] shrink-0 border-l border-[#1f2937] bg-[#0f172a] flex flex-col overflow-hidden">
       {/* Header */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "10px 12px",
-          borderBottom: "1px solid #1f2937",
-        }}
-      >
-        <span style={{ fontSize: 12, color: "#9ca3af", fontWeight: 600 }}>Details</span>
+      <div className="flex items-center justify-between py-[10px] px-[12px] border-b border-[#1f2937]">
+        <span className="text-[12px] text-[#9ca3af] font-semibold">Details</span>
         <button
           onClick={onClose}
-          style={{
-            background: "none", border: "none", color: "#6b7280",
-            cursor: "pointer", fontSize: 16, lineHeight: 1,
-          }}
+          className="bg-transparent border-none text-[#6b7280] cursor-pointer text-[16px] leading-none"
         >
           ×
         </button>
       </div>
 
       {/* Preview: video shows <video>, image shows <img> */}
-      <div style={{ padding: 12 }}>
+      <div className="p-[12px]">
         {entry.media_type === "video" ? (
           <video
             src={convertFileSrc(entry.file_path)}
             poster={entry.thumbnail_path ? convertFileSrc(entry.thumbnail_path) : undefined}
-            style={{ width: "100%", borderRadius: 6, border: "1px solid #1f2937" }}
+            className="w-full rounded-[6px] border border-[#1f2937]"
             controls
           />
         ) : (
           <img
             src={convertFileSrc(entry.file_path)}
             alt="capture preview"
-            style={{ width: "100%", borderRadius: 6, border: "1px solid #1f2937" }}
+            className="w-full rounded-[6px] border border-[#1f2937]"
           />
         )}
       </div>
 
       {/* Metadata */}
-      <div style={{ padding: "0 12px", flex: 1, overflowY: "auto" }}>
-        <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 6 }}>
+      <div className="px-[12px] flex-1 overflow-y-auto">
+        <div className="text-[11px] text-[#6b7280] mb-[6px]">
           {dateStr} · {timeStr}
         </div>
         {entry.width != null && entry.height != null && (
-          <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 6 }}>
+          <div className="text-[11px] text-[#6b7280] mb-[6px]">
             {entry.width} × {entry.height}
           </div>
         )}
         {entry.is_draft && (
           <div
             data-testid="draft-badge"
-            style={{
-              display: "inline-block",
-              background: "#78350f",
-              color: "#fcd34d",
-              fontSize: 10,
-              padding: "2px 6px",
-              borderRadius: 4,
-              marginBottom: 8,
-            }}
+            className="inline-block bg-[#78350f] text-[#fcd34d] text-[10px] py-[2px] px-[6px] rounded-[4px] mb-[8px]"
           >
             Draft
           </div>
         )}
         {(entry.app_name || entry.window_title) && (
-          <div data-testid="app-info" style={{ marginBottom: 8 }}>
+          <div data-testid="app-info" className="mb-[8px]">
             {entry.app_name && (
-              <div style={{ fontSize: 12, color: "#e0e0e0", fontWeight: 600 }}>
+              <div className="text-[12px] text-[#e0e0e0] font-semibold">
                 {entry.app_name}
               </div>
             )}
             {entry.window_title && (
-              <div style={{ fontSize: 11, color: "#9ca3af" }}>
+              <div className="text-[11px] text-[#9ca3af]">
                 {entry.window_title}
               </div>
             )}
@@ -160,55 +147,66 @@ export function LibraryDetailPanel({ entry, onClose, onDeleted }: Props) {
       </div>
 
       {/* Actions */}
-      <div style={{ padding: 12, borderTop: "1px solid #1f2937", display: "flex", flexDirection: "column", gap: 6 }}>
+      <div className="p-[12px] border-t border-[#1f2937] flex flex-col gap-[6px]">
+        {actionError && (
+          <p className="text-[11px] text-[#f87171] m-0 mb-[2px]">{actionError}</p>
+        )}
         {entry.media_type === "video" ? (
           <>
             <button
               data-testid="play-btn"
               onClick={handlePlay}
-              style={actionBtn}
+              className={`${btnDefault} cursor-pointer`}
             >
               Play
             </button>
             <button
               data-testid="export-mp4-btn"
               onClick={handleExportMp4}
-              style={actionBtn}
+              disabled={exporting}
+              className={`${btnDefault} ${exporting ? "opacity-60 cursor-default" : "opacity-100 cursor-pointer"}`}
             >
-              Export MP4
+              {exporting ? "Exporting…" : "Export MP4"}
             </button>
           </>
         ) : (
-          <button onClick={handleCopy} style={actionBtn}>
-            Copy to Clipboard
+          <button
+            onClick={handleCopy}
+            disabled={copying}
+            className={`${btnDefault} ${copying ? "opacity-60 cursor-default" : "opacity-100 cursor-pointer"}`}
+          >
+            {copying ? "Copying…" : "Copy to Clipboard"}
           </button>
         )}
 
         {!showDeleteConfirm ? (
           <button
             data-testid="delete-btn"
-            onClick={() => setShowDeleteConfirm(true)}
-            style={{ ...actionBtn, background: "#7f1d1d", color: "#fca5a5", border: "1px solid #991b1b" }}
+            onClick={() => { setShowDeleteConfirm(true); setDeleteError(null); }}
+            className={`${btnBase} bg-[#7f1d1d] text-[#fca5a5] border border-[#991b1b] cursor-pointer`}
           >
             Delete
           </button>
         ) : (
           <div>
-            <p style={{ fontSize: 11, color: "#f87171", margin: "0 0 6px" }}>
+            <p className="text-[11px] text-[#f87171] m-0 mb-[6px]">
               Delete this capture?
             </p>
-            <div style={{ display: "flex", gap: 6 }}>
+            {deleteError && (
+              <p className="text-[11px] text-[#f87171] m-0 mb-[6px]">{deleteError}</p>
+            )}
+            <div className="flex gap-[6px]">
               <button
                 data-testid="delete-confirm-yes"
                 onClick={handleDelete}
                 disabled={deleting}
-                style={{ ...actionBtn, flex: 1, background: "#7f1d1d", color: "#fca5a5" }}
+                className={`${btnBase} flex-1 bg-[#7f1d1d] text-[#fca5a5] border border-[#374151] cursor-pointer`}
               >
                 {deleting ? "Deleting…" : "Yes, delete"}
               </button>
               <button
-                onClick={() => setShowDeleteConfirm(false)}
-                style={{ ...actionBtn, flex: 1 }}
+                onClick={() => { setShowDeleteConfirm(false); setDeleteError(null); }}
+                className={`${btnDefault} flex-1 cursor-pointer`}
               >
                 Cancel
               </button>
@@ -220,14 +218,8 @@ export function LibraryDetailPanel({ entry, onClose, onDeleted }: Props) {
   );
 }
 
-const actionBtn: React.CSSProperties = {
-  background: "#1f2937",
-  border: "1px solid #374151",
-  borderRadius: 6,
-  color: "#e0e0e0",
-  padding: "6px 10px",
-  fontSize: 12,
-  cursor: "pointer",
-  width: "100%",
-  textAlign: "center",
-};
+// Shared button classes. btnBase omits background/border/text colors so callers
+// can set their own without conflicting duplicate utilities; btnDefault adds the
+// standard gray appearance used by most buttons.
+const btnBase = "rounded-[6px] py-[6px] px-[10px] text-[12px] w-full text-center";
+const btnDefault = `${btnBase} bg-[#1f2937] border border-[#374151] text-[#e0e0e0]`;

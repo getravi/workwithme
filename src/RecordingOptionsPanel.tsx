@@ -84,25 +84,13 @@ export function RecordingOptionsPanel() {
   const noMics = mics.length === 0;
 
   return (
-    <div
-      style={{
-        width: "100%",
-        height: "100%",
-        background: "#1a1a2e",
-        color: "#e0e0e0",
-        fontFamily: "system-ui, -apple-system, sans-serif",
-        padding: 20,
-        display: "flex",
-        flexDirection: "column",
-        gap: 14,
-      }}
-    >
-      <div style={{ fontSize: 15, fontWeight: 600 }}>Record Screen</div>
+    <div className="w-full h-full bg-[#1a1a2e] text-[#e0e0e0] font-[system-ui,-apple-system,sans-serif] p-[20px] flex flex-col gap-[14px]">
+      <div className="text-[15px] font-semibold">Record Screen</div>
 
       {/* Area selection */}
       <div>
-        <div style={{ fontSize: 11, color: "#9ca3af", marginBottom: 6 }}>Area</div>
-        <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, cursor: "pointer" }}>
+        <div className="text-[11px] text-[#9ca3af] mb-[6px]">Area</div>
+        <label className="flex items-center gap-[8px] mb-[6px] cursor-pointer">
           <input
             type="radio"
             data-testid="radio-fullscreen"
@@ -110,17 +98,17 @@ export function RecordingOptionsPanel() {
             checked={areaMode === "fullscreen"}
             onChange={() => setAreaMode("fullscreen")}
           />
-          <span style={{ fontSize: 13 }}>Full Screen</span>
+          <span className="text-[13px]">Full Screen</span>
         </label>
-        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+        <label className="flex items-center gap-[8px] cursor-pointer">
           <input
             type="radio"
             data-testid="radio-region"
             name="area"
             checked={areaMode === "region"}
-            onClick={handleSelectRegion}
+            onChange={handleSelectRegion}
           />
-          <span style={{ fontSize: 13 }}>
+          <span className="text-[13px]">
             {region ? `Region: ${region.width}×${region.height}` : "Select Region"}
           </span>
         </label>
@@ -128,8 +116,8 @@ export function RecordingOptionsPanel() {
 
       {/* Mic selection */}
       <div>
-        <div style={{ fontSize: 11, color: "#9ca3af", marginBottom: 6 }}>Microphone</div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div className="text-[11px] text-[#9ca3af] mb-[6px]">Microphone</div>
+        <div className="flex items-center gap-[10px]">
           <input
             type="checkbox"
             data-testid="mic-toggle"
@@ -138,20 +126,13 @@ export function RecordingOptionsPanel() {
             onChange={(e) => setMicEnabled(e.target.checked)}
           />
           {noMics ? (
-            <span style={{ fontSize: 12, color: "#6b7280" }}>No mic found</span>
+            <span className="text-[12px] text-[#6b7280]">No mic found</span>
           ) : (
             <select
               value={selectedMicIndex ?? ""}
               disabled={!micEnabled}
               onChange={(e) => setSelectedMicIndex(Number(e.target.value))}
-              style={{
-                background: "#374151",
-                border: "1px solid #4b5563",
-                borderRadius: 4,
-                color: "#e0e0e0",
-                fontSize: 12,
-                padding: "2px 6px",
-              }}
+              className="bg-[#374151] border border-[#4b5563] rounded-[4px] text-[#e0e0e0] text-[12px] px-[6px] py-[2px]"
             >
               {mics.map((m) => (
                 <option key={m.index} value={m.index}>
@@ -164,14 +145,14 @@ export function RecordingOptionsPanel() {
       </div>
 
       {error && (
-        <div style={{ fontSize: 11, color: "#f87171" }}>{error}</div>
+        <div className="text-[11px] text-[#f87171]">{error}</div>
       )}
 
       {/* Actions */}
-      <div style={{ display: "flex", gap: 8, marginTop: "auto" }}>
+      <div className="flex gap-[8px] mt-auto">
         <button
           onClick={() => getCurrentWindow().close()}
-          style={secondaryBtn}
+          className={secondaryBtn}
         >
           Cancel
         </button>
@@ -179,7 +160,7 @@ export function RecordingOptionsPanel() {
           data-testid="record-btn"
           onClick={handleRecord}
           disabled={countdown !== null}
-          style={{ ...primaryBtn, opacity: countdown !== null ? 0.7 : 1 }}
+          className={`${primaryBtn} ${countdown !== null ? "opacity-70" : "opacity-100"}`}
         >
           {countdown !== null ? `Starting in ${countdown}…` : "▶ Record"}
         </button>
@@ -188,24 +169,8 @@ export function RecordingOptionsPanel() {
   );
 }
 
-const primaryBtn: React.CSSProperties = {
-  flex: 1,
-  background: "#6c63ff",
-  border: "none",
-  borderRadius: 6,
-  color: "#fff",
-  padding: "8px 12px",
-  fontSize: 13,
-  cursor: "pointer",
-  fontWeight: 600,
-};
+const primaryBtn =
+  "flex-1 bg-[#6c63ff] border-none rounded-[6px] text-white px-[12px] py-[8px] text-[13px] cursor-pointer font-semibold";
 
-const secondaryBtn: React.CSSProperties = {
-  background: "#374151",
-  border: "1px solid #4b5563",
-  borderRadius: 6,
-  color: "#e0e0e0",
-  padding: "8px 12px",
-  fontSize: 13,
-  cursor: "pointer",
-};
+const secondaryBtn =
+  "bg-[#374151] border border-[#4b5563] rounded-[6px] text-[#e0e0e0] px-[12px] py-[8px] text-[13px] cursor-pointer";

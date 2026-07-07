@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 
 const mockInvoke = vi.hoisted(() => vi.fn());
 const mockGetCurrentWindow = vi.hoisted(() => vi.fn());

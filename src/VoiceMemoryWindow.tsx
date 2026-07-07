@@ -62,17 +62,17 @@ function formatDate(ms: number): string {
 function StatusIcon({ status }: { status: string }) {
   if (status === "complete") {
     return (
-      <span style={{ color: "#22c55e", fontSize: 14 }}>✓</span>
+      <span className="text-[#22c55e] text-[14px]">✓</span>
     );
   }
   if (status === "processing") {
     return (
-      <span style={{ color: "#f59e0b", fontSize: 14 }}>⟳</span>
+      <span className="text-[#f59e0b] text-[14px]">⟳</span>
     );
   }
   // recording or other
   return (
-    <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: "#ef4444" }} />
+    <span className="inline-block w-2 h-2 rounded-full bg-[#ef4444]" />
   );
 }
 
@@ -80,12 +80,11 @@ function StatusIcon({ status }: { status: string }) {
 
 function Spinner() {
   return (
-    <div style={{ display: "flex", justifyContent: "center", alignItems: "center", padding: 32 }}>
-      <div style={{
-        width: 24, height: 24, border: "2px solid #374151",
-        borderTopColor: "#6366f1", borderRadius: "50%",
-        animation: "spin 0.8s linear infinite",
-      }} />
+    <div className="flex justify-center items-center p-8">
+      <div
+        className="w-6 h-6 border-2 border-[#374151] border-t-[#6366f1] rounded-full"
+        style={{ animation: "spin 0.8s linear infinite" }}
+      />
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );
@@ -158,31 +157,28 @@ export function VoiceMemoryWindow() {
     }
   };
 
+  const handleDeleteSession = async (e: React.MouseEvent, session: VoiceSession) => {
+    e.stopPropagation();
+    try {
+      await invoke("meeting_delete", { sessionId: session.id });
+      setSessions((prev) => prev.filter((s) => s.id !== session.id));
+      if (selectedSession?.id === session.id) {
+        setSelectedSession(null);
+        setDetail(null);
+      }
+    } catch (err) {
+      console.error("Failed to delete session:", err);
+    }
+  };
+
   return (
-    <div style={{
-      display: "flex",
-      height: "100vh",
-      background: "#111827",
-      color: "#e0e0e0",
-      fontFamily: "system-ui, -apple-system, sans-serif",
-      overflow: "hidden",
-    }}>
+    <div className="flex h-screen bg-[#111827] text-[#e0e0e0] font-[system-ui,-apple-system,sans-serif] overflow-hidden">
       {/* Left panel */}
-      <div style={{
-        width: 288,
-        flexShrink: 0,
-        borderRight: "1px solid #1f2937",
-        display: "flex",
-        flexDirection: "column",
-        overflow: "hidden",
-      }}>
+      <div className="w-72 flex-shrink-0 border-r border-[#1f2937] flex flex-col overflow-hidden">
         {/* Search */}
-        <div style={{ padding: "12px 12px 8px", flexShrink: 0 }}>
-          <div style={{ position: "relative" }}>
-            <span style={{
-              position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)",
-              color: "#6b7280", fontSize: 14, pointerEvents: "none",
-            }}>
+        <div className="pt-3 px-3 pb-2 flex-shrink-0">
+          <div className="relative">
+            <span className="absolute left-[10px] top-1/2 -translate-y-1/2 text-[#6b7280] text-[14px] pointer-events-none">
               🔍
             </span>
             <input
@@ -190,27 +186,17 @@ export function VoiceMemoryWindow() {
               placeholder="Search sessions…"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              style={{
-                width: "100%",
-                background: "#1f2937",
-                border: "1px solid #374151",
-                borderRadius: 6,
-                padding: "7px 12px 7px 30px",
-                color: "#e0e0e0",
-                fontSize: 13,
-                outline: "none",
-                boxSizing: "border-box",
-              }}
+              className="w-full bg-[#1f2937] border border-[#374151] rounded-md py-[7px] pl-[30px] pr-[12px] text-[#e0e0e0] text-[13px] outline-none box-border"
             />
           </div>
         </div>
 
         {/* Session list */}
-        <div style={{ flex: 1, overflowY: "auto" }}>
+        <div className="flex-1 overflow-y-auto">
           {loading ? (
             <Spinner />
           ) : sessions.length === 0 ? (
-            <div style={{ padding: 16, color: "#6b7280", fontSize: 13, lineHeight: 1.5 }}>
+            <div className="p-4 text-[#6b7280] text-[13px] leading-[1.5]">
               No sessions yet. Start a meeting to capture your first session.
             </div>
           ) : (
@@ -218,26 +204,25 @@ export function VoiceMemoryWindow() {
               <div
                 key={s.id}
                 onClick={() => handleSelectSession(s)}
-                style={{
-                  padding: "10px 12px",
-                  cursor: "pointer",
-                  background: selectedSession?.id === s.id ? "#1f2937" : "transparent",
-                  borderBottom: "1px solid #1f2937",
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 4,
-                }}
+                className="py-[10px] px-3 cursor-pointer border-b border-[#1f2937] flex flex-col gap-1"
+                style={{ background: selectedSession?.id === s.id ? "#1f2937" : "transparent" }}
               >
-                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <div className="flex items-center gap-1.5">
                   <StatusIcon status={s.status} />
-                  <span style={{
-                    fontSize: 13, fontWeight: 500, flex: 1,
-                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                  }}>
+                  <span className="text-[13px] font-medium flex-1 overflow-hidden text-ellipsis whitespace-nowrap">
                     {s.title}
                   </span>
+                  {(s.status === "error" || s.status === "recording") && (
+                    <button
+                      onClick={(e) => handleDeleteSession(e, s)}
+                      title="Delete this session"
+                      className="bg-transparent border-none text-[#6b7280] cursor-pointer text-[14px] py-0 px-[2px] leading-none flex-shrink-0"
+                    >
+                      ✕
+                    </button>
+                  )}
                 </div>
-                <div style={{ fontSize: 11, color: "#6b7280", display: "flex", gap: 8 }}>
+                <div className="text-[11px] text-[#6b7280] flex gap-2">
                   <span>{formatDate(s.started_at)}</span>
                   <span>{formatDuration(s.duration_sec)}</span>
                 </div>
@@ -248,12 +233,9 @@ export function VoiceMemoryWindow() {
       </div>
 
       {/* Right panel */}
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+      <div className="flex-1 flex flex-col overflow-hidden">
         {!selectedSession ? (
-          <div style={{
-            flex: 1, display: "flex", alignItems: "center", justifyContent: "center",
-            color: "#6b7280", fontSize: 14,
-          }}>
+          <div className="flex-1 flex items-center justify-center text-[#6b7280] text-[14px]">
             Select a session to view details
           </div>
         ) : detailLoading ? (
@@ -261,30 +243,24 @@ export function VoiceMemoryWindow() {
         ) : detail ? (
           <>
             {/* Header */}
-            <div style={{ padding: "16px 20px 0", borderBottom: "1px solid #1f2937", flexShrink: 0 }}>
-              <div style={{ marginBottom: 4 }}>
-                <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>{detail.session.title}</h2>
-                <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>
+            <div className="pt-4 px-5 pb-0 border-b border-[#1f2937] flex-shrink-0">
+              <div className="mb-1">
+                <h2 className="m-0 text-[16px] font-semibold">{detail.session.title}</h2>
+                <div className="text-[12px] text-[#6b7280] mt-0.5">
                   {formatDate(detail.session.started_at)} · {formatDuration(detail.session.duration_sec)}
                 </div>
               </div>
               {/* Tabs */}
-              <div style={{ display: "flex", gap: 0, marginTop: 12 }}>
+              <div className="flex gap-0 mt-3">
                 {(["summary", "transcript", "notes"] as DetailTab[]).map((tab) => (
                   <button
                     key={tab}
                     onClick={() => setActiveTab(tab)}
-                    style={{
-                      background: "none",
-                      border: "none",
-                      borderBottom: activeTab === tab ? "2px solid #6366f1" : "2px solid transparent",
-                      padding: "6px 16px",
-                      color: activeTab === tab ? "#e0e0e0" : "#6b7280",
-                      cursor: "pointer",
-                      fontSize: 13,
-                      fontWeight: activeTab === tab ? 600 : 400,
-                      textTransform: "capitalize",
-                    }}
+                    className={`bg-transparent border-none py-1.5 px-4 cursor-pointer text-[13px] capitalize border-b-2 ${
+                      activeTab === tab
+                        ? "border-[#6366f1] text-[#e0e0e0] font-semibold"
+                        : "border-transparent text-[#6b7280] font-normal"
+                    }`}
                   >
                     {tab.charAt(0).toUpperCase() + tab.slice(1)}
                   </button>
@@ -293,7 +269,7 @@ export function VoiceMemoryWindow() {
             </div>
 
             {/* Tab content */}
-            <div style={{ flex: 1, overflowY: "auto", padding: "16px 20px" }}>
+            <div className="flex-1 overflow-y-auto py-4 px-5">
               {activeTab === "summary" && (
                 <div>
                   {detail.notes?.ai_summary ? (
@@ -307,7 +283,7 @@ export function VoiceMemoryWindow() {
                       )}
                     </>
                   ) : (
-                    <div style={{ color: "#6b7280", fontSize: 13 }}>
+                    <div className="text-[#6b7280] text-[13px]">
                       No summary yet. Open the meeting and click Generate Summary.
                     </div>
                   )}
@@ -317,11 +293,11 @@ export function VoiceMemoryWindow() {
               {activeTab === "transcript" && (
                 <div>
                   {detail.segments.length > 0 ? (
-                    <p style={{ fontSize: 13, lineHeight: 1.7, margin: 0, whiteSpace: "pre-wrap" }}>
+                    <p className="text-[13px] leading-[1.7] m-0 whitespace-pre-wrap">
                       {detail.segments.map((seg) => seg.text).join(" ")}
                     </p>
                   ) : (
-                    <div style={{ color: "#6b7280", fontSize: 13 }}>No transcript available.</div>
+                    <div className="text-[#6b7280] text-[13px]">No transcript available.</div>
                   )}
                 </div>
               )}
@@ -329,11 +305,11 @@ export function VoiceMemoryWindow() {
               {activeTab === "notes" && (
                 <div>
                   {detail.notes?.raw_notes ? (
-                    <p style={{ fontSize: 13, lineHeight: 1.7, margin: 0, whiteSpace: "pre-wrap" }}>
+                    <p className="text-[13px] leading-[1.7] m-0 whitespace-pre-wrap">
                       {detail.notes.raw_notes}
                     </p>
                   ) : (
-                    <div style={{ color: "#6b7280", fontSize: 13 }}>No notes were taken.</div>
+                    <div className="text-[#6b7280] text-[13px]">No notes were taken.</div>
                   )}
                 </div>
               )}
@@ -347,11 +323,11 @@ export function VoiceMemoryWindow() {
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div style={{ marginBottom: 20 }}>
-      <h3 style={{ fontSize: 12, fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em", margin: "0 0 6px" }}>
+    <div className="mb-5">
+      <h3 className="text-[12px] font-semibold text-[#6b7280] uppercase tracking-wider m-0 mb-1.5">
         {title}
       </h3>
-      <div style={{ fontSize: 13, lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{children}</div>
+      <div className="text-[13px] leading-[1.7] whitespace-pre-wrap">{children}</div>
     </div>
   );
 }

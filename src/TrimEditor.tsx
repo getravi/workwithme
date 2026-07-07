@@ -11,16 +11,37 @@ export function TrimEditor() {
   const [endMs, setEndMs] = useState(0);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
+  // Tracks which range thumb is closest to the cursor so we can bring that
+  // slider's input to the front (z-index trick for dual-range slider).
+  const [frontSlider, setFrontSlider] = useState<"start" | "end">("end");
   const videoRef = useRef<HTMLVideoElement>(null);
+  // Refs for use in the close handler where stale closure state is a risk.
+  const rawPathRef = useRef<string | null>(null);
+  const exportedRef = useRef(false);
 
   useEffect(() => {
     invoke<string | null>("recording_get_trim_path").then(async (path) => {
       if (!path) return;
       setRawPath(path);
+      rawPathRef.current = path;
       const dur = await invoke<number>("recording_get_duration", { path });
       setDurationMs(dur);
       setEndMs(dur);
     });
+  }, []);
+
+  // Intercept all close requests (native X button AND programmatic close()) so
+  // we can delete the raw temp file whenever the user discards the recording.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    getCurrentWindow().onCloseRequested(async (event) => {
+      event.preventDefault();
+      if (!exportedRef.current && rawPathRef.current) {
+        try { await remove(rawPathRef.current); } catch { /* ignore */ }
+      }
+      await getCurrentWindow().destroy();
+    }).then((fn) => { unlisten = fn; });
+    return () => { unlisten?.(); };
   }, []);
 
   function handleStartChange(ms: number) {
@@ -51,6 +72,7 @@ export function TrimEditor() {
         endMs,
       });
       await invoke("library_save_video", { exportedPath: outputPath });
+      exportedRef.current = true; // tell close handler not to delete the raw file
       await getCurrentWindow().close();
     } catch (e) {
       setExportError(String(e));
@@ -60,12 +82,20 @@ export function TrimEditor() {
   }
 
   async function handleCancel() {
-    if (rawPath) {
-      try {
-        await remove(rawPath);
-      } catch { /* ignore */ }
-    }
+    // Cleanup is handled centrally by the onCloseRequested interceptor so we
+    // don't have to duplicate the remove() call here.
     await getCurrentWindow().close();
+  }
+
+  // Dynamically bring the closer thumb's range input to the front so both the
+  // in-point and out-point sliders are independently reachable even though
+  // they share the same absolute-positioned bounding box.
+  function handleTrackHover(e: React.MouseEvent<HTMLDivElement>) {
+    if (durationMs === 0) return;
+    const { left, width } = e.currentTarget.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (e.clientX - left) / width));
+    const posMs = ratio * durationMs;
+    setFrontSlider(Math.abs(posMs - startMs) <= Math.abs(posMs - endMs) ? "start" : "end");
   }
 
   function fmtMs(ms: number): string {
@@ -78,49 +108,31 @@ export function TrimEditor() {
   const trimDuration = ((endMs - startMs) / 1000).toFixed(1);
 
   return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        height: "100vh",
-        background: "#0d0d1a",
-        color: "#e0e0e0",
-        fontFamily: "system-ui, -apple-system, sans-serif",
-        padding: 16,
-        gap: 12,
-      }}
-    >
+    <div className="flex flex-col w-full h-screen bg-[#0d0d1a] text-[#e0e0e0] font-[system-ui,-apple-system,sans-serif] p-[16px] gap-[12px]">
       {/* Video preview */}
-      <div style={{ flex: 1, background: "#000", borderRadius: 8, overflow: "hidden", minHeight: 0 }}>
+      <div className="flex-1 bg-black rounded-[8px] overflow-hidden min-h-0">
         {rawPath && (
           <video
             ref={videoRef}
             src={convertFileSrc(rawPath)}
-            style={{ width: "100%", height: "100%", objectFit: "contain" }}
+            className="w-full h-full object-contain"
             controls
           />
         )}
       </div>
 
       {/* Timeline */}
-      <div style={{ flexShrink: 0 }}>
-        <div style={{ position: "relative", marginBottom: 8 }}>
-          <div
-            style={{
-              height: 20,
-              background: "#374151",
-              borderRadius: 4,
-              position: "relative",
-            }}
-          >
+      <div className="shrink-0">
+        {/* onMouseMove updates frontSlider so the thumb closer to the cursor
+            gets a higher z-index — this makes both invisible range inputs
+            independently reachable despite occupying the same bounding box. */}
+        <div className="relative mb-[8px]" onMouseMove={handleTrackHover}>
+          <div className="h-[20px] bg-[#374151] rounded-[4px] relative">
             <div
+              className="absolute h-full bg-[#6c63ff] rounded-[4px]"
               style={{
-                position: "absolute",
                 left: durationMs > 0 ? `${(startMs / durationMs) * 100}%` : "0%",
                 width: durationMs > 0 ? `${((endMs - startMs) / durationMs) * 100}%` : "100%",
-                height: "100%",
-                background: "#6c63ff",
-                borderRadius: 4,
               }}
             />
           </div>
@@ -140,6 +152,7 @@ export function TrimEditor() {
               opacity: 0,
               cursor: "ew-resize",
               height: "100%",
+              zIndex: frontSlider === "start" ? 3 : 2,
             }}
           />
 
@@ -158,20 +171,14 @@ export function TrimEditor() {
               opacity: 0,
               cursor: "ew-resize",
               height: "100%",
+              zIndex: frontSlider === "end" ? 3 : 2,
             }}
           />
         </div>
 
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            fontSize: 11,
-            color: "#9ca3af",
-          }}
-        >
+        <div className="flex justify-between text-[11px] text-[#9ca3af]">
           <span data-testid="start-time-display">{fmtMs(startMs)}</span>
-          <span data-testid="duration-label" style={{ color: "#6c63ff" }}>
+          <span data-testid="duration-label" className="text-[#6c63ff]">
             {fmtMs(durationMs)} · {trimDuration}s selected
           </span>
           <span data-testid="end-time-display">{fmtMs(endMs)}</span>
@@ -179,18 +186,18 @@ export function TrimEditor() {
       </div>
 
       {exportError && (
-        <div style={{ fontSize: 11, color: "#f87171" }}>{exportError}</div>
+        <div className="text-[11px] text-[#f87171]">{exportError}</div>
       )}
 
-      <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
-        <button onClick={handleCancel} style={secondaryBtn}>
+      <div className="flex gap-[8px] shrink-0">
+        <button onClick={handleCancel} className={secondaryBtn}>
           Cancel
         </button>
         <button
           data-testid="export-btn"
           onClick={handleExport}
           disabled={exporting || !rawPath}
-          style={primaryBtn}
+          className={primaryBtn}
         >
           {exporting ? "Exporting…" : "Export MP4…"}
         </button>
@@ -199,24 +206,8 @@ export function TrimEditor() {
   );
 }
 
-const primaryBtn: React.CSSProperties = {
-  flex: 1,
-  background: "#6c63ff",
-  border: "none",
-  borderRadius: 6,
-  color: "#fff",
-  padding: "8px 12px",
-  fontSize: 13,
-  cursor: "pointer",
-  fontWeight: 600,
-};
+const primaryBtn =
+  "flex-1 bg-[#6c63ff] border-none rounded-[6px] text-white px-[12px] py-[8px] text-[13px] cursor-pointer font-semibold";
 
-const secondaryBtn: React.CSSProperties = {
-  background: "#374151",
-  border: "1px solid #4b5563",
-  borderRadius: 6,
-  color: "#e0e0e0",
-  padding: "8px 12px",
-  fontSize: 13,
-  cursor: "pointer",
-};
+const secondaryBtn =
+  "bg-[#374151] border border-[#4b5563] rounded-[6px] text-[#e0e0e0] px-[12px] py-[8px] text-[13px] cursor-pointer";

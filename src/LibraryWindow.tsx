@@ -18,50 +18,35 @@ export interface CaptureEntry {
 export function LibraryWindow() {
   const [selected, setSelected] = useState<CaptureEntry | null>(null);
   const [query, setQuery] = useState("");
+  // Incrementing this causes LibraryGrid to reload, refreshing search results
+  // after a delete so the deleted item disappears without requiring a manual search clear.
+  const [gridKey, setGridKey] = useState(0);
 
   const handleDelete = useCallback(
     (id: string) => {
       setSelected((prev) => (prev?.id === id ? null : prev));
+      setGridKey((k) => k + 1);
     },
-    [setSelected],
+    [],
   );
 
   return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        height: "100vh",
-        background: "#0d0d1a",
-        color: "#e0e0e0",
-        fontFamily: "system-ui, -apple-system, sans-serif",
-        overflow: "hidden",
-      }}
-    >
+    <div className="flex flex-col h-screen bg-[#0d0d1a] text-[#e0e0e0] font-[family-name:system-ui,-apple-system,sans-serif] overflow-hidden">
       {/* Search bar */}
-      <div style={{ padding: "12px 16px", borderBottom: "1px solid #1f2937", flexShrink: 0 }}>
+      <div className="py-[12px] px-[16px] border-b border-[#1f2937] shrink-0">
         <input
           type="text"
           placeholder="Search captures by app, window, or content..."
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          style={{
-            width: "100%",
-            background: "#1f2937",
-            border: "1px solid #374151",
-            borderRadius: 6,
-            padding: "8px 12px",
-            color: "#e0e0e0",
-            fontSize: 13,
-            outline: "none",
-            boxSizing: "border-box",
-          }}
+          className="w-full bg-[#1f2937] border border-[#374151] rounded-[6px] py-[8px] px-[12px] text-[#e0e0e0] text-[13px] outline-none box-border"
         />
       </div>
 
       {/* Grid + optional detail panel */}
-      <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
+      <div className="flex flex-1 overflow-hidden">
         <LibraryGrid
+          key={gridKey}
           query={query}
           selected={selected}
           onSelect={setSelected}

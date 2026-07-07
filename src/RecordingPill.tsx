@@ -48,32 +48,11 @@ export function RecordingPill() {
   const elapsed = `${mm}:${ss}`;
 
   return (
-    <div
-      style={{
-        width: "100%",
-        height: "100%",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        gap: 10,
-        background: "rgba(26, 26, 46, 0.92)",
-        borderRadius: 22,
-        border: "1px solid rgba(255,255,255,0.1)",
-        backdropFilter: "blur(8px)",
-        padding: "0 14px",
-        fontFamily: "system-ui, -apple-system, sans-serif",
-      }}
-    >
+    <div className="w-full h-full flex items-center justify-center gap-[10px] bg-[rgba(26,26,46,0.92)] rounded-[22px] border border-[rgba(255,255,255,0.1)] backdrop-blur-[8px] px-[14px] py-0 font-[system-ui,-apple-system,sans-serif]">
       {/* Pulsing red dot */}
       <div
         data-testid="recording-dot"
-        style={{
-          width: 8,
-          height: 8,
-          background: "#ef4444",
-          borderRadius: "50%",
-          animation: "pulse 1s ease-in-out infinite",
-        }}
+        className="w-[8px] h-[8px] bg-[#ef4444] rounded-full [animation:pulse_1s_ease-in-out_infinite]"
       />
       <style>{`
         @keyframes pulse {
@@ -85,7 +64,7 @@ export function RecordingPill() {
       {/* Elapsed time */}
       <span
         data-testid="elapsed-display"
-        style={{ fontSize: 13, color: "#e0e0e0", minWidth: 42, textAlign: "center" }}
+        className="text-[13px] text-[#e0e0e0] min-w-[42px] text-center"
       >
         {elapsed}
       </span>
@@ -95,15 +74,7 @@ export function RecordingPill() {
         data-testid="stop-btn"
         onClick={handleStop}
         disabled={stopping}
-        style={{
-          background: "#374151",
-          border: "1px solid #4b5563",
-          borderRadius: 4,
-          color: "#e0e0e0",
-          fontSize: 12,
-          padding: "3px 10px",
-          cursor: stopping ? "default" : "pointer",
-        }}
+        className={`bg-[#374151] border border-[#4b5563] rounded-[4px] text-[#e0e0e0] text-[12px] px-[10px] py-[3px] ${stopping ? "cursor-default" : "cursor-pointer"}`}
       >
         {stopping ? "…" : "■ Stop"}
       </button>
