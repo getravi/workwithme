@@ -1,3 +1,9 @@
+//! Persistent notification log.
+//!
+//! Notifications are appended as JSON lines to `~/.pi/notifications.log` and
+//! kept in an in-memory ring buffer for the frontend to poll.  Each notification
+//! carries a timestamp, severity, and message string.
+
 use serde::{Serialize, Deserialize};
 use serde_json::{json, Value};
 use std::fs::OpenOptions;

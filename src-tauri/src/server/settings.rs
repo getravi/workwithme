@@ -1,3 +1,9 @@
+//! JSON settings store at `~/.pi/settings.json`.
+//!
+//! Provides `get_setting` / `set_setting` helpers keyed by dot-separated paths
+//! (e.g. `"llm.model"`).  The file is read on every get and written on every
+//! set — no in-process caching — so external editors are always respected.
+
 use serde_json::{json, Value};
 use std::fs;
 use std::path::PathBuf;

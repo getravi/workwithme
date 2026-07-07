@@ -1,3 +1,10 @@
+//! Background OCR for captured images using Apple Vision (macOS only).
+//!
+//! [`spawn_ocr`] is fire-and-forget: it launches an OS thread, calls the
+//! Vision `VNRecognizeTextRequest` pipeline on the given PNG, and writes the
+//! recognised text back to the FTS index via [`super::db::update_ocr`].
+//! On non-macOS platforms `run_ocr` is a no-op that returns an empty string.
+
 /// Spawn a background OS thread that runs Apple Vision OCR on the given PNG file.
 /// On completion, updates the FTS table. Fire-and-forget — caller does not await.
 pub fn spawn_ocr(capture_id: String, file_path: String) {

@@ -1,3 +1,9 @@
+//! System keychain helpers for remote-MCP token storage.
+//!
+//! Tokens are stored under service `"workwithme"` with per-server account names
+//! formatted as `"remote-mcp/<slug>"`.  Uses the `keyring` crate, which delegates
+//! to the OS keychain (Keychain on macOS, Credential Manager on Windows, libsecret on Linux).
+
 const SERVICE: &str = "workwithme";
 
 /// Format account identifier for keychain entry

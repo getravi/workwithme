@@ -1,3 +1,9 @@
+//! File-system helpers exposed to the agent over the HTTP API.
+//!
+//! Provides directory listing, file read/write, move/copy, and delete.
+//! All paths are validated to stay within allowed workspace roots — see
+//! `validate_path` for the sandboxing logic.
+
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -245,53 +251,41 @@ fn check_home_directory(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Simple glob pattern matching
+/// Glob pattern matching with O(n×p) worst-case via dynamic programming.
+///
+/// The previous recursive implementation had O(2^n) worst-case for patterns with multiple
+/// `*` wildcards against non-matching input (e.g. `"*a*a*a"` vs `"aaaaaaa"`), making it
+/// exploitable as a ReDoS vector through the `/api/files/search` endpoint.
+/// This iterative DP approach is always linear in the product of input lengths.
 fn glob_match(name: &str, pattern: &str) -> bool {
-    // Basic glob support: * matches any sequence, ? matches single char
-    let mut name_chars = name.chars().peekable();
-    let mut pattern_chars = pattern.chars().peekable();
+    let name: Vec<char> = name.chars().collect();
+    let pattern: Vec<char> = pattern.chars().collect();
+    let n = name.len();
+    let p = pattern.len();
 
-    while let Some(&p) = pattern_chars.peek() {
-        match p {
-            '*' => {
-                pattern_chars.next();
-                if pattern_chars.peek().is_none() {
-                    return true; // * at end matches everything
-                }
-                // Match zero or more characters
-                while name_chars.peek().is_some() {
-                    if glob_match(
-                        &name_chars.clone().collect::<String>(),
-                        &pattern_chars.clone().collect::<String>(),
-                    ) {
-                        return true;
-                    }
-                    name_chars.next();
-                }
-                return false;
-            }
-            '?' => {
-                pattern_chars.next();
-                if name_chars.next().is_none() {
-                    return false;
-                }
-            }
-            _ => {
-                pattern_chars.next();
-                if let Some(&n) = name_chars.peek() {
-                    if n == p {
-                        name_chars.next();
-                    } else {
-                        return false;
-                    }
-                } else {
-                    return false;
-                }
+    // dp[i][j] = pattern[..j] can match name[..i]
+    let mut dp = vec![vec![false; p + 1]; n + 1];
+    dp[0][0] = true;
+
+    // A pattern of only '*'s can match the empty string
+    for j in 1..=p {
+        if pattern[j - 1] == '*' {
+            dp[0][j] = dp[0][j - 1];
+        }
+    }
+
+    for i in 1..=n {
+        for j in 1..=p {
+            if pattern[j - 1] == '*' {
+                // '*' matches zero chars (dp[i][j-1]) or one more char (dp[i-1][j])
+                dp[i][j] = dp[i][j - 1] || dp[i - 1][j];
+            } else if pattern[j - 1] == '?' || pattern[j - 1] == name[i - 1] {
+                dp[i][j] = dp[i - 1][j - 1];
             }
         }
     }
 
-    name_chars.peek().is_none()
+    dp[n][p]
 }
 
 #[cfg(test)]

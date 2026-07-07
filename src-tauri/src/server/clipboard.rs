@@ -1,5 +1,8 @@
-/// Clipboard integration for copying and pasting text
-/// Uses arboard crate for cross-platform support (Windows, macOS, Linux)
+//! Clipboard read/write helpers using the `arboard` crate.
+//!
+//! Provides [`copy_to_clipboard`] and [`paste_from_clipboard`] for the HTTP server
+//! routes that expose clipboard access to the agent sandbox.
+//! Cross-platform: works on macOS, Windows, and Linux.
 
 pub fn copy_to_clipboard(text: &str) -> Result<(), String> {
     match arboard::Clipboard::new() {

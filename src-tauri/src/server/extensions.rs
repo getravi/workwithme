@@ -1,10 +1,9 @@
-// Phase 3: Extensions Module
-// =========================
-//
-// Provides utilities for session enhancement:
-// - AI-powered session labelling using Claude Haiku
-// - Metadata enrichment
-// - Session context management
+//! Session extension utilities (Phase 3).
+//!
+//! Provides utilities for session enhancement:
+//! - AI-powered session labelling using Claude Haiku
+//! - Metadata enrichment
+//! - Session context management
 
 use serde_json::json;
 

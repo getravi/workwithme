@@ -1,3 +1,9 @@
+//! Embedded frontend asset serving via `rust-embed`.
+//!
+//! The `Assets` struct embeds the compiled React frontend at build time using
+//! `rust-embed`.  The Axum handler serves files from this embedded bundle,
+//! falling back to `index.html` for client-side routes (SPA fallback).
+
 use rust_embed::Embed;
 use axum::{
     http::{header, StatusCode},

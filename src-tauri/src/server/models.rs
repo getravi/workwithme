@@ -1,3 +1,8 @@
+//! Available LLM model listing.
+//!
+//! Reads the configured model list from settings and exposes it via the HTTP API
+//! so the frontend can populate model-selection dropdowns.
+
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use crate::server::settings;
